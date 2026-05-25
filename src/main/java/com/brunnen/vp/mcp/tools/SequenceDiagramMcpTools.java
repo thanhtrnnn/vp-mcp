@@ -1,5 +1,6 @@
 package com.brunnen.vp.mcp.tools;
 
+import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.SequenceDiagramUtils;
 import com.vp.plugin.DiagramManager;
@@ -13,14 +14,16 @@ import com.vp.plugin.model.IInteractionConstraint;
 import com.vp.plugin.model.IInteractionLifeLine;
 import com.vp.plugin.model.IInteractionOperand;
 import com.vp.plugin.model.IMessage;
-import com.vp.plugin.model.factory.IModelElementFactory;
+import com.vp.plugin.model.IModelElement;
+import java.util.ArrayList;
 import java.util.List;
-import com.brunnen.vp.mcp.tool.Tool;
 
 /** MCP tools for Visual Paradigm Sequence diagram operations. */
 public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
-  @Tool(name = "createSequenceDiagram", description = "Create a new sequence diagram in Visual Paradigm")
+  @Tool(
+      name = "createSequenceDiagram",
+      description = "Create a new sequence diagram in Visual Paradigm")
   public String createSequenceDiagram(String diagramName) {
     try {
       return runOnEdt(
@@ -52,14 +55,14 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
             // Create a class as the base classifier for the lifeline
             IClass baseClass = getModelElementFactory().createClass();
-            baseClass.setName(className != null && !className.trim().isEmpty() ? className : lifelineName);
+            baseClass.setName(
+                className != null && !className.trim().isEmpty() ? className : lifelineName);
 
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
-            lifeline.setName(lifelineName);
             lifeline.setBaseClassifier(baseClass);
 
             // Add to diagram
-            addToDiagram(diagram, lifeline);
+            addToDiagram(diagram, lifeline, lifelineName);
 
             return "Added lifeline '" + lifelineName + "' to diagram '" + diagramName + "'";
           });
@@ -68,7 +71,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addActivation", description = "Add an activation bar to a lifeline in a sequence diagram")
+  @Tool(
+      name = "addActivation",
+      description = "Add an activation bar to a lifeline in a sequence diagram")
   public String addActivation(String diagramName, String lifelineName) {
     try {
       return runOnEdt(
@@ -97,7 +102,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addMessage", description = "Add a message between two lifelines in a sequence diagram")
+  @Tool(
+      name = "addMessage",
+      description = "Add a message between two lifelines in a sequence diagram")
   public String addMessage(
       String diagramName,
       String fromLifeline,
@@ -121,8 +128,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "From lifeline not found: " + fromLifeline;
             }
 
-            IInteractionLifeLine to =
-                SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
+            IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
             if (to == null) {
               return "To lifeline not found: " + toLifeline;
             }
@@ -148,16 +154,28 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
             getDiagramManager().createDiagramElement(diagram, message);
 
-            return "Added message '" + messageName + "' from '" + fromLifeline + "' to '" + toLifeline + "'";
+            return "Added message '"
+                + messageName
+                + "' from '"
+                + fromLifeline
+                + "' to '"
+                + toLifeline
+                + "'";
           });
     } catch (Exception e) {
       return "Error adding message: " + e.getMessage();
     }
   }
 
-  @Tool(name = "addReturnMessage", description = "Add a return message between two lifelines in a sequence diagram")
+  @Tool(
+      name = "addReturnMessage",
+      description = "Add a return message between two lifelines in a sequence diagram")
   public String addReturnMessage(
-      String diagramName, String fromLifeline, String toLifeline, String messageName, String sequenceNumber) {
+      String diagramName,
+      String fromLifeline,
+      String toLifeline,
+      String messageName,
+      String sequenceNumber) {
     try {
       return runOnEdt(
           () -> {
@@ -174,8 +192,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "From lifeline not found: " + fromLifeline;
             }
 
-            IInteractionLifeLine to =
-                SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
+            IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
             if (to == null) {
               return "To lifeline not found: " + toLifeline;
             }
@@ -194,14 +211,22 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
             getDiagramManager().createDiagramElement(diagram, message);
 
-            return "Added return message '" + messageName + "' from '" + fromLifeline + "' to '" + toLifeline + "'";
+            return "Added return message '"
+                + messageName
+                + "' from '"
+                + fromLifeline
+                + "' to '"
+                + toLifeline
+                + "'";
           });
     } catch (Exception e) {
       return "Error adding return message: " + e.getMessage();
     }
   }
 
-  @Tool(name = "addCombinedFragment", description = "Add a combined fragment (alt/opt/loop) to a sequence diagram")
+  @Tool(
+      name = "addCombinedFragment",
+      description = "Add a combined fragment (alt/opt/loop) to a sequence diagram")
   public String addCombinedFragment(
       String diagramName, String operator, String guard, String coveredLifelines) {
     try {
@@ -234,33 +259,43 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             // Create operand with guard
             IInteractionOperand operand = getModelElementFactory().createInteractionOperand();
             if (guard != null && !guard.trim().isEmpty()) {
-              IInteractionConstraint constraint = getModelElementFactory().createInteractionConstraint();
+              IInteractionConstraint constraint =
+                  getModelElementFactory().createInteractionConstraint();
               constraint.setConstraint(guard.trim());
               operand.setGuard(constraint);
             }
             fragment.addOperand(operand);
 
             // Add covered lifelines
+            List<String> notFound = new ArrayList<>();
             if (coveredLifelines != null && !coveredLifelines.trim().isEmpty()) {
               for (String lifelineName : coveredLifelines.split(",")) {
                 IInteractionLifeLine lifeline =
                     SequenceDiagramUtils.findLifelineByName(diagram, lifelineName.trim());
                 if (lifeline != null) {
                   fragment.addCoveredLifeLine(lifeline);
+                } else {
+                  notFound.add(lifelineName.trim());
                 }
               }
             }
 
             getDiagramManager().createDiagramElement(diagram, fragment);
 
-            return "Added " + operator + " fragment to diagram '" + diagramName + "'";
+            String result = "Added " + operator + " fragment to diagram '" + diagramName + "'";
+            if (!notFound.isEmpty()) {
+              result += " WARNING: lifelines not found: " + String.join(", ", notFound);
+            }
+            return result;
           });
     } catch (Exception e) {
       return "Error adding combined fragment: " + e.getMessage();
     }
   }
 
-  @Tool(name = "generateSequenceReport", description = "Generate a sequence diagram analysis report")
+  @Tool(
+      name = "generateSequenceReport",
+      description = "Generate a sequence diagram analysis report")
   public String generateSequenceReport(String diagramName) {
     try {
       return runOnEdt(
@@ -272,15 +307,57 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
 
-            List<IInteractionLifeLine> lifelines =
-                SequenceDiagramUtils.getAllLifelines(diagram);
+            List<IInteractionLifeLine> lifelines = SequenceDiagramUtils.getAllLifelines(diagram);
             List<IMessage> messages = SequenceDiagramUtils.getAllMessages(diagram);
+
+            // Build activation -> lifeline name reverse map
+            java.util.Map<IActivation, String> activationToLifeline =
+                SequenceDiagramUtils.buildActivationToLifelineMap(diagram);
 
             StringBuilder report = new StringBuilder();
             report.append("SEQUENCE DIAGRAM REPORT: ").append(diagramName).append("\n");
             report.append("=====================================\n");
-            report.append("Lifelines: ").append(lifelines.size()).append("\n");
-            report.append("Messages: ").append(messages.size()).append("\n");
+
+            // Lifelines with base classifier
+            report.append("Lifelines (").append(lifelines.size()).append("):\n");
+            for (IInteractionLifeLine ll : lifelines) {
+              report.append("  - ").append(ll.getName());
+              Object classifierObj = ll.getBaseClassifier();
+              if (classifierObj instanceof IModelElement) {
+                report.append(" [").append(((IModelElement) classifierObj).getName()).append("]");
+              }
+              report.append("\n");
+            }
+
+            // Messages with from -> to
+            report.append("Messages (").append(messages.size()).append("):\n");
+            for (int i = 0; i < messages.size(); i++) {
+              IMessage msg = messages.get(i);
+              String fromAct =
+                  msg.getFromActivation() != null
+                      ? activationToLifeline.getOrDefault(msg.getFromActivation(), "?")
+                      : "?";
+              String toAct =
+                  msg.getToActivation() != null
+                      ? activationToLifeline.getOrDefault(msg.getToActivation(), "?")
+                      : "?";
+
+              report.append("  ").append(i + 1).append(". ");
+              report.append(fromAct).append(" -> ").append(toAct);
+              report.append(": ").append(msg.getName());
+
+              // Message type hints
+              if (fromAct.equals(toAct)) {
+                report.append(" (self)");
+              } else if (msg.isAsynchronous()) {
+                report.append(" (async)");
+              }
+              if (msg.getSequenceNumber() != null && !msg.getSequenceNumber().isEmpty()) {
+                report.append(" [").append(msg.getSequenceNumber()).append("]");
+              }
+              report.append("\n");
+            }
+
             return report.toString();
           });
     } catch (Exception e) {
@@ -288,14 +365,19 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  private IActivation findOrCreateActivation(IInteractionLifeLine lifeline, IInteractionDiagramUIModel diagram) {
-    // Try to find existing activation
+  private IActivation findOrCreateActivation(
+      IInteractionLifeLine lifeline, IInteractionDiagramUIModel diagram) {
+    // Find the last (most recent) activation
+    IActivation lastActivation = null;
     java.util.Iterator<?> iter = lifeline.activationIterator();
-    if (iter.hasNext()) {
+    while (iter.hasNext()) {
       Object obj = iter.next();
       if (obj instanceof IActivation) {
-        return (IActivation) obj;
+        lastActivation = (IActivation) obj;
       }
+    }
+    if (lastActivation != null) {
+      return lastActivation;
     }
 
     // Create new activation if none exists
@@ -304,5 +386,4 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     getDiagramManager().createDiagramElement(diagram, activation);
     return activation;
   }
-
 }

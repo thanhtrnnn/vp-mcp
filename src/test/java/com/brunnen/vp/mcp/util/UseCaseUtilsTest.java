@@ -10,8 +10,11 @@ public class UseCaseUtilsTest {
 
   @Test
   public void testIsValidUseCaseName() {
-    assertTrue("Valid use case name should return true", UseCaseUtils.isValidUseCaseName("Login User"));
-    assertTrue("Valid use case name should return true", UseCaseUtils.isValidUseCaseName("Manage Products"));
+    assertTrue(
+        "Valid use case name should return true", UseCaseUtils.isValidUseCaseName("Login User"));
+    assertTrue(
+        "Valid use case name should return true",
+        UseCaseUtils.isValidUseCaseName("Manage Products"));
 
     assertFalse("Null name should return false", UseCaseUtils.isValidUseCaseName(null));
     assertFalse("Empty name should return false", UseCaseUtils.isValidUseCaseName(""));
@@ -22,7 +25,8 @@ public class UseCaseUtilsTest {
   @Test
   public void testIsValidActorName() {
     assertTrue("Valid actor name should return true", UseCaseUtils.isValidActorName("User"));
-    assertTrue("Valid actor name should return true", UseCaseUtils.isValidActorName("Administrator"));
+    assertTrue(
+        "Valid actor name should return true", UseCaseUtils.isValidActorName("Administrator"));
 
     assertFalse("Null name should return false", UseCaseUtils.isValidActorName(null));
     assertFalse("Empty name should return false", UseCaseUtils.isValidActorName(""));

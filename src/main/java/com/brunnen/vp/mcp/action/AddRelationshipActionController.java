@@ -71,7 +71,11 @@ public class AddRelationshipActionController implements VPActionController {
 
       int result =
           JOptionPane.showConfirmDialog(
-              null, panel, "Add Relationship", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+              null,
+              panel,
+              "Add Relationship",
+              JOptionPane.OK_CANCEL_OPTION,
+              JOptionPane.PLAIN_MESSAGE);
 
       if (result == JOptionPane.OK_OPTION) {
         String relationshipType = (String) typeCombo.getSelectedItem();
@@ -95,18 +99,27 @@ public class AddRelationshipActionController implements VPActionController {
         }
 
         JOptionPane.showMessageDialog(
-            null, relationshipType + " relationship created successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
+            null,
+            relationshipType + " relationship created successfully!",
+            "Success",
+            JOptionPane.INFORMATION_MESSAGE);
       }
 
     } catch (Exception e) {
       JOptionPane.showMessageDialog(
-          null, "Error creating relationship: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+          null,
+          "Error creating relationship: " + e.getMessage(),
+          "Error",
+          JOptionPane.ERROR_MESSAGE);
       e.printStackTrace();
     }
   }
 
   private void createIncludeRelationship(
-      IUseCaseDiagramUIModel diagram, IUseCase source, IUseCase target, DiagramManager diagramManager) {
+      IUseCaseDiagramUIModel diagram,
+      IUseCase source,
+      IUseCase target,
+      DiagramManager diagramManager) {
     IInclude include = IModelElementFactory.instance().createInclude();
     include.setFrom(source);
     include.setTo(target);
@@ -114,7 +127,10 @@ public class AddRelationshipActionController implements VPActionController {
   }
 
   private void createExtendRelationship(
-      IUseCaseDiagramUIModel diagram, IUseCase source, IUseCase target, DiagramManager diagramManager) {
+      IUseCaseDiagramUIModel diagram,
+      IUseCase source,
+      IUseCase target,
+      DiagramManager diagramManager) {
     IExtend extend = IModelElementFactory.instance().createExtend();
     extend.setFrom(source);
     extend.setTo(target);

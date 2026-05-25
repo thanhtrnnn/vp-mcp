@@ -1,15 +1,34 @@
 package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
+import com.brunnen.vp.mcp.util.DiagramLayoutEngine;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramUIModel;
+import com.vp.plugin.model.IActor;
+import com.vp.plugin.model.IAssociation;
+import com.vp.plugin.model.IAssociationEnd;
+import com.vp.plugin.model.IAttribute;
+import com.vp.plugin.model.IClass;
+import com.vp.plugin.model.IDBColumn;
+import com.vp.plugin.model.IDBForeignKey;
+import com.vp.plugin.model.IDBTable;
+import com.vp.plugin.model.IExtend;
+import com.vp.plugin.model.IGeneralization;
+import com.vp.plugin.model.IInclude;
+import com.vp.plugin.model.IInteractionLifeLine;
+import com.vp.plugin.model.IMessage;
 import com.vp.plugin.model.IModelElement;
+import com.vp.plugin.model.IOperation;
+import com.vp.plugin.model.IParameter;
 import com.vp.plugin.model.IProject;
+import com.vp.plugin.model.IRelationship;
+import com.vp.plugin.model.IUseCase;
 import com.vp.plugin.model.factory.IModelElementFactory;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -20,6 +39,8 @@ import javax.swing.SwingUtilities;
  * diagram management tools.
  */
 public abstract class AbstractDiagramMcpTools {
+
+  private final java.util.Map<String, Integer> elementZoneCounts = new HashMap<>();
 
   /**
    * Run a callable on the Swing EDT and return the result.
@@ -70,15 +91,29 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /**
-   * Add a model element to a diagram. Positions it using VP's built-in layout.
+   * Add a model element to a diagram. Positions it using VP's built-in layout. Sets the element
+   * name AFTER creating the diagram element so VP's property change listener picks it up.
    *
    * @param diagram the diagram
    * @param element the model element
+   * @param name the display name for the element
    * @return the diagram element
    */
-  protected IDiagramElement addToDiagram(IDiagramUIModel diagram, IModelElement element) {
+  protected IDiagramElement addToDiagram(
+      IDiagramUIModel diagram, IModelElement element, String name) {
     DiagramManager dm = ApplicationManager.instance().getDiagramManager();
+    element.setName(name);
     IDiagramElement diagramElement = dm.createDiagramElement(diagram, element);
+    element.setName(name);
+    String key = diagram.getName();
+    DiagramLayoutEngine.ElementZone zone =
+        DiagramLayoutEngine.classifyElement(diagram.getType(), element);
+    String zoneKey = key + ":" + zone;
+    int indexInZone = elementZoneCounts.getOrDefault(zoneKey, 0);
+    int[] bounds =
+        DiagramLayoutEngine.calculateInitialBounds(diagram.getType(), element, indexInZone);
+    diagramElement.setBounds(bounds[0], bounds[1], bounds[2], bounds[3]);
+    elementZoneCounts.put(zoneKey, indexInZone + 1);
     return diagramElement;
   }
 
@@ -119,12 +154,14 @@ public abstract class AbstractDiagramMcpTools {
     if (diagram == null || modelElement == null) {
       return null;
     }
+    String targetName = modelElement.getName();
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
       if (obj instanceof IDiagramElement) {
         IDiagramElement de = (IDiagramElement) obj;
-        if (de.getModelElement() == modelElement) {
+        IModelElement m = de.getModelElement();
+        if (m != null && targetName.equals(m.getName())) {
           return de;
         }
       }
@@ -157,7 +194,8 @@ public abstract class AbstractDiagramMcpTools {
 
   @Tool(
       name = "listDiagrams",
-      description = "List all diagrams in the project, optionally filtered by type (UseCase, Class, Sequence, ER)")
+      description =
+          "List all diagrams in the project, optionally filtered by type (UseCase, Class, Sequence, ER)")
   public String listDiagrams(String type) {
     try {
       return runOnEdt(
@@ -194,7 +232,8 @@ public abstract class AbstractDiagramMcpTools {
 
   @Tool(
       name = "getDiagramElements",
-      description = "Get all elements (shapes and connectors) on a diagram with their names, types, and positions")
+      description =
+          "Get all elements (shapes and connectors) on a diagram with their names, types, details, and positions")
   public String getDiagramElements(String diagramName) {
     try {
       return runOnEdt(
@@ -210,15 +249,145 @@ public abstract class AbstractDiagramMcpTools {
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.append("Elements on '").append(diagramName).append("' (").append(elements.size()).append("):\n");
+            sb.append("Elements on '")
+                .append(diagramName)
+                .append("' (")
+                .append(elements.size())
+                .append("):\n");
             for (IDiagramElement de : elements) {
               IModelElement model = de.getModelElement();
+              String type = getSemanticTypeName(model);
               String name = model != null ? model.getName() : "(unnamed)";
-              String type = model != null ? model.getClass().getSimpleName() : "unknown";
-              sb.append("  - ").append(name).append(" [").append(type).append("]");
-              sb.append(" at (").append(de.getX()).append(",").append(de.getY());
-              sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
-              sb.append("\n");
+
+              if (model instanceof IInclude
+                  || model instanceof IExtend
+                  || model instanceof IGeneralization
+                  || model instanceof IAssociation
+                  || model instanceof IDBForeignKey
+                  || model instanceof IMessage) {
+                // Connectors: show from -> to
+                if (model instanceof IRelationship) {
+                  IRelationship rel = (IRelationship) model;
+                  String from = rel.getFrom() != null ? rel.getFrom().getName() : "?";
+                  String to = rel.getTo() != null ? rel.getTo().getName() : "?";
+                  sb.append("  - ")
+                      .append(type)
+                      .append(": ")
+                      .append(from)
+                      .append(" -> ")
+                      .append(to);
+                  if (model instanceof IAssociation) {
+                    IAssociationEnd toEnd = (IAssociationEnd) ((IAssociation) model).getToEnd();
+                    if (toEnd != null && toEnd.getMultiplicity() != null) {
+                      sb.append(" [").append(toEnd.getMultiplicity()).append("]");
+                    }
+                  }
+                  sb.append("\n");
+                } else {
+                  sb.append("  - ").append(type).append(": ").append(name).append("\n");
+                }
+              } else if (model instanceof IClass) {
+                // Classes: show attributes and operations
+                sb.append("  - ").append(type).append(": ").append(name);
+                sb.append(" at (").append(de.getX()).append(",").append(de.getY());
+                sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
+                sb.append("\n");
+                // Attributes
+                List<String> attrs = new ArrayList<>();
+                Iterator<?> attrIter = ((IClass) model).attributeIterator();
+                while (attrIter.hasNext()) {
+                  Object attrObj = attrIter.next();
+                  if (attrObj instanceof IAttribute) {
+                    IAttribute attr = (IAttribute) attrObj;
+                    String vis = attr.getVisibility();
+                    String attrStr =
+                        (vis != null ? vis : "")
+                            + attr.getName()
+                            + (attr.getType() != null ? ":" + attr.getType() : "");
+                    attrs.add(attrStr);
+                  }
+                }
+                if (!attrs.isEmpty()) {
+                  sb.append("    Attributes: ").append(String.join(", ", attrs)).append("\n");
+                }
+                // Operations
+                List<String> ops = new ArrayList<>();
+                Iterator<?> opIter = ((IClass) model).operationIterator();
+                while (opIter.hasNext()) {
+                  Object opObj = opIter.next();
+                  if (opObj instanceof IOperation) {
+                    IOperation op = (IOperation) opObj;
+                    StringBuilder opStr = new StringBuilder();
+                    String opVis = op.getVisibility();
+                    if (opVis != null) {
+                      opStr.append(opVis);
+                    }
+                    opStr.append(op.getName()).append("(");
+                    List<String> params = new ArrayList<>();
+                    Iterator<?> pIter = op.parameterIterator();
+                    while (pIter.hasNext()) {
+                      Object pObj = pIter.next();
+                      if (pObj instanceof IParameter) {
+                        IParameter p = (IParameter) pObj;
+                        String pStr = p.getName();
+                        if (p.getType() != null) {
+                          pStr += ":" + p.getType();
+                        }
+                        params.add(pStr);
+                      }
+                    }
+                    opStr.append(String.join(", ", params)).append(")");
+                    if (op.getReturnType() != null) {
+                      opStr.append(":").append(op.getReturnType());
+                    }
+                    ops.add(opStr.toString());
+                  }
+                }
+                if (!ops.isEmpty()) {
+                  sb.append("    Operations: ").append(String.join(", ", ops)).append("\n");
+                }
+              } else if (model instanceof IDBTable) {
+                // Tables: show columns
+                sb.append("  - ").append(type).append(": ").append(name);
+                sb.append(" at (").append(de.getX()).append(",").append(de.getY());
+                sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
+                sb.append("\n");
+                List<String> cols = new ArrayList<>();
+                Iterator<?> colIter = ((IDBTable) model).dBColumnIterator();
+                while (colIter.hasNext()) {
+                  Object colObj = colIter.next();
+                  if (colObj instanceof IDBColumn) {
+                    IDBColumn col = (IDBColumn) colObj;
+                    String colStr = col.getName();
+                    if (col.getTypeInText() != null) {
+                      colStr += "(" + col.getTypeInText() + ")";
+                    }
+                    if (col.isPrimaryKey()) {
+                      colStr += ",PK";
+                    }
+                    cols.add(colStr);
+                  }
+                }
+                if (!cols.isEmpty()) {
+                  sb.append("    Columns: ").append(String.join(", ", cols)).append("\n");
+                }
+              } else if (model instanceof IInteractionLifeLine) {
+                // Lifelines: show base classifier
+                sb.append("  - ").append(type).append(": ").append(name);
+                Object classifierObj = ((IInteractionLifeLine) model).getBaseClassifier();
+                if (classifierObj instanceof IModelElement) {
+                  sb.append(" [").append(((IModelElement) classifierObj).getName()).append("]");
+                }
+                sb.append(" at (").append(de.getX()).append(",").append(de.getY());
+                sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
+                sb.append("\n");
+              } else {
+                // Default: type + name + position
+                sb.append("  - ").append(type).append(": ").append(name);
+                sb.append(" at (").append(de.getX()).append(",").append(de.getY());
+                sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
+                sb.append("\n");
+              }
             }
             return sb.toString();
           });
@@ -229,7 +398,10 @@ public abstract class AbstractDiagramMcpTools {
 
   @Tool(
       name = "autoLayoutDiagram",
-      description = "Apply automatic layout to a diagram using Visual Paradigm's built-in layout engine")
+      description =
+          "Apply structured layout to a diagram. MUST be called AFTER adding all elements. "
+              + "UC: actors left, use cases right. Class: boundary/DAO/entity layers. "
+              + "ERD: compact organic.")
   public String autoLayoutDiagram(String diagramName) {
     try {
       return runOnEdt(
@@ -238,8 +410,7 @@ public abstract class AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            DiagramManager dm = getDiagramManager();
-            dm.autoLayout(diagram, DiagramManager.LAYOUT_AUTO);
+            layoutDiagram(diagram);
             return "Auto-layout applied to diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -247,9 +418,14 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
+  protected void layoutDiagram(IDiagramUIModel diagram) {
+    DiagramLayoutEngine.applyStructuredLayout(getDiagramManager(), diagram);
+  }
+
   @Tool(
       name = "removeDiagramElement",
-      description = "Remove an element (shape or connector) from a diagram by its model element name")
+      description =
+          "Remove an element (shape or connector) from a diagram by its model element name")
   public String removeDiagramElement(String diagramName, String elementName) {
     try {
       return runOnEdt(
@@ -268,6 +444,94 @@ public abstract class AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error removing element: " + e.getMessage();
     }
+  }
+
+  @Tool(
+      name = "getElementCounts",
+      description =
+          "Get a summary of element types on a diagram (actors, use cases, classes, tables, etc.)")
+  public String getElementCounts(String diagramName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = DiagramUtils.findDiagramByName(diagramName);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+
+            HashMap<String, Integer> counts = new HashMap<>();
+            Iterator<?> iter = diagram.diagramElementIterator();
+            while (iter.hasNext()) {
+              Object obj = iter.next();
+              if (obj instanceof IDiagramElement) {
+                IDiagramElement de = (IDiagramElement) obj;
+                IModelElement model = de.getModelElement();
+                if (model != null) {
+                  String typeName = getSemanticTypeName(model);
+                  counts.merge(typeName, 1, Integer::sum);
+                }
+              }
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Element counts for '").append(diagramName).append("':\n");
+            counts.forEach(
+                (type, count) ->
+                    sb.append("  ").append(type).append(": ").append(count).append("\n"));
+            return sb.toString();
+          });
+    } catch (Exception e) {
+      return "Error getting element counts: " + e.getMessage();
+    }
+  }
+
+  // --- Type Name Helper ---
+
+  private static String getSemanticTypeName(IModelElement model) {
+    if (model == null) {
+      return "unknown";
+    }
+    if (model instanceof IActor) {
+      return "Actor";
+    }
+    if (model instanceof IUseCase) {
+      return "UseCase";
+    }
+    if (model instanceof IInclude) {
+      return "Include";
+    }
+    if (model instanceof IExtend) {
+      return "Extend";
+    }
+    if (model instanceof IGeneralization) {
+      return "Generalization";
+    }
+    if (model instanceof IAssociation) {
+      return "Association";
+    }
+    if (model instanceof IClass) {
+      // Check for Interface stereotype
+      Iterator<?> stereotypes = ((IClass) model).stereotypeIterator();
+      while (stereotypes.hasNext()) {
+        if ("Interface".equals(stereotypes.next())) {
+          return "Interface";
+        }
+      }
+      return "Class";
+    }
+    if (model instanceof IDBTable) {
+      return "Table";
+    }
+    if (model instanceof IDBForeignKey) {
+      return "ForeignKey";
+    }
+    if (model instanceof IInteractionLifeLine) {
+      return "Lifeline";
+    }
+    if (model instanceof IMessage) {
+      return "Message";
+    }
+    return model.getClass().getSimpleName();
   }
 
   // --- VP API Accessors ---

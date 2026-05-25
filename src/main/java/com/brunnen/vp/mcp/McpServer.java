@@ -1,21 +1,17 @@
 package com.brunnen.vp.mcp;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.brunnen.vp.mcp.tool.ToolDefinition;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.brunnen.vp.mcp.tool.ToolDefinition;
 import io.undertow.Undertow;
 import io.undertow.io.Sender;
-import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 import io.undertow.util.Methods;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
@@ -25,8 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
 /**
- * Lightweight MCP server using Undertow HTTP server. Implements SSE transport and
- * MCP JSON-RPC protocol without any Spring dependencies.
+ * Lightweight MCP server using Undertow HTTP server. Implements SSE transport and MCP JSON-RPC
+ * protocol without any Spring dependencies.
  */
 public class McpServer {
 
@@ -38,10 +34,15 @@ public class McpServer {
 
   public McpServer() {}
 
-  /** Register tool objects (scan for @Tool annotations). */
+  /** Register tool objects (scan for @Tool annotations). Skips duplicate tool names. */
   public void registerTools(Object... toolObjects) {
+    java.util.Set<String> registered = new java.util.HashSet<>();
     for (Object obj : toolObjects) {
-      tools.addAll(ToolDefinition.scanTools(obj, MAPPER));
+      for (ToolDefinition td : ToolDefinition.scanTools(obj, MAPPER)) {
+        if (registered.add(td.getName())) {
+          tools.add(td);
+        }
+      }
     }
   }
 
@@ -52,12 +53,13 @@ public class McpServer {
 
   /** Start the MCP server. */
   public void start() {
-    server = Undertow.builder()
-        .addHttpListener(port, "0.0.0.0")
-        .setHandler(this::handleRequest)
-        .setIoThreads(4)
-        .setWorkerThreads(16)
-        .build();
+    server =
+        Undertow.builder()
+            .addHttpListener(port, "0.0.0.0")
+            .setHandler(this::handleRequest)
+            .setIoThreads(4)
+            .setWorkerThreads(16)
+            .build();
     server.start();
     System.out.println("MCP Server started on port " + port + " with " + tools.size() + " tools");
   }
@@ -110,28 +112,31 @@ public class McpServer {
     exchange.startBlocking();
 
     // Run SSE loop on a separate thread
-    Executors.newSingleThreadExecutor().submit(() -> {
-      try {
-        // Send endpoint event
-        String endpointUrl = "/mcp/messages?sessionId=" + sessionId;
-        String sseMsg = "event: endpoint\ndata: " + endpointUrl + "\n\n";
-        exchange.getOutputStream().write(sseMsg.getBytes(StandardCharsets.UTF_8));
-        exchange.getOutputStream().flush();
+    Executors.newSingleThreadExecutor()
+        .submit(
+            () -> {
+              try {
+                // Send endpoint event
+                String endpointUrl = "/mcp/messages?sessionId=" + sessionId;
+                String sseMsg = "event: endpoint\ndata: " + endpointUrl + "\n\n";
+                exchange.getOutputStream().write(sseMsg.getBytes(StandardCharsets.UTF_8));
+                exchange.getOutputStream().flush();
 
-        // Keep connection alive
-        while (!Thread.currentThread().isInterrupted() && exchange.getConnection().isOpen()) {
-          Thread.sleep(15000);
-          try {
-            exchange.getOutputStream().write(":\n\n".getBytes(StandardCharsets.UTF_8));
-            exchange.getOutputStream().flush();
-          } catch (Exception e) {
-            break;
-          }
-        }
-      } catch (Exception e) {
-        // Client disconnected
-      }
-    });
+                // Keep connection alive
+                while (!Thread.currentThread().isInterrupted()
+                    && exchange.getConnection().isOpen()) {
+                  Thread.sleep(15000);
+                  try {
+                    exchange.getOutputStream().write(":\n\n".getBytes(StandardCharsets.UTF_8));
+                    exchange.getOutputStream().flush();
+                  } catch (Exception e) {
+                    break;
+                  }
+                }
+              } catch (Exception e) {
+                // Client disconnected
+              }
+            });
   }
 
   // --- Message Handler ---
@@ -140,8 +145,12 @@ public class McpServer {
     // CORS preflight
     if (exchange.getRequestMethod().equals(Methods.OPTIONS)) {
       exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Origin"), "*");
-      exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Methods"), "POST, OPTIONS");
-      exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Headers"), "Content-Type");
+      exchange
+          .getResponseHeaders()
+          .put(new HttpString("Access-Control-Allow-Methods"), "POST, OPTIONS");
+      exchange
+          .getResponseHeaders()
+          .put(new HttpString("Access-Control-Allow-Headers"), "Content-Type");
       exchange.setStatusCode(204);
       exchange.endExchange();
       return;
@@ -167,43 +176,48 @@ public class McpServer {
     exchange.dispatch();
     exchange.startBlocking();
 
-    Executors.newSingleThreadExecutor().submit(() -> {
-      try {
-        String body = new String(exchange.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    Executors.newSingleThreadExecutor()
+        .submit(
+            () -> {
+              try {
+                String body =
+                    new String(exchange.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
-        JsonNode request = MAPPER.readTree(body);
-        JsonNode response = processRequest(request, sessionId);
+                JsonNode request = MAPPER.readTree(body);
+                JsonNode response = processRequest(request, sessionId);
 
-        // Notifications (no id) don't get a response
-        if (request.has("id") && !request.get("id").isNull()) {
-          // Send response via SSE if session exists, otherwise as HTTP response
-          Sender sseSender = sessionId != null ? sessions.get(sessionId) : null;
-          if (sseSender != null) {
-            String json = MAPPER.writeValueAsString(response);
-            String sseMsg = "event: message\ndata: " + json + "\n\n";
-            sseSender.send(sseMsg);
-            exchange.setStatusCode(202);
-            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
-            exchange.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-          } else {
-            byte[] respBytes = MAPPER.writeValueAsBytes(response);
-            exchange.setStatusCode(200);
-            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
-            exchange.getOutputStream().write(respBytes);
-          }
-        } else {
-          exchange.setStatusCode(200);
-        }
-        exchange.getOutputStream().close();
-      } catch (Exception e) {
-        try {
-          exchange.setStatusCode(500);
-          exchange.getOutputStream().write(("Error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8));
-          exchange.getOutputStream().close();
-        } catch (Exception ignored) {
-        }
-      }
-    });
+                // Notifications (no id) don't get a response
+                if (request.has("id") && !request.get("id").isNull()) {
+                  // Send response via SSE if session exists, otherwise as HTTP response
+                  Sender sseSender = sessionId != null ? sessions.get(sessionId) : null;
+                  if (sseSender != null) {
+                    String json = MAPPER.writeValueAsString(response);
+                    String sseMsg = "event: message\ndata: " + json + "\n\n";
+                    sseSender.send(sseMsg);
+                    exchange.setStatusCode(202);
+                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
+                  } else {
+                    byte[] respBytes = MAPPER.writeValueAsBytes(response);
+                    exchange.setStatusCode(200);
+                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getOutputStream().write(respBytes);
+                  }
+                } else {
+                  exchange.setStatusCode(200);
+                }
+                exchange.getOutputStream().close();
+              } catch (Exception e) {
+                try {
+                  exchange.setStatusCode(500);
+                  exchange
+                      .getOutputStream()
+                      .write(("Error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8));
+                  exchange.getOutputStream().close();
+                } catch (Exception ignored) {
+                }
+              }
+            });
   }
 
   // --- MCP Protocol ---

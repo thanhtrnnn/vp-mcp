@@ -1,5 +1,6 @@
 package com.brunnen.vp.mcp.tools;
 
+import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.ErdUtils;
 import com.vp.plugin.DiagramManager;
@@ -9,14 +10,17 @@ import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.model.IDBColumn;
 import com.vp.plugin.model.IDBForeignKey;
 import com.vp.plugin.model.IDBTable;
-import com.vp.plugin.model.factory.IModelElementFactory;
+import com.vp.plugin.model.IModelElement;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
-import com.brunnen.vp.mcp.tool.Tool;
 
 /** MCP tools for Visual Paradigm ERD operations. */
 public class ErdMcpTools extends AbstractDiagramMcpTools {
 
-  @Tool(name = "createErd", description = "Create a new Entity-Relationship diagram in Visual Paradigm")
+  @Tool(
+      name = "createErd",
+      description = "Create a new Entity-Relationship diagram in Visual Paradigm")
   public String createErd(String diagramName) {
     try {
       return runOnEdt(
@@ -47,8 +51,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             }
 
             IDBTable table = getModelElementFactory().createDBTable();
-            table.setName(tableName);
-            addToDiagram(diagram, table);
+            addToDiagram(diagram, table, tableName);
 
             return "Added table '" + tableName + "' to diagram '" + diagramName + "'";
           });
@@ -112,11 +115,10 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (source == null || target == null) {
               return "Table not found: " + (source == null ? fromTable : toTable);
             }
-            IDiagramElement fromElement = findDiagramElementByModel(diagram, source);
-            IDiagramElement toElement = findDiagramElementByModel(diagram, target);
+            IDiagramElement fromElement = findDiagramElementByName(diagram, fromTable);
+            IDiagramElement toElement = findDiagramElementByName(diagram, toTable);
             if (fromElement == null || toElement == null) {
-              return "Table not on diagram: "
-                  + (fromElement == null ? fromTable : toTable);
+              return "Table not on diagram: " + (fromElement == null ? fromTable : toTable);
             }
 
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
@@ -127,6 +129,16 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             }
             fk.setFromMultiplicity("1");
             fk.setToMultiplicity("*");
+
+            // Resolve column references
+            if (fromColumn != null && !fromColumn.trim().isEmpty()) {
+              IDBColumn fromCol = findColumnByName(source, fromColumn.trim());
+              if (fromCol == null) {
+                return "Column '" + fromColumn + "' not found in table '" + fromTable + "'";
+              }
+              fk.setIndexColumn(fromCol);
+            }
+
             getDiagramManager().createConnector(diagram, fk, fromElement, toElement, null);
 
             return "Added foreign key from '" + fromTable + "' to '" + toTable + "'";
@@ -136,7 +148,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addTableRelationship", description = "Add a relationship between tables (identifying or non-identifying)")
+  @Tool(
+      name = "addTableRelationship",
+      description = "Add a relationship between tables (identifying or non-identifying)")
   public String addTableRelationship(
       String diagramName,
       String fromTable,
@@ -158,11 +172,10 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (source == null || target == null) {
               return "Table not found: " + (source == null ? fromTable : toTable);
             }
-            IDiagramElement fromElement = findDiagramElementByModel(diagram, source);
-            IDiagramElement toElement = findDiagramElementByModel(diagram, target);
+            IDiagramElement fromElement = findDiagramElementByName(diagram, fromTable);
+            IDiagramElement toElement = findDiagramElementByName(diagram, toTable);
             if (fromElement == null || toElement == null) {
-              return "Table not on diagram: "
-                  + (fromElement == null ? fromTable : toTable);
+              return "Table not on diagram: " + (fromElement == null ? fromTable : toTable);
             }
 
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
@@ -188,7 +201,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "generateDdl", description = "Generate CREATE TABLE DDL statements for all tables in an ER diagram")
+  @Tool(
+      name = "generateDdl",
+      description = "Generate CREATE TABLE DDL statements for all tables in an ER diagram")
   public String generateDdl(String diagramName) {
     try {
       return runOnEdt(
@@ -229,20 +244,63 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             }
 
             List<IDBTable> tables = ErdUtils.getTablesInDiagram(diagram);
-            int totalColumns = 0;
-            for (IDBTable table : tables) {
-              java.util.Iterator<?> colIter = table.dBColumnIterator();
-              while (colIter.hasNext()) {
-                colIter.next();
-                totalColumns++;
-              }
-            }
 
             StringBuilder report = new StringBuilder();
             report.append("ERD REPORT: ").append(diagramName).append("\n");
             report.append("================================\n");
-            report.append("Tables: ").append(tables.size()).append("\n");
-            report.append("Columns: ").append(totalColumns).append("\n");
+
+            // Tables with columns
+            report.append("Tables (").append(tables.size()).append("):\n");
+            for (IDBTable table : tables) {
+              List<String> cols = new ArrayList<>();
+              Iterator<?> colIter = table.dBColumnIterator();
+              while (colIter.hasNext()) {
+                Object colObj = colIter.next();
+                if (colObj instanceof IDBColumn) {
+                  IDBColumn col = (IDBColumn) colObj;
+                  StringBuilder colStr = new StringBuilder();
+                  colStr.append(col.getName());
+                  if (col.getTypeInText() != null) {
+                    colStr.append(" ").append(col.getTypeInText());
+                  }
+                  if (col.isPrimaryKey()) {
+                    colStr.append(" PK");
+                  } else if (!col.isNullable()) {
+                    colStr.append(" NOT NULL");
+                  }
+                  cols.add(colStr.toString());
+                }
+              }
+              report.append("  - ").append(table.getName());
+              report.append(" (").append(cols.size()).append(" columns)\n");
+              for (String col : cols) {
+                report.append("    ").append(col).append("\n");
+              }
+            }
+
+            // Foreign Keys
+            List<String> fks = new ArrayList<>();
+            Iterator<?> elemIter = diagram.diagramElementIterator();
+            while (elemIter.hasNext()) {
+              Object obj = elemIter.next();
+              if (obj instanceof IDiagramElement) {
+                IModelElement model = ((IDiagramElement) obj).getModelElement();
+                if (model instanceof IDBForeignKey) {
+                  IDBForeignKey fk = (IDBForeignKey) model;
+                  String from = fk.getFrom() != null ? fk.getFrom().getName() : "?";
+                  String to = fk.getTo() != null ? fk.getTo().getName() : "?";
+                  String fkName = fk.getName() != null ? fk.getName() : from + "_" + to;
+                  fks.add(fkName + ": " + from + " -> " + to);
+                }
+              }
+            }
+            if (!fks.isEmpty()) {
+              report.append("Foreign Keys (").append(fks.size()).append("):\n");
+              for (String fk : fks) {
+                report.append("  - ").append(fk).append("\n");
+              }
+            }
+
             return report.toString();
           });
     } catch (Exception e) {
@@ -250,4 +308,17 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  private IDBColumn findColumnByName(IDBTable table, String columnName) {
+    Iterator<?> iter = table.dBColumnIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IDBColumn) {
+        IDBColumn col = (IDBColumn) obj;
+        if (columnName.equals(col.getName())) {
+          return col;
+        }
+      }
+    }
+    return null;
+  }
 }

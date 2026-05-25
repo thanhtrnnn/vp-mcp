@@ -10,12 +10,18 @@ public class SequenceDiagramUtilsTest {
 
   @Test
   public void testIsValidLifelineName() {
-    assertTrue("Valid lifeline name should return true", SequenceDiagramUtils.isValidLifelineName("Actor"));
-    assertTrue("Valid lifeline name should return true", SequenceDiagramUtils.isValidLifelineName("LoginController"));
+    assertTrue(
+        "Valid lifeline name should return true",
+        SequenceDiagramUtils.isValidLifelineName("Actor"));
+    assertTrue(
+        "Valid lifeline name should return true",
+        SequenceDiagramUtils.isValidLifelineName("LoginController"));
 
     assertFalse("Null name should return false", SequenceDiagramUtils.isValidLifelineName(null));
     assertFalse("Empty name should return false", SequenceDiagramUtils.isValidLifelineName(""));
-    assertFalse("Whitespace name should return false", SequenceDiagramUtils.isValidLifelineName("   "));
-    assertFalse("Too short name should return false", SequenceDiagramUtils.isValidLifelineName("A"));
+    assertFalse(
+        "Whitespace name should return false", SequenceDiagramUtils.isValidLifelineName("   "));
+    assertFalse(
+        "Too short name should return false", SequenceDiagramUtils.isValidLifelineName("A"));
   }
 }

@@ -1,26 +1,30 @@
 package com.brunnen.vp.mcp.tools;
 
+import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
-import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IUseCaseDiagramUIModel;
 import com.vp.plugin.model.IActor;
+import com.vp.plugin.model.IAssociation;
 import com.vp.plugin.model.IExtend;
+import com.vp.plugin.model.IGeneralization;
 import com.vp.plugin.model.IInclude;
 import com.vp.plugin.model.IModelElement;
+import com.vp.plugin.model.IRelationship;
 import com.vp.plugin.model.IUseCase;
-import com.vp.plugin.model.factory.IModelElementFactory;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import com.brunnen.vp.mcp.tool.Tool;
 
 /** MCP tools for Visual Paradigm Use Case diagram operations. */
 public class UseCaseMcpTools extends AbstractDiagramMcpTools {
 
-  @Tool(name = "createUseCaseDiagram", description = "Create a new use case diagram in Visual Paradigm")
+  @Tool(
+      name = "createUseCaseDiagram",
+      description = "Create a new use case diagram in Visual Paradigm")
   public String createUseCaseDiagram(String diagramName) {
     try {
       return runOnEdt(
@@ -51,10 +55,15 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
 
             IActor actor = getModelElementFactory().createActor();
-            actor.setName(actorName);
-            addToDiagram(diagram, actor);
+            addToDiagram(diagram, actor, actorName);
 
-            return "Added actor '" + actorName + "' to diagram '" + diagramName + "'";
+            return "Added actor '"
+                + actorName
+                + "' to diagram '"
+                + diagramName
+                + "' (model name: "
+                + actor.getName()
+                + ")";
           });
     } catch (Exception e) {
       return "Error adding actor: " + e.getMessage();
@@ -74,8 +83,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
 
             IUseCase useCase = getModelElementFactory().createUseCase();
-            useCase.setName(useCaseName);
-            addToDiagram(diagram, useCase);
+            addToDiagram(diagram, useCase, useCaseName);
 
             return "Added use case '" + useCaseName + "' to diagram '" + diagramName + "'";
           });
@@ -86,39 +94,42 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
 
   @Tool(
       name = "addRelationship",
-      description = "Add a relationship (Include/Extend/Association) between elements in a use case diagram")
-  public String addRelationship(String sourceName, String targetName, String relationshipType) {
+      description =
+          "Add a relationship (Include/Extend/Generalization/Association) between elements in a use case diagram")
+  public String addRelationship(
+      String diagramName, String sourceName, String targetName, String relationshipType) {
     try {
       return runOnEdt(
           () -> {
-            IUseCase source =
-                DiagramUtils.findModelElementByName(sourceName, IUseCase.class);
-            if (source == null) {
-              source = findUseCaseInAnyDiagram(sourceName);
-            }
-            if (source == null) {
-              return "Source use case not found: " + sourceName;
-            }
-
-            IUseCase target =
-                DiagramUtils.findModelElementByName(targetName, IUseCase.class);
-            if (target == null) {
-              target = findUseCaseInAnyDiagram(targetName);
-            }
-            if (target == null) {
-              return "Target use case not found: " + targetName;
-            }
-
-            IDiagramUIModel diagram = findDiagramContainingElement(source);
+            IUseCaseDiagramUIModel diagram =
+                (IUseCaseDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IUseCaseDiagramUIModel.class);
             if (diagram == null) {
-              return "Source element not on any diagram: " + sourceName;
+              return "Diagram not found: " + diagramName;
             }
 
-            IDiagramElement fromElement = findDiagramElementByModel(diagram, source);
-            IDiagramElement toElement = findDiagramElementByModel(diagram, target);
+            // Search both IUseCase and IActor for source
+            IModelElement source = DiagramUtils.findModelElementByName(sourceName, IUseCase.class);
+            if (source == null) {
+              source = DiagramUtils.findModelElementByName(sourceName, IActor.class);
+            }
+            if (source == null) {
+              return "Source element not found: " + sourceName;
+            }
+
+            // Search both IUseCase and IActor for target
+            IModelElement target = DiagramUtils.findModelElementByName(targetName, IUseCase.class);
+            if (target == null) {
+              target = DiagramUtils.findModelElementByName(targetName, IActor.class);
+            }
+            if (target == null) {
+              return "Target element not found: " + targetName;
+            }
+
+            IDiagramElement fromElement = findDiagramElementByName(diagram, sourceName);
+            IDiagramElement toElement = findDiagramElementByName(diagram, targetName);
             if (fromElement == null || toElement == null) {
-              return "Element not on diagram: "
-                  + (fromElement == null ? sourceName : targetName);
+              return "Element not on diagram: " + (fromElement == null ? sourceName : targetName);
             }
 
             DiagramManager dm = getDiagramManager();
@@ -128,15 +139,29 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               include.setFrom(source);
               include.setTo(target);
               dm.createConnector(diagram, include, fromElement, toElement, null);
-              return "Added Include relationship from '" + sourceName + "' to '" + targetName + "'";
+              return "Added Include from '" + sourceName + "' to '" + targetName + "'";
             } else if ("Extend".equalsIgnoreCase(relationshipType)) {
               IExtend extend = getModelElementFactory().createExtend();
               extend.setFrom(source);
               extend.setTo(target);
               dm.createConnector(diagram, extend, fromElement, toElement, null);
-              return "Added Extend relationship from '" + sourceName + "' to '" + targetName + "'";
+              return "Added Extend from '" + sourceName + "' to '" + targetName + "'";
+            } else if ("Generalization".equalsIgnoreCase(relationshipType)) {
+              IGeneralization gen = getModelElementFactory().createGeneralization();
+              gen.setFrom(source);
+              gen.setTo(target);
+              dm.createConnector(diagram, gen, fromElement, toElement, null);
+              return "Added Generalization from '" + sourceName + "' to '" + targetName + "'";
+            } else if ("Association".equalsIgnoreCase(relationshipType)) {
+              IAssociation assoc = getModelElementFactory().createAssociation();
+              assoc.setFrom(source);
+              assoc.setTo(target);
+              dm.createConnector(diagram, assoc, fromElement, toElement, null);
+              return "Added Association from '" + sourceName + "' to '" + targetName + "'";
             } else {
-              return "Unknown relationship type: " + relationshipType + ". Use Include or Extend.";
+              return "Unknown relationship type: "
+                  + relationshipType
+                  + ". Use Include, Extend, Generalization, or Association.";
             }
           });
     } catch (Exception e) {
@@ -144,7 +169,9 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "generateUseCaseReport", description = "Generate a use case analysis report for a diagram")
+  @Tool(
+      name = "generateUseCaseReport",
+      description = "Generate a use case analysis report for a diagram")
   public String generateReport(String diagramName) {
     try {
       return runOnEdt(
@@ -156,21 +183,36 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
 
-            int useCaseCount = 0;
-            int actorCount = 0;
-            int relationshipCount = 0;
+            List<String> actorNames = new ArrayList<>();
+            List<String> useCaseNames = new ArrayList<>();
+            List<String> relationshipDetails = new ArrayList<>();
 
             Iterator<?> iter = diagram.diagramElementIterator();
             while (iter.hasNext()) {
               Object obj = iter.next();
               if (obj instanceof IDiagramElement) {
                 IModelElement model = ((IDiagramElement) obj).getModelElement();
-                if (model instanceof IUseCase) {
-                  useCaseCount++;
-                } else if (model instanceof IActor) {
-                  actorCount++;
-                } else if (model instanceof IInclude || model instanceof IExtend) {
-                  relationshipCount++;
+                if (model instanceof IActor) {
+                  actorNames.add(model.getName());
+                } else if (model instanceof IUseCase) {
+                  useCaseNames.add(model.getName());
+                } else if (model instanceof IRelationship) {
+                  String relType;
+                  if (model instanceof IInclude) {
+                    relType = "Include";
+                  } else if (model instanceof IExtend) {
+                    relType = "Extend";
+                  } else if (model instanceof IGeneralization) {
+                    relType = "Generalization";
+                  } else if (model instanceof IAssociation) {
+                    relType = "Association";
+                  } else {
+                    relType = "Relationship";
+                  }
+                  IRelationship rel = (IRelationship) model;
+                  String from = rel.getFrom() != null ? rel.getFrom().getName() : "?";
+                  String to = rel.getTo() != null ? rel.getTo().getName() : "?";
+                  relationshipDetails.add(relType + ": " + from + " -> " + to);
                 }
               }
             }
@@ -178,50 +220,22 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             StringBuilder report = new StringBuilder();
             report.append("USE CASE REPORT: ").append(diagramName).append("\n");
             report.append("================================\n");
-            report.append("Actors: ").append(actorCount).append("\n");
-            report.append("Use Cases: ").append(useCaseCount).append("\n");
-            report.append("Relationships: ").append(relationshipCount).append("\n");
+            report.append("Actors (").append(actorNames.size()).append("):\n");
+            for (String name : actorNames) {
+              report.append("  - ").append(name).append("\n");
+            }
+            report.append("Use Cases (").append(useCaseNames.size()).append("):\n");
+            for (String name : useCaseNames) {
+              report.append("  - ").append(name).append("\n");
+            }
+            report.append("Relationships (").append(relationshipDetails.size()).append("):\n");
+            for (String rel : relationshipDetails) {
+              report.append("  - ").append(rel).append("\n");
+            }
             return report.toString();
           });
     } catch (Exception e) {
       return "Error generating report: " + e.getMessage();
     }
   }
-
-  private IUseCase findUseCaseInAnyDiagram(String name) {
-    List<IDiagramUIModel> diagrams =
-        DiagramUtils.findAllDiagrams(IUseCaseDiagramUIModel.class);
-    for (IDiagramUIModel diagram : diagrams) {
-      Iterator<?> iter = diagram.diagramElementIterator();
-      while (iter.hasNext()) {
-        Object obj = iter.next();
-        if (obj instanceof IDiagramElement) {
-          IModelElement model = ((IDiagramElement) obj).getModelElement();
-          if (model instanceof IUseCase && name.equals(model.getName())) {
-            return (IUseCase) model;
-          }
-        }
-      }
-    }
-    return null;
-  }
-
-  private IDiagramUIModel findDiagramContainingElement(IModelElement element) {
-    List<IDiagramUIModel> diagrams =
-        DiagramUtils.findAllDiagrams(IUseCaseDiagramUIModel.class);
-    for (IDiagramUIModel diagram : diagrams) {
-      Iterator<?> iter = diagram.diagramElementIterator();
-      while (iter.hasNext()) {
-        Object obj = iter.next();
-        if (obj instanceof IDiagramElement) {
-          IModelElement model = ((IDiagramElement) obj).getModelElement();
-          if (model == element) {
-            return diagram;
-          }
-        }
-      }
-    }
-    return null;
-  }
-
 }

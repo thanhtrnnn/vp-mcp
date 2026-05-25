@@ -22,51 +22,47 @@ public final class DiagramUtils {
     return ApplicationManager.instance().getDiagramManager();
   }
 
-  /**
-   * Find a diagram by name and type.
-   */
+  /** Find a diagram by name and type. Returns the LAST match (most recently created). */
   public static IDiagramUIModel findDiagramByName(String name, Class<?> diagramType) {
     IProject project = getProject();
     if (project == null || name == null) {
       return null;
     }
+    IDiagramUIModel result = null;
     Iterator<?> iter = project.diagramIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
       if (obj instanceof IDiagramUIModel) {
         IDiagramUIModel diagram = (IDiagramUIModel) obj;
         if (name.equals(diagram.getName()) && diagramType.isInstance(diagram)) {
-          return diagram;
+          result = diagram;
         }
       }
     }
-    return null;
+    return result;
   }
 
-  /**
-   * Find any diagram by name (any type).
-   */
+  /** Find any diagram by name (any type). Returns the LAST match (most recently created). */
   public static IDiagramUIModel findDiagramByName(String name) {
     IProject project = getProject();
     if (project == null || name == null) {
       return null;
     }
+    IDiagramUIModel result = null;
     Iterator<?> iter = project.diagramIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
       if (obj instanceof IDiagramUIModel) {
         IDiagramUIModel diagram = (IDiagramUIModel) obj;
         if (name.equals(diagram.getName())) {
-          return diagram;
+          result = diagram;
         }
       }
     }
-    return null;
+    return result;
   }
 
-  /**
-   * Find a model element by name and type.
-   */
+  /** Find a model element by name and type. */
   public static <T extends IModelElement> T findModelElementByName(String name, Class<T> type) {
     IProject project = getProject();
     if (project == null || name == null) {
@@ -85,9 +81,7 @@ public final class DiagramUtils {
     return null;
   }
 
-  /**
-   * Find all model elements of a given type.
-   */
+  /** Find all model elements of a given type. */
   public static <T extends IModelElement> List<T> findAllModelElements(Class<T> type) {
     List<T> result = new ArrayList<>();
     IProject project = getProject();
@@ -104,9 +98,7 @@ public final class DiagramUtils {
     return result;
   }
 
-  /**
-   * Find all diagrams of a given type.
-   */
+  /** Find all diagrams of a given type. */
   public static List<IDiagramUIModel> findAllDiagrams(Class<?> diagramType) {
     List<IDiagramUIModel> result = new ArrayList<>();
     IProject project = getProject();

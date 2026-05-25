@@ -22,9 +22,7 @@ public final class UseCaseUtils {
    */
   public static List<IUseCaseDiagramUIModel> getAllUseCaseDiagrams() {
     List<IDiagramUIModel> diagrams = DiagramUtils.findAllDiagrams(IUseCaseDiagramUIModel.class);
-    return diagrams.stream()
-        .map(d -> (IUseCaseDiagramUIModel) d)
-        .collect(Collectors.toList());
+    return diagrams.stream().map(d -> (IUseCaseDiagramUIModel) d).collect(Collectors.toList());
   }
 
   /**

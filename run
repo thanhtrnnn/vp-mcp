@@ -116,7 +116,8 @@ main() {
 		check_prerequisites
 		log_info "Building ${PLUGIN_NAME}..."
 		export MAVEN_OPTS
-		mvn clean compile
+		shift
+		mvn clean compile "$@"
 		log_success "Build completed"
 		;;
 	format)
@@ -130,14 +131,16 @@ main() {
 		check_prerequisites
 		log_info "Running tests for ${PLUGIN_NAME}..."
 		export MAVEN_OPTS
-		mvn test
+		shift
+		mvn test "$@"
 		log_success "Tests completed"
 		;;
 	package)
 		check_prerequisites
 		log_info "Packaging ${PLUGIN_NAME}..."
 		export MAVEN_OPTS
-		mvn package
+		shift
+		mvn package "$@"
 		log_success "Package created"
 		;;
 	spotbugs)
@@ -159,14 +162,16 @@ main() {
 		log_info "Installing ${PLUGIN_NAME} to Visual Paradigm..."
 		mkdir -p "$VP_PLUGINS_DIR"
 		export MAVEN_OPTS
-		mvn install -P install
+		shift
+		mvn install -P install "$@"
 		log_success "Plugin installed"
 		;;
 	all)
 		check_prerequisites
 		log_info "Running complete build process..."
 		export MAVEN_OPTS
-		mvn clean compile test package install -P install
+		shift
+		mvn clean compile test package install -P install "$@"
 		log_success "Complete build process finished"
 		;;
 	docker-build)

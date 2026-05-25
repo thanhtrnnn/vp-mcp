@@ -1,14 +1,16 @@
 package com.brunnen.vp.mcp.util;
 
 import com.vp.plugin.diagram.IDiagramElement;
-import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IInteractionDiagramUIModel;
+import com.vp.plugin.model.IActivation;
 import com.vp.plugin.model.IInteractionLifeLine;
 import com.vp.plugin.model.IMessage;
 import com.vp.plugin.model.IModelElement;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /** Utility class for sequence diagram operations. */
@@ -92,6 +94,28 @@ public final class SequenceDiagramUtils {
       }
     }
     return messages;
+  }
+
+  /**
+   * Build a reverse map from activation to lifeline name.
+   *
+   * @param diagram the sequence diagram
+   * @return map from IActivation to lifeline name
+   */
+  public static Map<IActivation, String> buildActivationToLifelineMap(
+      IInteractionDiagramUIModel diagram) {
+    Map<IActivation, String> map = new HashMap<>();
+    List<IInteractionLifeLine> lifelines = getAllLifelines(diagram);
+    for (IInteractionLifeLine ll : lifelines) {
+      Iterator<?> iter = ll.activationIterator();
+      while (iter.hasNext()) {
+        Object obj = iter.next();
+        if (obj instanceof IActivation) {
+          map.put((IActivation) obj, ll.getName());
+        }
+      }
+    }
+    return map;
   }
 
   /**

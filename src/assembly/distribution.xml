@@ -26,6 +26,9 @@
             <useTransitiveDependencies>true</useTransitiveDependencies>
             <useProjectArtifact>true</useProjectArtifact>
             <scope>runtime</scope>
+            <excludes>
+                <exclude>com.vp:openapi</exclude>
+            </excludes>
         </dependencySet>
     </dependencySets>
 </assembly>

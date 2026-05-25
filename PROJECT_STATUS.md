@@ -13,11 +13,11 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (34 tools total)
+### MCP Tool Services (35 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
-| Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement | 4 |
+| Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts | 5 |
 | Use Case | create, addActor, addUseCase, addRelationship, generateReport | 5 |
 | Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, generateReport | 12 |
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
@@ -29,14 +29,16 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 |------|---------|
 | `McpServer.java` | Undertow-based MCP server with SSE transport |
 | `tool/Tool.java` | Custom `@Tool` annotation |
-| `tool/ToolDefinition.java` | Reflection-based tool scanning + JSON Schema generation |
+| `tool/ToolDefinition.java` | Reflection-based tool scanning + JSON Schema generation (hierarchy-aware) |
 | `VPMcpPlugin.java` | VP plugin entry point, registers tools with McpServer |
 | `StandaloneServer.java` | Standalone entry for Docker (no VP dependency) |
+| `tools/AbstractDiagramMcpTools.java` | Base class with zone-aware positioning, layout, and management tools |
 | `tools/UseCaseMcpTools.java` | 5 use case diagram tools |
 | `tools/ClassDiagramMcpTools.java` | 12 class diagram tools |
 | `tools/ErdMcpTools.java` | 7 ERD tools |
 | `tools/SequenceDiagramMcpTools.java` | 7 sequence diagram tools |
 | `util/DiagramUtils.java` | Shared VP API helpers (diagram/element lookup) |
+| `util/DiagramLayoutEngine.java` | Zone-aware positioning + parameterized VP LayoutOption construction |
 
 ### Dependencies
 
@@ -66,8 +68,19 @@ Docker uses multi-stage build with VP API stub JAR for compilation.
 - [x] Custom MCP server compiles and runs on Java 11
 - [x] SSE transport works (endpoint event, keep-alive, session management)
 - [x] MCP protocol: initialize, tools/list, tools/call
-- [x] 34 tools registered and invocable via JSON-RPC
+- [x] 35 tools registered and invocable via JSON-RPC
 - [x] Docker build succeeds with Java 11
 - [x] VP plugin loads successfully (verified in VP log)
 - [x] Connectors use `createConnector()` with IDiagramElement refs (not `createDiagramElement`)
-- [x] Diagram management tools: listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement
+- [x] Diagram management tools: listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts
+- [x] Zone-aware element positioning (actors left, UCs right; boundary/DAO/entity layers)
+- [x] Parameterized VP LayoutOption: Hierarchical (UC/Class/Sequence), SmartOrganic (ERD)
+- [x] UC diagram span reduced from 2300px to ~260px
+- [x] Class diagram span reduced from 3375px to ~205px
+- [x] Rich verification: getDiagramElements shows class attrs/ops, table columns, lifeline classifiers, connector from->to
+- [x] Rich reports: generateUseCaseReport/generateClassReport/generateErdReport/generateSequenceReport show element names and details
+- [x] UC addRelationship supports IActor + Association type + diagramName param
+- [x] addForeignKey resolves column references via setIndexColumn
+- [x] findDiagramElementByModel uses object identity instead of name matching
+- [x] findOrCreateActivation returns last (most recent) activation
+- [x] addCombinedFragment warns about unfound lifelines

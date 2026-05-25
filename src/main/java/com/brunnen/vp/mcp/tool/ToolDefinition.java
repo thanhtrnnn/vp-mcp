@@ -14,7 +14,8 @@ public final class ToolDefinition {
   private final Object target;
   private final Method method;
 
-  public ToolDefinition(String name, String description, ObjectNode inputSchema, Object target, Method method) {
+  public ToolDefinition(
+      String name, String description, ObjectNode inputSchema, Object target, Method method) {
     this.name = name;
     this.description = description;
     this.inputSchema = inputSchema;
@@ -45,15 +46,23 @@ public final class ToolDefinition {
   /** Scan an object for @Tool-annotated methods and build ToolDefinitions. */
   public static java.util.List<ToolDefinition> scanTools(Object toolObject, ObjectMapper mapper) {
     java.util.List<ToolDefinition> defs = new java.util.ArrayList<>();
-    for (Method method : toolObject.getClass().getDeclaredMethods()) {
-      Tool annotation = method.getAnnotation(Tool.class);
-      if (annotation == null) {
-        continue;
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    Class<?> clazz = toolObject.getClass();
+    while (clazz != null && clazz != Object.class) {
+      for (Method method : clazz.getDeclaredMethods()) {
+        Tool annotation = method.getAnnotation(Tool.class);
+        if (annotation == null) {
+          continue;
+        }
+        String toolName = annotation.name().isEmpty() ? method.getName() : annotation.name();
+        if (!seen.add(toolName)) {
+          continue;
+        }
+        String toolDesc = annotation.description();
+        ObjectNode schema = buildInputSchema(method, mapper);
+        defs.add(new ToolDefinition(toolName, toolDesc, schema, toolObject, method));
       }
-      String toolName = annotation.name().isEmpty() ? method.getName() : annotation.name();
-      String toolDesc = annotation.description();
-      ObjectNode schema = buildInputSchema(method, mapper);
-      defs.add(new ToolDefinition(toolName, toolDesc, schema, toolObject, method));
+      clazz = clazz.getSuperclass();
     }
     return defs;
   }
@@ -71,11 +80,17 @@ public final class ToolDefinition {
       Class<?> type = param.getType();
       if (type == String.class) {
         propSchema.put("type", "string");
-      } else if (type == int.class || type == Integer.class || type == long.class || type == Long.class) {
+      } else if (type == int.class
+          || type == Integer.class
+          || type == long.class
+          || type == Long.class) {
         propSchema.put("type", "integer");
       } else if (type == boolean.class || type == Boolean.class) {
         propSchema.put("type", "boolean");
-      } else if (type == double.class || type == Double.class || type == float.class || type == Float.class) {
+      } else if (type == double.class
+          || type == Double.class
+          || type == float.class
+          || type == Float.class) {
         propSchema.put("type", "number");
       } else {
         propSchema.put("type", "string");

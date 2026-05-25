@@ -83,10 +83,7 @@ public final class ErdUtils {
         if (!first) {
           sql.append(",\n");
         }
-        sql.append("  ")
-            .append(col.getName())
-            .append(" ")
-            .append(col.getTypeInText());
+        sql.append("  ").append(col.getName()).append(" ").append(col.getTypeInText());
         if (col.getLength() > 0) {
           sql.append("(").append(col.getLength());
           if (col.getScale() > 0) {
