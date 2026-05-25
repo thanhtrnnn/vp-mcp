@@ -104,6 +104,9 @@ public abstract class AbstractDiagramMcpTools {
     DiagramManager dm = ApplicationManager.instance().getDiagramManager();
     element.setName(name);
     IDiagramElement diagramElement = dm.createDiagramElement(diagram, element);
+    if (diagramElement instanceof com.vp.plugin.diagram.IShapeUIModel) {
+      ((com.vp.plugin.diagram.IShapeUIModel) diagramElement).setCustomText(name);
+    }
     element.setName(name);
     String key = diagram.getName();
     DiagramLayoutEngine.ElementZone zone =

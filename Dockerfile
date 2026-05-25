@@ -1,4 +1,4 @@
-# Multi-stage build for Visual Paradigm MCP Plugin
+# Multi-stage build for Visual Paradigm MCP Plugin (proxy mode)
 FROM maven:3.9-eclipse-temurin-11 AS builder
 
 WORKDIR /build
@@ -35,9 +35,13 @@ COPY --from=builder /build/stub-libs/openapi.jar /app/lib/openapi.jar
 # Expose MCP server port
 EXPOSE 2026
 
+# VP API URL (default: host machine's VP instance)
+ENV VP_API_URL=http://host.docker.internal:2026
+ENV MCP_PORT=2026
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
     CMD curl -f --max-time 2 http://localhost:2026/sse || exit 1
 
-# Run the standalone MCP server
+# Run the proxy MCP server
 ENTRYPOINT ["java", "-cp", "/app/lib/*:/app/visual-paradigm-mcp-plugin.jar", "com.brunnen.vp.mcp.StandaloneServer"]

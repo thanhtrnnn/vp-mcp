@@ -57,13 +57,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             IActor actor = getModelElementFactory().createActor();
             addToDiagram(diagram, actor, actorName);
 
-            return "Added actor '"
-                + actorName
-                + "' to diagram '"
-                + diagramName
-                + "' (model name: "
-                + actor.getName()
-                + ")";
+            return "Added actor '" + actorName + "' to diagram '" + diagramName + "'";
           });
     } catch (Exception e) {
       return "Error adding actor: " + e.getMessage();

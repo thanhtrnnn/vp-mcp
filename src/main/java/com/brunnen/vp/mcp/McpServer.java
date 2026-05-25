@@ -46,6 +46,11 @@ public class McpServer {
     }
   }
 
+  /** Register a single proxy tool (used by Docker proxy mode). */
+  public void registerProxyTool(ToolDefinition tool) {
+    tools.add(tool);
+  }
+
   /** Set the server port (default 2026). */
   public void setPort(int port) {
     this.port = port;
@@ -85,6 +90,10 @@ public class McpServer {
       handleSse(exchange);
     } else if ("/mcp/messages".equals(path)) {
       handleMessage(exchange);
+    } else if ("/api/tools".equals(path)) {
+      handleApiTools(exchange);
+    } else if ("/api/execute".equals(path)) {
+      handleApiExecute(exchange);
     } else {
       exchange.setStatusCode(404);
       exchange.endExchange();
@@ -321,46 +330,120 @@ public class McpServer {
   }
 
   private String invokeTool(ToolDefinition tool, JsonNode argsNode) throws Exception {
-    java.lang.reflect.Method method = tool.getMethod();
-    method.setAccessible(true);
-    Object target = tool.getTarget();
-
-    java.lang.reflect.Parameter[] params = method.getParameters();
-    Object[] args = new Object[params.length];
-
-    for (int i = 0; i < params.length; i++) {
-      String paramName = params[i].getName();
-      Class<?> paramType = params[i].getType();
-      JsonNode argNode = argsNode != null ? argsNode.get(paramName) : null;
-
-      if (argNode == null || argNode.isNull()) {
-        args[i] = getDefaultValue(paramType);
-      } else if (paramType == String.class) {
-        args[i] = argNode.asText();
-      } else if (paramType == int.class || paramType == Integer.class) {
-        args[i] = argNode.asInt();
-      } else if (paramType == boolean.class || paramType == Boolean.class) {
-        args[i] = argNode.asBoolean();
-      } else if (paramType == long.class || paramType == Long.class) {
-        args[i] = argNode.asLong();
-      } else if (paramType == double.class || paramType == Double.class) {
-        args[i] = argNode.asDouble();
-      } else {
-        args[i] = argNode.asText();
-      }
-    }
-
-    Object result = method.invoke(target, args);
-    return result != null ? result.toString() : "OK";
+    return tool.execute(argsNode);
   }
 
-  private Object getDefaultValue(Class<?> type) {
-    if (type == int.class) return 0;
-    if (type == long.class) return 0L;
-    if (type == boolean.class) return false;
-    if (type == double.class) return 0.0;
-    if (type == float.class) return 0.0f;
-    return null;
+  // --- VP API Endpoints (for Docker proxy) ---
+
+  private void handleApiTools(HttpServerExchange exchange) {
+    if (!exchange.getRequestMethod().equals(Methods.GET)) {
+      exchange.setStatusCode(405);
+      exchange.endExchange();
+      return;
+    }
+
+    exchange.dispatch();
+    Executors.newSingleThreadExecutor()
+        .submit(
+            () -> {
+              try {
+                ArrayNode toolsArray = MAPPER.createArrayNode();
+                for (ToolDefinition tool : tools) {
+                  ObjectNode toolObj = MAPPER.createObjectNode();
+                  toolObj.put("name", tool.getName());
+                  toolObj.put("description", tool.getDescription());
+                  toolObj.set("inputSchema", tool.getInputSchema());
+                  toolsArray.add(toolObj);
+                }
+                byte[] resp = MAPPER.writeValueAsBytes(toolsArray);
+                exchange.setStatusCode(200);
+                exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                exchange
+                    .getResponseHeaders()
+                    .put(new HttpString("Access-Control-Allow-Origin"), "*");
+                exchange.getOutputStream().write(resp);
+                exchange.getOutputStream().close();
+              } catch (Exception e) {
+                exchange.setStatusCode(500);
+                exchange.endExchange();
+              }
+            });
+  }
+
+  private void handleApiExecute(HttpServerExchange exchange) {
+    if (exchange.getRequestMethod().equals(Methods.OPTIONS)) {
+      exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Origin"), "*");
+      exchange
+          .getResponseHeaders()
+          .put(new HttpString("Access-Control-Allow-Methods"), "POST, OPTIONS");
+      exchange
+          .getResponseHeaders()
+          .put(new HttpString("Access-Control-Allow-Headers"), "Content-Type");
+      exchange.setStatusCode(204);
+      exchange.endExchange();
+      return;
+    }
+
+    if (!exchange.getRequestMethod().equals(Methods.POST)) {
+      exchange.setStatusCode(405);
+      exchange.endExchange();
+      return;
+    }
+
+    exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Origin"), "*");
+    exchange.dispatch();
+    exchange.startBlocking();
+
+    Executors.newSingleThreadExecutor()
+        .submit(
+            () -> {
+              try {
+                String body =
+                    new String(exchange.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                JsonNode request = MAPPER.readTree(body);
+
+                String toolName = request.has("toolName") ? request.get("toolName").asText() : "";
+                JsonNode argsNode = request.get("arguments");
+
+                ToolDefinition tool = null;
+                for (ToolDefinition t : tools) {
+                  if (t.getName().equals(toolName)) {
+                    tool = t;
+                    break;
+                  }
+                }
+
+                ObjectNode response = MAPPER.createObjectNode();
+                if (tool == null) {
+                  response.put("error", "Unknown tool: " + toolName);
+                  byte[] resp = MAPPER.writeValueAsBytes(response);
+                  exchange.setStatusCode(400);
+                  exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                  exchange.getOutputStream().write(resp);
+                } else {
+                  try {
+                    String result = invokeTool(tool, argsNode);
+                    response.put("result", result);
+                  } catch (Exception e) {
+                    response.put("error", e.getMessage());
+                  }
+                  byte[] resp = MAPPER.writeValueAsBytes(response);
+                  exchange.setStatusCode(200);
+                  exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                  exchange.getOutputStream().write(resp);
+                }
+                exchange.getOutputStream().close();
+              } catch (Exception e) {
+                try {
+                  exchange.setStatusCode(500);
+                  exchange
+                      .getOutputStream()
+                      .write(("Error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8));
+                  exchange.getOutputStream().close();
+                } catch (Exception ignored) {
+                }
+              }
+            });
   }
 
   // --- JSON-RPC Helpers ---
