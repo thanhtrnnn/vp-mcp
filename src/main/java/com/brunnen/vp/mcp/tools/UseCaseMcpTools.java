@@ -103,18 +103,18 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
 
             // Search both IUseCase and IActor for source
-            IModelElement source = DiagramUtils.findModelElementByName(sourceName, IUseCase.class);
+            IModelElement source = findModelElement(sourceName, IUseCase.class, diagram);
             if (source == null) {
-              source = DiagramUtils.findModelElementByName(sourceName, IActor.class);
+              source = findModelElement(sourceName, IActor.class, diagram);
             }
             if (source == null) {
               return "Source element not found: " + sourceName;
             }
 
             // Search both IUseCase and IActor for target
-            IModelElement target = DiagramUtils.findModelElementByName(targetName, IUseCase.class);
+            IModelElement target = findModelElement(targetName, IUseCase.class, diagram);
             if (target == null) {
-              target = DiagramUtils.findModelElementByName(targetName, IActor.class);
+              target = findModelElement(targetName, IActor.class, diagram);
             }
             if (target == null) {
               return "Target element not found: " + targetName;
@@ -180,16 +180,26 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             List<String> actorNames = new ArrayList<>();
             List<String> useCaseNames = new ArrayList<>();
             List<String> relationshipDetails = new ArrayList<>();
+            java.util.Map<IModelElement, String> nameMap = new java.util.LinkedHashMap<>();
 
             Iterator<?> iter = diagram.diagramElementIterator();
             while (iter.hasNext()) {
               Object obj = iter.next();
               if (obj instanceof IDiagramElement) {
-                IModelElement model = ((IDiagramElement) obj).getModelElement();
+                IDiagramElement de = (IDiagramElement) obj;
+                IModelElement model = de.getModelElement();
+                String displayName = model.getName();
+                if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+                  String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+                  if (caption != null && !caption.isEmpty()) {
+                    displayName = caption;
+                  }
+                }
+                nameMap.put(model, displayName);
                 if (model instanceof IActor) {
-                  actorNames.add(model.getName());
+                  actorNames.add(displayName);
                 } else if (model instanceof IUseCase) {
-                  useCaseNames.add(model.getName());
+                  useCaseNames.add(displayName);
                 } else if (model instanceof IRelationship) {
                   String relType;
                   if (model instanceof IInclude) {
@@ -204,8 +214,14 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
                     relType = "Relationship";
                   }
                   IRelationship rel = (IRelationship) model;
-                  String from = rel.getFrom() != null ? rel.getFrom().getName() : "?";
-                  String to = rel.getTo() != null ? rel.getTo().getName() : "?";
+                  String from =
+                      rel.getFrom() != null
+                          ? nameMap.getOrDefault(rel.getFrom(), rel.getFrom().getName())
+                          : "?";
+                  String to =
+                      rel.getTo() != null
+                          ? nameMap.getOrDefault(rel.getTo(), rel.getTo().getName())
+                          : "?";
                   relationshipDetails.add(relType + ": " + from + " -> " + to);
                 }
               }

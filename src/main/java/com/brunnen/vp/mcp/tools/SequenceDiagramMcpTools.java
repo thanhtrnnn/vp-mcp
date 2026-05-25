@@ -42,7 +42,12 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   @Tool(name = "addLifeline", description = "Add a lifeline (participant) to a sequence diagram")
-  public String addLifeline(String diagramName, String lifelineName, String className) {
+  public String addLifeline(
+      String diagramName,
+      String lifelineName,
+      String className,
+      String lifelineType,
+      String alias) {
     try {
       return runOnEdt(
           () -> {
@@ -58,13 +63,36 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             baseClass.setName(
                 className != null && !className.trim().isEmpty() ? className : lifelineName);
 
+            // Set stereotype for type (boundary, entity, control, actor)
+            if (lifelineType != null && !lifelineType.trim().isEmpty()) {
+              baseClass.addStereotype(lifelineType.trim());
+            }
+
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
             lifeline.setBaseClassifier(baseClass);
 
             // Add to diagram
             addToDiagram(diagram, lifeline, lifelineName);
 
-            return "Added lifeline '" + lifelineName + "' to diagram '" + diagramName + "'";
+            // Set alias if provided
+            if (alias != null && !alias.trim().isEmpty()) {
+              lifeline.setNickname(alias.trim());
+            }
+
+            StringBuilder result = new StringBuilder();
+            result
+                .append("Added lifeline '")
+                .append(lifelineName)
+                .append("' to diagram '")
+                .append(diagramName)
+                .append("'");
+            if (lifelineType != null && !lifelineType.trim().isEmpty()) {
+              result.append(" (type: ").append(lifelineType.trim()).append(")");
+            }
+            if (alias != null && !alias.trim().isEmpty()) {
+              result.append(" (alias: ").append(alias.trim()).append(")");
+            }
+            return result.toString();
           });
     } catch (Exception e) {
       return "Error adding lifeline: " + e.getMessage();
@@ -318,13 +346,20 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             report.append("SEQUENCE DIAGRAM REPORT: ").append(diagramName).append("\n");
             report.append("=====================================\n");
 
-            // Lifelines with base classifier
+            // Lifelines with base classifier and type
             report.append("Lifelines (").append(lifelines.size()).append("):\n");
             for (IInteractionLifeLine ll : lifelines) {
               report.append("  - ").append(ll.getName());
               Object classifierObj = ll.getBaseClassifier();
               if (classifierObj instanceof IModelElement) {
                 report.append(" [").append(((IModelElement) classifierObj).getName()).append("]");
+                if (classifierObj instanceof IClass) {
+                  IClass bc = (IClass) classifierObj;
+                  java.util.Iterator<?> stIter = bc.stereotypeIterator();
+                  if (stIter.hasNext()) {
+                    report.append(" (").append(stIter.next()).append(")");
+                  }
+                }
               }
               report.append("\n");
             }
@@ -356,6 +391,69 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 report.append(" [").append(msg.getSequenceNumber()).append("]");
               }
               report.append("\n");
+            }
+
+            // Combined Fragments
+            List<String> fragments = new ArrayList<>();
+            java.util.Iterator<?> fragIter = diagram.diagramElementIterator();
+            while (fragIter.hasNext()) {
+              Object obj = fragIter.next();
+              if (obj instanceof com.vp.plugin.diagram.IDiagramElement) {
+                IModelElement model =
+                    ((com.vp.plugin.diagram.IDiagramElement) obj).getModelElement();
+                if (model instanceof ICombinedFragment) {
+                  ICombinedFragment cf = (ICombinedFragment) model;
+                  StringBuilder fragStr = new StringBuilder();
+                  // Operator
+                  String op = cf.getInteractionOperator();
+                  if (ICombinedFragment.INTERACTION_OPERATOR_ALT.equals(op)) fragStr.append("alt");
+                  else if (ICombinedFragment.INTERACTION_OPERATOR_OPT.equals(op))
+                    fragStr.append("opt");
+                  else if (ICombinedFragment.INTERACTION_OPERATOR_LOOP.equals(op))
+                    fragStr.append("loop");
+                  else if (ICombinedFragment.INTERACTION_OPERATOR_BREAK.equals(op))
+                    fragStr.append("break");
+                  else if (ICombinedFragment.INTERACTION_OPERATOR_PAR.equals(op))
+                    fragStr.append("par");
+                  else fragStr.append(op);
+
+                  // Guard from first operand
+                  java.util.Iterator<?> opIter = cf.operandIterator();
+                  if (opIter.hasNext()) {
+                    Object opObj = opIter.next();
+                    if (opObj instanceof IInteractionOperand) {
+                      IInteractionOperand operand = (IInteractionOperand) opObj;
+                      IInteractionConstraint guard = operand.getGuard();
+                      if (guard != null
+                          && guard.getConstraint() != null
+                          && !guard.getConstraint().isEmpty()) {
+                        fragStr.append(" [").append(guard.getConstraint()).append("]");
+                      }
+                    }
+                  }
+
+                  // Covered lifelines
+                  java.util.Iterator<?> llIter = cf.coveredLifeLineIterator();
+                  List<String> coveredNames = new ArrayList<>();
+                  while (llIter.hasNext()) {
+                    Object llObj = llIter.next();
+                    if (llObj instanceof IInteractionLifeLine) {
+                      coveredNames.add(((IInteractionLifeLine) llObj).getName());
+                    }
+                  }
+                  if (!coveredNames.isEmpty()) {
+                    fragStr.append(" covering: ").append(String.join(", ", coveredNames));
+                  }
+
+                  fragments.add(fragStr.toString());
+                }
+              }
+            }
+            if (!fragments.isEmpty()) {
+              report.append("Combined Fragments (").append(fragments.size()).append("):\n");
+              for (String frag : fragments) {
+                report.append("  - ").append(frag).append("\n");
+              }
             }
 
             return report.toString();

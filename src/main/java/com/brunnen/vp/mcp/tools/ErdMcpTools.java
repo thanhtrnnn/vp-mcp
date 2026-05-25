@@ -72,9 +72,18 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            IDBTable table = ErdUtils.findTableByName(tableName);
+            IDBTable table = findModelElement(tableName, IDBTable.class, null);
             if (table == null) {
               return "Table not found: " + tableName;
+            }
+
+            // Duplicate column guard
+            Iterator<?> existingCols = table.dBColumnIterator();
+            while (existingCols.hasNext()) {
+              Object obj = existingCols.next();
+              if (obj instanceof IDBColumn && columnName.equals(((IDBColumn) obj).getName())) {
+                return "Column '" + columnName + "' already exists in table '" + tableName + "'";
+              }
             }
 
             IDBColumn col = getModelElementFactory().createDBColumn();
@@ -110,8 +119,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IDBTable source = ErdUtils.findTableByName(fromTable);
-            IDBTable target = ErdUtils.findTableByName(toTable);
+            IDBTable source = findModelElement(fromTable, IDBTable.class, diagram);
+            IDBTable target = findModelElement(toTable, IDBTable.class, diagram);
             if (source == null || target == null) {
               return "Table not found: " + (source == null ? fromTable : toTable);
             }
@@ -167,8 +176,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IDBTable source = ErdUtils.findTableByName(fromTable);
-            IDBTable target = ErdUtils.findTableByName(toTable);
+            IDBTable source = findModelElement(fromTable, IDBTable.class, diagram);
+            IDBTable target = findModelElement(toTable, IDBTable.class, diagram);
             if (source == null || target == null) {
               return "Table not found: " + (source == null ? fromTable : toTable);
             }
@@ -245,6 +254,27 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
 
             List<IDBTable> tables = ErdUtils.getTablesInDiagram(diagram);
 
+            // Build table -> user name map from diagram captions
+            java.util.Map<IDBTable, String> tableNames = new java.util.LinkedHashMap<>();
+            Iterator<?> deIter = diagram.diagramElementIterator();
+            while (deIter.hasNext()) {
+              Object obj = deIter.next();
+              if (obj instanceof IDiagramElement) {
+                IDiagramElement de = (IDiagramElement) obj;
+                IModelElement model = de.getModelElement();
+                if (model instanceof IDBTable) {
+                  String displayName = model.getName();
+                  if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+                    String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+                    if (caption != null && !caption.isEmpty()) {
+                      displayName = caption;
+                    }
+                  }
+                  tableNames.put((IDBTable) model, displayName);
+                }
+              }
+            }
+
             StringBuilder report = new StringBuilder();
             report.append("ERD REPORT: ").append(diagramName).append("\n");
             report.append("================================\n");
@@ -252,6 +282,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             // Tables with columns
             report.append("Tables (").append(tables.size()).append("):\n");
             for (IDBTable table : tables) {
+              String tableName = tableNames.getOrDefault(table, table.getName());
               List<String> cols = new ArrayList<>();
               Iterator<?> colIter = table.dBColumnIterator();
               while (colIter.hasNext()) {
@@ -271,7 +302,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                   cols.add(colStr.toString());
                 }
               }
-              report.append("  - ").append(table.getName());
+              report.append("  - ").append(tableName);
               report.append(" (").append(cols.size()).append(" columns)\n");
               for (String col : cols) {
                 report.append("    ").append(col).append("\n");

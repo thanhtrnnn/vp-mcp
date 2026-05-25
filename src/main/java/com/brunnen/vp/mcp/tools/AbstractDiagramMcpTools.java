@@ -91,8 +91,8 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /**
-   * Add a model element to a diagram. Positions it using VP's built-in layout. Sets the element
-   * name AFTER creating the diagram element so VP's property change listener picks it up.
+   * Add a model element to a diagram. Sets the name on the model element, creates the diagram
+   * element, and sets the visual caption text. Positions using VP's built-in layout.
    *
    * @param diagram the diagram
    * @param element the model element
@@ -107,7 +107,6 @@ public abstract class AbstractDiagramMcpTools {
     if (diagramElement instanceof com.vp.plugin.diagram.IShapeUIModel) {
       ((com.vp.plugin.diagram.IShapeUIModel) diagramElement).setCustomText(name);
     }
-    element.setName(name);
     String key = diagram.getName();
     DiagramLayoutEngine.ElementZone zone =
         DiagramLayoutEngine.classifyElement(diagram.getType(), element);
@@ -121,7 +120,8 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /**
-   * Find a diagram element by its model element name on a specific diagram.
+   * Find a diagram element by its model element name on a specific diagram. Diagram-scoped only —
+   * does not check the global registry to avoid cross-diagram mismatches.
    *
    * @param diagram the diagram to search
    * @param name the model element name
@@ -139,6 +139,79 @@ public abstract class AbstractDiagramMcpTools {
         IModelElement model = de.getModelElement();
         if (model != null && name.equals(model.getName())) {
           return de;
+        }
+        if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+          String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+          if (name.equals(caption)) {
+            return de;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find a model element by name, scoped to a specific diagram first. Falls back to project-wide
+   * search. The diagram-scoped lookup avoids cross-diagram mismatches when the same element name
+   * exists in multiple diagrams.
+   *
+   * @param name the element name
+   * @param type the expected model element type
+   * @param diagram the diagram to search first (may be null for project-wide only)
+   * @param <T> the model element type
+   * @return the model element, or null if not found
+   */
+  protected <T extends IModelElement> T findModelElement(
+      String name, Class<T> type, IDiagramUIModel diagram) {
+    if (name == null) {
+      return null;
+    }
+    // 1. Diagram-scoped search (most reliable)
+    if (diagram != null) {
+      T result = findModelElementInDiagram(diagram, name, type);
+      if (result != null) {
+        return result;
+      }
+    }
+    // 2. When no diagram specified, search ALL diagrams
+    if (diagram == null) {
+      IProject project = ApplicationManager.instance().getProjectManager().getProject();
+      if (project != null) {
+        Iterator<?> dIter = project.diagramIterator();
+        while (dIter.hasNext()) {
+          Object dObj = dIter.next();
+          if (dObj instanceof IDiagramUIModel) {
+            T result = findModelElementInDiagram((IDiagramUIModel) dObj, name, type);
+            if (result != null) {
+              return result;
+            }
+          }
+        }
+      }
+    }
+    // 3. Fallback to project-wide search (getName only)
+    return DiagramUtils.findModelElementByName(name, type);
+  }
+
+  private <T extends IModelElement> T findModelElementInDiagram(
+      IDiagramUIModel diagram, String name, Class<T> type) {
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IDiagramElement) {
+        IDiagramElement de = (IDiagramElement) obj;
+        IModelElement model = de.getModelElement();
+        if (model != null && type.isInstance(model)) {
+          if (name.equals(model.getName())) {
+            return type.cast(model);
+          }
+          if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+            String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+            if (name.equals(caption)) {
+              return type.cast(model);
+            }
+          }
         }
       }
     }
@@ -164,6 +237,9 @@ public abstract class AbstractDiagramMcpTools {
       if (obj instanceof IDiagramElement) {
         IDiagramElement de = (IDiagramElement) obj;
         IModelElement m = de.getModelElement();
+        if (m == modelElement) {
+          return de;
+        }
         if (m != null && targetName.equals(m.getName())) {
           return de;
         }

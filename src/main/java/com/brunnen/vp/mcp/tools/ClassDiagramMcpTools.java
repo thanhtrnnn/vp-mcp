@@ -8,6 +8,8 @@ import com.vp.plugin.diagram.IClassDiagramUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
+import com.vp.plugin.diagram.IShapeUIModel;
+import com.vp.plugin.diagram.format.IShapeUIModelFillColor;
 import com.vp.plugin.model.IAssociation;
 import com.vp.plugin.model.IAssociationEnd;
 import com.vp.plugin.model.IAttribute;
@@ -16,8 +18,10 @@ import com.vp.plugin.model.IDependency;
 import com.vp.plugin.model.IGeneralization;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.IOperation;
+import com.vp.plugin.model.IPackage;
 import com.vp.plugin.model.IParameter;
 import com.vp.plugin.model.IRealization;
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -44,7 +48,15 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   @Tool(name = "addClass", description = "Add a class to a class diagram")
-  public String addClass(String diagramName, String className) {
+  public String addClass(
+      String diagramName,
+      String className,
+      String packageName,
+      String packageColor,
+      String stereotype,
+      boolean isAbstract,
+      String extendsClass,
+      String implementsInterfaces) {
     try {
       return runOnEdt(
           () -> {
@@ -56,9 +68,97 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IClass cls = getModelElementFactory().createClass();
+            cls.setName(className);
+            if (isAbstract) {
+              cls.setAbstract(true);
+            }
+            if (stereotype != null && !stereotype.trim().isEmpty()) {
+              cls.addStereotype(stereotype.trim());
+            }
+
+            // Create package if provided
+            if (packageName != null && !packageName.trim().isEmpty()) {
+              findOrCreatePackage(diagram, packageName.trim(), packageColor);
+            }
+
             addToDiagram(diagram, cls, className);
 
-            return "Added class '" + className + "' to diagram '" + diagramName + "'";
+            // Set package fill color if provided
+            if (packageName != null
+                && !packageName.trim().isEmpty()
+                && packageColor != null
+                && !packageColor.trim().isEmpty()) {
+              IDiagramElement pkgDe = findDiagramElementByName(diagram, packageName.trim());
+              if (pkgDe instanceof IShapeUIModel) {
+                IShapeUIModel shape = (IShapeUIModel) pkgDe;
+                IShapeUIModelFillColor fill = shape.getFillColor();
+                Color color = Color.decode(packageColor.trim());
+                fill.setColor1(color, true);
+              }
+            }
+
+            // Create generalization (extends) if provided
+            if (extendsClass != null && !extendsClass.trim().isEmpty()) {
+              IClass parent = findModelElement(extendsClass.trim(), IClass.class, diagram);
+              if (parent != null) {
+                IDiagramElement parentDe = findDiagramElementByName(diagram, extendsClass.trim());
+                if (parentDe != null) {
+                  IGeneralization gen = getModelElementFactory().createGeneralization();
+                  gen.setFrom(cls);
+                  gen.setTo(parent);
+                  getDiagramManager()
+                      .createConnector(
+                          diagram,
+                          gen,
+                          findDiagramElementByName(diagram, className),
+                          parentDe,
+                          null);
+                }
+              }
+            }
+
+            // Create realization (implements) if provided
+            if (implementsInterfaces != null && !implementsInterfaces.trim().isEmpty()) {
+              for (String ifaceName : implementsInterfaces.split(",")) {
+                String trimmed = ifaceName.trim();
+                if (!trimmed.isEmpty()) {
+                  IClass iface = findModelElement(trimmed, IClass.class, diagram);
+                  if (iface != null) {
+                    IDiagramElement ifaceDe = findDiagramElementByName(diagram, trimmed);
+                    if (ifaceDe != null) {
+                      IRealization real = getModelElementFactory().createRealization();
+                      real.setFrom(cls);
+                      real.setTo(iface);
+                      getDiagramManager()
+                          .createConnector(
+                              diagram,
+                              real,
+                              findDiagramElementByName(diagram, className),
+                              ifaceDe,
+                              null);
+                    }
+                  }
+                }
+              }
+            }
+
+            StringBuilder result = new StringBuilder();
+            result
+                .append("Added class '")
+                .append(className)
+                .append("' to diagram '")
+                .append(diagramName)
+                .append("'");
+            if (stereotype != null && !stereotype.trim().isEmpty()) {
+              result.append(" with stereotype <<").append(stereotype.trim()).append(">>");
+            }
+            if (isAbstract) {
+              result.append(" (abstract)");
+            }
+            if (packageName != null && !packageName.trim().isEmpty()) {
+              result.append(" in package '").append(packageName.trim()).append("'");
+            }
+            return result.toString();
           });
     } catch (Exception e) {
       return "Error adding class: " + e.getMessage();
@@ -73,9 +173,22 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            IClass cls = ClassDiagramUtils.findClassByName(className);
+            IClass cls = findModelElement(className, IClass.class, null);
             if (cls == null) {
               return "Class not found: " + className;
+            }
+
+            // Duplicate attribute guard
+            Iterator<?> existingAttrs = cls.attributeIterator();
+            while (existingAttrs.hasNext()) {
+              Object obj = existingAttrs.next();
+              if (obj instanceof IAttribute && attributeName.equals(((IAttribute) obj).getName())) {
+                return "Attribute '"
+                    + attributeName
+                    + "' already exists in class '"
+                    + className
+                    + "'";
+              }
             }
 
             IAttribute attr = getModelElementFactory().createAttribute();
@@ -101,9 +214,22 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            IClass cls = ClassDiagramUtils.findClassByName(className);
+            IClass cls = findModelElement(className, IClass.class, null);
             if (cls == null) {
               return "Class not found: " + className;
+            }
+
+            // Duplicate operation guard
+            Iterator<?> existingOps = cls.operationIterator();
+            while (existingOps.hasNext()) {
+              Object obj = existingOps.next();
+              if (obj instanceof IOperation && operationName.equals(((IOperation) obj).getName())) {
+                return "Operation '"
+                    + operationName
+                    + "' already exists in class '"
+                    + className
+                    + "'";
+              }
             }
 
             IOperation op = getModelElementFactory().createOperation();
@@ -155,8 +281,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IClass source = ClassDiagramUtils.findClassByName(fromClass);
-            IClass target = ClassDiagramUtils.findClassByName(toClass);
+            IClass source = findModelElement(fromClass, IClass.class, diagram);
+            IClass target = findModelElement(toClass, IClass.class, diagram);
             if (source == null || target == null) {
               return "Class not found: " + (source == null ? fromClass : toClass);
             }
@@ -202,8 +328,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IClass source = ClassDiagramUtils.findClassByName(fromClass);
-            IClass target = ClassDiagramUtils.findClassByName(toClass);
+            IClass source = findModelElement(fromClass, IClass.class, diagram);
+            IClass target = findModelElement(toClass, IClass.class, diagram);
             if (source == null || target == null) {
               return "Class not found: " + (source == null ? fromClass : toClass);
             }
@@ -243,8 +369,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IClass source = ClassDiagramUtils.findClassByName(fromClass);
-            IClass target = ClassDiagramUtils.findClassByName(toClass);
+            IClass source = findModelElement(fromClass, IClass.class, diagram);
+            IClass target = findModelElement(toClass, IClass.class, diagram);
             if (source == null || target == null) {
               return "Class not found: " + (source == null ? fromClass : toClass);
             }
@@ -292,8 +418,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IClass source = ClassDiagramUtils.findClassByName(fromClass);
-            IClass target = ClassDiagramUtils.findClassByName(toClass);
+            IClass source = findModelElement(fromClass, IClass.class, diagram);
+            IClass target = findModelElement(toClass, IClass.class, diagram);
             if (source == null || target == null) {
               return "Class not found: " + (source == null ? fromClass : toClass);
             }
@@ -336,8 +462,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IClass source = ClassDiagramUtils.findClassByName(fromClass);
-            IClass target = ClassDiagramUtils.findClassByName(toClass);
+            IClass source = findModelElement(fromClass, IClass.class, diagram);
+            IClass target = findModelElement(toClass, IClass.class, diagram);
             if (source == null || target == null) {
               return "Class not found: " + (source == null ? fromClass : toClass);
             }
@@ -372,8 +498,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
             }
-            IClass source = ClassDiagramUtils.findClassByName(fromClass);
-            IClass target = ClassDiagramUtils.findClassByName(toClass);
+            IClass source = findModelElement(fromClass, IClass.class, diagram);
+            IClass target = findModelElement(toClass, IClass.class, diagram);
             if (source == null || target == null) {
               return "Class not found: " + (source == null ? fromClass : toClass);
             }
@@ -418,6 +544,81 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  @Tool(name = "addPackage", description = "Add a package with background color to a class diagram")
+  public String addPackage(String diagramName, String packageName, String backgroundColor) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+
+            IPackage pkg = getModelElementFactory().createPackage();
+            pkg.setName(packageName);
+            addToDiagram(diagram, pkg, packageName);
+
+            // Set fill color if provided
+            if (backgroundColor != null && !backgroundColor.trim().isEmpty()) {
+              IDiagramElement de = findDiagramElementByName(diagram, packageName);
+              if (de instanceof IShapeUIModel) {
+                IShapeUIModel shape = (IShapeUIModel) de;
+                IShapeUIModelFillColor fill = shape.getFillColor();
+                Color color = Color.decode(backgroundColor.trim());
+                fill.setColor1(color, true);
+              }
+            }
+
+            return "Added package '"
+                + packageName
+                + "' to diagram '"
+                + diagramName
+                + "'"
+                + (backgroundColor != null && !backgroundColor.trim().isEmpty()
+                    ? " with color " + backgroundColor.trim()
+                    : "");
+          });
+    } catch (Exception e) {
+      return "Error adding package: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "setClassColor",
+      description = "Set background color of a class shape on a class diagram")
+  public String setClassColor(String diagramName, String className, String backgroundColor) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+
+            IDiagramElement de = findDiagramElementByName(diagram, className);
+            if (de == null) {
+              return "Class not on diagram: " + className;
+            }
+            if (!(de instanceof IShapeUIModel)) {
+              return "Element is not a shape: " + className;
+            }
+
+            IShapeUIModel shape = (IShapeUIModel) de;
+            IShapeUIModelFillColor fill = shape.getFillColor();
+            Color color = Color.decode(backgroundColor.trim());
+            fill.setColor1(color, true);
+
+            return "Set color of '" + className + "' to " + backgroundColor.trim();
+          });
+    } catch (Exception e) {
+      return "Error setting class color: " + e.getMessage();
+    }
+  }
+
   @Tool(name = "generateClassReport", description = "Generate a class diagram analysis report")
   public String generateClassReport(String diagramName) {
     try {
@@ -432,6 +633,27 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
             List<IClass> classes = ClassDiagramUtils.getClassesInDiagram(diagram);
 
+            // Build model -> caption name map
+            java.util.Map<IModelElement, String> nameMap = new java.util.LinkedHashMap<>();
+            Iterator<?> deIter = diagram.diagramElementIterator();
+            while (deIter.hasNext()) {
+              Object obj = deIter.next();
+              if (obj instanceof IDiagramElement) {
+                IDiagramElement de = (IDiagramElement) obj;
+                IModelElement model = de.getModelElement();
+                if (model instanceof IClass) {
+                  String displayName = model.getName();
+                  if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+                    String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+                    if (caption != null && !caption.isEmpty()) {
+                      displayName = caption;
+                    }
+                  }
+                  nameMap.put(model, displayName);
+                }
+              }
+            }
+
             StringBuilder report = new StringBuilder();
             report.append("CLASS DIAGRAM REPORT: ").append(diagramName).append("\n");
             report.append("=====================================\n");
@@ -439,6 +661,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             // Classes with attributes and operations
             report.append("Classes (").append(classes.size()).append("):\n");
             for (IClass cls : classes) {
+              String className = nameMap.getOrDefault(cls, cls.getName());
               // Check for Interface stereotype
               boolean isInterface = false;
               Iterator<?> stereotypes = cls.stereotypeIterator();
@@ -449,9 +672,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 }
               }
               if (isInterface) {
-                report.append("  - Interface: ").append(cls.getName()).append("\n");
+                report.append("  - Interface: ").append(className).append("\n");
               } else {
-                report.append("  - ").append(cls.getName()).append("\n");
+                report.append("  - ").append(className).append("\n");
               }
 
               // Attributes
@@ -520,13 +743,25 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 IModelElement model = ((IDiagramElement) obj).getModelElement();
                 if (model instanceof IGeneralization) {
                   IGeneralization gen = (IGeneralization) model;
-                  String from = gen.getFrom() != null ? gen.getFrom().getName() : "?";
-                  String to = gen.getTo() != null ? gen.getTo().getName() : "?";
+                  String from =
+                      gen.getFrom() != null
+                          ? nameMap.getOrDefault(gen.getFrom(), gen.getFrom().getName())
+                          : "?";
+                  String to =
+                      gen.getTo() != null
+                          ? nameMap.getOrDefault(gen.getTo(), gen.getTo().getName())
+                          : "?";
                   relationships.add("Generalization: " + from + " extends " + to);
                 } else if (model instanceof IAssociation) {
                   IAssociation assoc = (IAssociation) model;
-                  String from = assoc.getFrom() != null ? assoc.getFrom().getName() : "?";
-                  String to = assoc.getTo() != null ? assoc.getTo().getName() : "?";
+                  String from =
+                      assoc.getFrom() != null
+                          ? nameMap.getOrDefault(assoc.getFrom(), assoc.getFrom().getName())
+                          : "?";
+                  String to =
+                      assoc.getTo() != null
+                          ? nameMap.getOrDefault(assoc.getTo(), assoc.getTo().getName())
+                          : "?";
                   IAssociationEnd toEnd = (IAssociationEnd) assoc.getToEnd();
                   String mult =
                       toEnd != null && toEnd.getMultiplicity() != null
@@ -537,13 +772,25 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                   relationships.add("Association: " + from + " -> " + to + mult + relName);
                 } else if (model instanceof IDependency) {
                   IDependency dep = (IDependency) model;
-                  String from = dep.getFrom() != null ? dep.getFrom().getName() : "?";
-                  String to = dep.getTo() != null ? dep.getTo().getName() : "?";
+                  String from =
+                      dep.getFrom() != null
+                          ? nameMap.getOrDefault(dep.getFrom(), dep.getFrom().getName())
+                          : "?";
+                  String to =
+                      dep.getTo() != null
+                          ? nameMap.getOrDefault(dep.getTo(), dep.getTo().getName())
+                          : "?";
                   relationships.add("Dependency: " + from + " -> " + to);
                 } else if (model instanceof IRealization) {
                   IRealization real = (IRealization) model;
-                  String from = real.getFrom() != null ? real.getFrom().getName() : "?";
-                  String to = real.getTo() != null ? real.getTo().getName() : "?";
+                  String from =
+                      real.getFrom() != null
+                          ? nameMap.getOrDefault(real.getFrom(), real.getFrom().getName())
+                          : "?";
+                  String to =
+                      real.getTo() != null
+                          ? nameMap.getOrDefault(real.getTo(), real.getTo().getName())
+                          : "?";
                   relationships.add("Realization: " + from + " implements " + to);
                 }
               }
@@ -560,5 +807,23 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error generating report: " + e.getMessage();
     }
+  }
+
+  private IPackage findOrCreatePackage(
+      IClassDiagramUIModel diagram, String packageName, String color) {
+    // Check if package already exists on diagram
+    IDiagramElement existing = findDiagramElementByName(diagram, packageName);
+    if (existing != null) {
+      IModelElement model = existing.getModelElement();
+      if (model instanceof IPackage) {
+        return (IPackage) model;
+      }
+    }
+
+    // Create new package
+    IPackage pkg = getModelElementFactory().createPackage();
+    pkg.setName(packageName);
+    addToDiagram(diagram, pkg, packageName);
+    return pkg;
   }
 }
