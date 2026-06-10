@@ -2,6 +2,7 @@ package com.brunnen.vp.mcp.util;
 
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IInteractionDiagramUIModel;
+import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.model.IActivation;
 import com.vp.plugin.model.IInteractionLifeLine;
 import com.vp.plugin.model.IMessage;
@@ -38,17 +39,35 @@ public final class SequenceDiagramUtils {
    */
   public static IInteractionLifeLine findLifelineByName(
       IInteractionDiagramUIModel diagram, String name) {
+    if (diagram == null || name == null) {
+      return null;
+    }
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
-      if (obj instanceof IDiagramElement) {
-        IModelElement model = ((IDiagramElement) obj).getModelElement();
-        if (model instanceof IInteractionLifeLine) {
-          IInteractionLifeLine lifeline = (IInteractionLifeLine) model;
-          if (name.equals(lifeline.getName())) {
-            return lifeline;
-          }
-        }
+      if (!(obj instanceof IDiagramElement)) {
+        continue;
+      }
+      IDiagramElement de = (IDiagramElement) obj;
+      IModelElement model = de.getModelElement();
+      if (!(model instanceof IInteractionLifeLine)) {
+        continue;
+      }
+      IInteractionLifeLine lifeline = (IInteractionLifeLine) model;
+      // 1. Model name. When an alias/nickname is set VP returns the nickname here, so this also
+      //    matches references by alias.
+      if (name.equals(lifeline.getName())) {
+        return lifeline;
+      }
+      // 2. Shape caption — addToDiagram sets it to the original lifelineName, which stays stable
+      //    even after a nickname overrides getName(). This is the reliable identifier.
+      if (de instanceof IShapeUIModel && name.equals(((IShapeUIModel) de).getCustomText())) {
+        return lifeline;
+      }
+      // 3. Base classifier name (the className argument).
+      IModelElement classifier = lifeline.getBaseClassifierAsModel();
+      if (classifier != null && name.equals(classifier.getName())) {
+        return lifeline;
       }
     }
     return null;
