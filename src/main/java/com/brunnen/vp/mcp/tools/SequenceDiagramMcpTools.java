@@ -501,12 +501,20 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     message.setFromActivation((IActivation) fromShape.getModelElement());
     message.setToActivation((IActivation) toShape.getModelElement());
 
+    // Both endpoints must span this y, otherwise the connector snaps to a bar end and the arrow
+    // start/end lands at the wrong vertical position instead of on the message line.
+    growActivationDown(fromShape, y);
+    growActivationDown(toShape, y);
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
+    // A return drawn callee->caller comes out reversed (VP flips the visual for return action
+    // types), so feed the connector caller->callee for returns.
+    IActivationUIModel source = isReturn ? toShape : fromShape;
+    IActivationUIModel target = isReturn ? fromShape : toShape;
     getDiagramManager()
         .createConnector(
-            diagram, message, fromShape, toShape, connectorPoints(fromShape, toShape, y, self));
+            diagram, message, source, target, connectorPoints(source, target, y, self));
 
     return "Added "
         + (isReturn ? "return message" : "message")
