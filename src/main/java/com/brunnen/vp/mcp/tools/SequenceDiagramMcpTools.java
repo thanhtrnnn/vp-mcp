@@ -519,13 +519,13 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
     }
 
-    // Lay our continuous bar over VP's small per-message activations (created above) so each
-    // lifeline reads as one execution bar instead of fragmented squares. Done after the connector
-    // so our bar sits on top.
-    growContinuousBar(diagram, from, y);
-    growContinuousBar(diagram, to, y);
+    // VP just created a small activation per message end. Rather than add a new bar, grow the
+    // lifeline's first (top) activation down to cover the small ones beside it, so the lifeline
+    // reads as one continuous execution bar.
+    coverTopBar(diagram, from, y);
+    coverTopBar(diagram, to, y);
     if (self) {
-      growContinuousBar(diagram, from, y + SELF_LOOP_H + 4);
+      coverTopBar(diagram, from, y + SELF_LOOP_H + 4);
     }
 
     return "Added "
@@ -540,38 +540,46 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
-   * Grow (creating on first use) one continuous activation bar for a lifeline, spanning from its
-   * first message down to {@code y}. It is owned by the lifeline (so it sits at the lifeline x) and
-   * is the same blue as VP's per-message activations, which fall within it -- so the lifeline reads
-   * as a single bar rather than fragmented squares.
+   * Grow the lifeline's top (first) activation down to {@code y} so it covers the smaller
+   * per-message activations beside it, making the lifeline read as one continuous execution bar. We
+   * pick one of VP's existing activations and stretch it -- no extra bar is added.
    */
-  private void growContinuousBar(
+  private void coverTopBar(
       IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, int y) {
     java.util.Map<String, String> byLifeline =
         continuousBarId.computeIfAbsent(diagram.getName(), k -> new java.util.HashMap<>());
     String id = byLifeline.get(lifeline.getId());
-    if (id != null) {
-      IActivationUIModel existing = findActivationShapeById(diagram, id);
-      if (existing != null) {
-        growDown(existing, y);
+    IActivationUIModel bar = id != null ? findActivationShapeById(diagram, id) : null;
+    if (bar == null) {
+      bar = findTopActivationOnLifeline(diagram, lifeline);
+      if (bar == null) {
         return;
       }
+      IModelElement model = bar.getModelElement();
+      if (model != null) {
+        byLifeline.put(lifeline.getId(), model.getId());
+      }
     }
+    growDown(bar, y);
+  }
+
+  /** The topmost (smallest y) activation sitting on a lifeline's vertical line. */
+  private IActivationUIModel findTopActivationOnLifeline(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
     int cx = lifelineCenterX(diagram, lifeline);
-    IActivation activation = getModelElementFactory().createActivation();
-    lifeline.addActivation(activation);
-    Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
-    if (!(shapeObj instanceof IActivationUIModel)) {
-      return;
+    IActivationUIModel top = null;
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IActivationUIModel) {
+        IActivationUIModel a = (IActivationUIModel) obj;
+        if (Math.abs(a.getX() + a.getWidth() / 2 - cx) <= 5
+            && (top == null || a.getY() < top.getY())) {
+          top = a;
+        }
+      }
     }
-    IActivationUIModel bar = (IActivationUIModel) shapeObj;
-    int top = y - 2;
-    bar.setBounds(cx - IActivationUIModel.BODY_WIDTH / 2, top, IActivationUIModel.BODY_WIDTH, 12);
-    applyBlueFill(bar);
-    byLifeline.put(lifeline.getId(), activation.getId());
-    myActivations
-        .computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>())
-        .add(activation.getId());
+    return top;
   }
 
   /** Strip a leading "N:" sequence prefix from a message name (VP renders the number itself). */
