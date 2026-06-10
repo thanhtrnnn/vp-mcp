@@ -529,10 +529,10 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     com.vp.plugin.diagram.IDiagramElement msgShape =
         getDiagramManager().createConnector(diagram, message, src, tgt, points);
-    if (msgShape != null) {
-      // Reset the caption so the message label (number + name) renders on the arrow. Without this
-      // the label was missing. The TOP alignment used earlier hid it, so it is not set here.
-      msgShape.setRequestResetCaption(true);
+    if (msgShape instanceof com.vp.plugin.diagram.IBaseDiagramElement) {
+      // resetCaption() (as in the VP Open API sample) makes the message label render on the arrow.
+      // setRequestResetCaption(true) did not show it.
+      ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
     }
 
     // Re-bind the message to our own continuous bars and delete the activation VP auto-created when
