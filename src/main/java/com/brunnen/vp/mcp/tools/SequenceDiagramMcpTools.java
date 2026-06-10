@@ -475,42 +475,25 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
     // Per-execution activation bars (call stack): a call opens a bar on the callee, the sender
     // reuses its open execution, a return closes it.
-    IActivationUIModel fromBar;
-    IActivationUIModel toBar;
     if (self) {
-      fromBar = ensureOpenActivation(diagram, from, y);
-      toBar = fromBar;
       message.setType(IMessage.TYPE_RECURSIVE_MESSAGE);
     } else if (isReturn) {
-      fromBar = ensureOpenActivation(diagram, from, y); // callee returning
-      toBar = ensureOpenActivation(diagram, to, y); // caller, still open
       message.setActionType(getModelElementFactory().createActionTypeReturn());
     } else {
-      fromBar = ensureOpenActivation(diagram, from, y); // sender's execution
-      toBar = openNewActivation(diagram, to, y); // callee's new execution
       message.setActionType(getModelElementFactory().createActionTypeCall());
-    }
-    if (fromBar == null || toBar == null) {
-      return "Could not create activation for: " + (fromBar == null ? fromLifeline : toLifeline);
-    }
-    IShapeUIModel fromShape = fromBar;
-    IShapeUIModel toShape = toBar;
-
-    message.setFromActivation((IActivation) fromBar.getModelElement());
-    message.setToActivation((IActivation) toBar.getModelElement());
-    growDown(fromBar, y);
-    growDown(toBar, y);
-    if (self) {
-      growDown(fromBar, y + SELF_LOOP_H + 4);
-    }
-    if (isReturn) {
-      closeTopActivation(diagram, from, y); // end the callee's execution at the return
     }
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
-    // Anchor the connector to the per-execution bars at the message y (arrows attach correctly, no
-    // drift). Direction follows from -> to (returns callee -> caller).
+    // Anchor the connector to the LIFELINE shapes (the way VP draws messages by hand) and let VP
+    // create/own the activations. Anchoring to our own activation bars made return arrows drift to
+    // x=0 because an activation's connection point is unreliable. Direction follows from -> to
+    // (returns callee -> caller).
+    IShapeUIModel fromShape = findLifelineShape(diagram, from);
+    IShapeUIModel toShape = findLifelineShape(diagram, to);
+    if (fromShape == null || toShape == null) {
+      return "Could not find lifeline for: " + (fromShape == null ? fromLifeline : toLifeline);
+    }
     int fromCx = fromShape.getX() + fromShape.getWidth() / 2;
     int toCx = toShape.getX() + toShape.getWidth() / 2;
     Point[] points;
