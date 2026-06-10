@@ -26,13 +26,6 @@ import java.util.List;
 /** MCP tools for Visual Paradigm Sequence diagram operations. */
 public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
-  // Per-diagram call stacks: diagramName -> lifelineId -> ids of currently-open activations
-  // (top = innermost). A call pushes an activation onto the callee; its matching return pops and
-  // closes it. This yields the short, nested activation bars of a real sequence diagram instead of
-  // one tall bar per lifeline.
-  private final java.util.Map<String, java.util.Map<String, java.util.Deque<String>>>
-      openActivations = new java.util.HashMap<>();
-
   @Tool(
       name = "createSequenceDiagram",
       description = "Create a new sequence diagram in Visual Paradigm")
@@ -46,7 +39,6 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM);
             diagram.setName(diagramName);
             dm.openDiagram(diagram);
-            openActivations.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -102,6 +94,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
             // Add to diagram
             addToDiagram(diagram, lifeline, lifelineName);
+            // Show only the classifier name on the head (avoid "LoginView : LoginView"). The shape
+            // caption set by addToDiagram still carries lifelineName for lookup.
+            lifeline.setName("");
 
             // Set alias if provided
             if (alias != null && !alias.trim().isEmpty()) {
@@ -148,8 +143,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Lifeline not found: " + lifelineName;
             }
 
-            IActivationUIModel shape =
-                currentOrOpenActivation(diagram, lifeline, MSG_TOP_Y, diagram.getName());
+            IActivationUIModel shape = getOrCreateActivationShape(diagram, lifeline);
             if (shape == null) {
               return "Could not create activation for lifeline '" + lifelineName + "'";
             }
@@ -431,14 +425,13 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
   // --- Sequence geometry ---
   // Messages are placed top-to-bottom by sequence number. Activation bars follow the call stack:
-  // a call opens a (nested) activation on the callee, the matching return closes it. This produces
-  // the short, nested bars of a real sequence diagram. Messages are drawn as connectors between the
-  // two activation shapes (createDiagramElement(message) alone is unanchored and never rendered).
-  private static final int MSG_TOP_Y = 100;
-  private static final int MSG_STEP_Y = 36;
-  private static final int NEST_DX = 6;
-  private static final int SELF_LOOP_W = 40;
-  private static final int SELF_LOOP_H = 12;
+  // Each lifeline gets one continuous activation bar (grown to cover its messages). Messages are
+  // drawn as connectors anchored to the lifeline shapes at the message y (createDiagramElement on a
+  // message alone is unanchored and never rendered).
+  private static final int MSG_TOP_Y = 70;
+  private static final int MSG_STEP_Y = 18;
+  private static final int SELF_LOOP_W = 36;
+  private static final int SELF_LOOP_H = 10;
 
   private String createMessageConnector(
       IInteractionDiagramUIModel diagram,
@@ -457,7 +450,6 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       return "To lifeline not found: " + toLifeline;
     }
 
-    String diagramName = diagram.getName();
     int y = messageY(diagram, sequenceNumber);
     boolean self = from.getId().equals(to.getId());
 
@@ -470,30 +462,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     message.setAsynchronous(async);
 
-    IActivationUIModel fromShape;
-    IActivationUIModel toShape;
+    // One continuous activation bar per lifeline, grown to cover every message touching it (rather
+    // than a separate bar per call, which looked fragmented).
+    IActivationUIModel fromShape = getOrCreateActivationShape(diagram, from);
+    IActivationUIModel toShape = self ? fromShape : getOrCreateActivationShape(diagram, to);
     if (self) {
-      // Recursive/self message (e.g. Entity executing its own method): a nested loop on one bar.
-      fromShape = currentOrOpenActivation(diagram, from, y, diagramName);
-      toShape = fromShape;
       message.setType(IMessage.TYPE_RECURSIVE_MESSAGE);
-      growActivationDown(fromShape, y + SELF_LOOP_H + 4);
     } else if (isReturn) {
-      // Return: the callee ('from') returns and its top activation closes here; the caller ('to')
-      // stays open. Rendered as a dashed reply arrow.
-      fromShape = topActivationShape(diagram, from, diagramName);
-      if (fromShape == null) {
-        fromShape = currentOrOpenActivation(diagram, from, y, diagramName);
-      }
-      growActivationDown(fromShape, y);
-      closeTopActivation(diagram, from, y, diagramName);
-      toShape = currentOrOpenActivation(diagram, to, y, diagramName);
       message.setActionType(getModelElementFactory().createActionTypeReturn());
     } else {
-      // Call: the caller ('from') must be active; the callee ('to') gets a new nested activation.
-      fromShape = currentOrOpenActivation(diagram, from, y, diagramName);
-      growActivationDown(fromShape, y);
-      toShape = openNewActivation(diagram, to, y, diagramName);
       message.setActionType(getModelElementFactory().createActionTypeCall());
     }
     if (fromShape == null || toShape == null) {
@@ -503,8 +480,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     message.setFromActivation((IActivation) fromShape.getModelElement());
     message.setToActivation((IActivation) toShape.getModelElement());
 
-    growActivationDown(fromShape, y);
-    growActivationDown(toShape, y);
+    growActivation(fromShape, y);
+    growActivation(toShape, y);
+    if (self) {
+      growActivation(fromShape, y + SELF_LOOP_H + 4);
+    }
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
@@ -566,24 +546,32 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return name.trim();
   }
 
-  // --- Call-stack activation management (state in openActivations, keyed by diagram + lifeline)
-  // ---
+  /**
+   * Return the single activation bar for a lifeline, creating it on first use. One continuous bar
+   * per lifeline (grown to cover its messages) reads better than a separate bar per call. Lookups
+   * are by model id because VP can hand back distinct proxy objects for the same model.
+   */
+  private IActivationUIModel getOrCreateActivationShape(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    IActivation activation = null;
+    Iterator<?> ait = lifeline.activationIterator();
+    while (ait.hasNext()) {
+      Object obj = ait.next();
+      if (obj instanceof IActivation) {
+        activation = (IActivation) obj;
+        break;
+      }
+    }
+    if (activation != null) {
+      IActivationUIModel existing = findActivationShapeById(diagram, activation.getId());
+      if (existing != null) {
+        return existing;
+      }
+    } else {
+      activation = getModelElementFactory().createActivation();
+      lifeline.addActivation(activation);
+    }
 
-  private java.util.Deque<String> activationStack(String diagramName, String lifelineId) {
-    return openActivations
-        .computeIfAbsent(diagramName, k -> new java.util.HashMap<>())
-        .computeIfAbsent(lifelineId, k -> new java.util.ArrayDeque<>());
-  }
-
-  private IActivationUIModel openNewActivation(
-      IInteractionDiagramUIModel diagram,
-      IInteractionLifeLine lifeline,
-      int y,
-      String diagramName) {
-    java.util.Deque<String> stack = activationStack(diagramName, lifeline.getId());
-    int depth = stack.size();
-    IActivation activation = getModelElementFactory().createActivation();
-    lifeline.addActivation(activation);
     Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
     if (!(shapeObj instanceof IActivationUIModel)) {
       return null;
@@ -591,52 +579,22 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     IActivationUIModel shape = (IActivationUIModel) shapeObj;
     int centerX = lifelineCenterX(diagram, lifeline);
     shape.setBounds(
-        centerX - IActivationUIModel.BODY_WIDTH / 2 + depth * NEST_DX,
-        y - 2,
+        centerX - IActivationUIModel.BODY_WIDTH / 2,
+        MSG_TOP_Y - 6,
         IActivationUIModel.BODY_WIDTH,
-        14);
+        10);
     applyBlueFill(shape);
-    stack.push(activation.getId());
     return shape;
   }
 
-  private IActivationUIModel topActivationShape(
-      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, String diagramName) {
-    String id = activationStack(diagramName, lifeline.getId()).peek();
-    return id == null ? null : findActivationShapeById(diagram, id);
-  }
-
-  private IActivationUIModel currentOrOpenActivation(
-      IInteractionDiagramUIModel diagram,
-      IInteractionLifeLine lifeline,
-      int y,
-      String diagramName) {
-    IActivationUIModel top = topActivationShape(diagram, lifeline, diagramName);
-    return top != null ? top : openNewActivation(diagram, lifeline, y, diagramName);
-  }
-
-  private void closeTopActivation(
-      IInteractionDiagramUIModel diagram,
-      IInteractionLifeLine lifeline,
-      int y,
-      String diagramName) {
-    String id = activationStack(diagramName, lifeline.getId()).poll();
-    if (id == null) {
-      return;
-    }
-    IActivationUIModel shape = findActivationShapeById(diagram, id);
-    if (shape != null) {
-      growActivationDown(shape, y);
-    }
-  }
-
-  /** Grow an activation bar downward so its bottom reaches message position {@code y}. */
-  private void growActivationDown(IActivationUIModel shape, int y) {
+  /** Grow an activation bar so its span covers message position {@code y} (both directions). */
+  private void growActivation(IActivationUIModel shape, int y) {
     int top = shape.getY();
     int bottom = top + shape.getHeight();
+    int newTop = Math.min(top, y - 4);
     int newBottom = Math.max(bottom, y + 8);
-    if (newBottom > bottom) {
-      shape.setBounds(shape.getX(), top, IActivationUIModel.BODY_WIDTH, newBottom - top);
+    if (newTop != top || newBottom != bottom) {
+      shape.setBounds(shape.getX(), newTop, IActivationUIModel.BODY_WIDTH, newBottom - newTop);
     }
   }
 
