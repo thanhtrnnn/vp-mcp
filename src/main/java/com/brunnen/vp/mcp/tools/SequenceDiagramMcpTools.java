@@ -36,12 +36,17 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // diagramName -> ids of every activation WE created (to delete VP's auto-created extras).
   private final java.util.Map<String, java.util.Set<String>> myActivations =
       new java.util.HashMap<>();
-  // Actors are IInteractionActor stick figures with no lifeline body, so a connector anchored to
-  // the
-  // head drifts. Each actor gets one ownerless activation bar down its line to anchor messages to.
-  // diagramName -> actorName -> activation id.
+  // An actor is a real (hidden-head) IInteractionLifeLine that OWNS its activation (so messages
+  // anchor at the right x), with an IInteractionActor stick figure overlaid for the visual. The
+  // owning lifeline gets one continuous bar down its line (not per-execution).
+  // diagramName -> actor lifeline id -> continuous bar activation id.
   private final java.util.Map<String, java.util.Map<String, String>> actorBarId =
       new java.util.HashMap<>();
+  // diagramName -> ids of lifelines that are actors (continuous bar + stick figure overlay).
+  private final java.util.Map<String, java.util.Set<String>> actorLifelineIds =
+      new java.util.HashMap<>();
+  // Actor lifeline heads are parked off the canvas so only the stick figure + body + bar show.
+  private static final int ACTOR_HEAD_Y = -80;
 
   @Tool(
       name = "createSequenceDiagram",
@@ -59,6 +64,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             openStacks.remove(diagramName);
             myActivations.remove(diagramName);
             actorBarId.remove(diagramName);
+            actorLifelineIds.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -89,10 +95,30 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             int index = participantCount(diagram);
             boolean isActor = "actor".equalsIgnoreCase(type);
 
+            int participantX = LIFELINE_X0 + index * LIFELINE_DX;
             if (isActor) {
-              // Actors use IInteractionActor so VP draws the stick figure; an IActor classifier on
-              // a normal lifeline renders as a plain box. Their activation bar is added lazily on
-              // first message (getActorBar) since IInteractionActor cannot own one.
+              // A real lifeline owns the activation (so messages anchor at the right x) but its
+              // head
+              // is parked off-canvas; an IInteractionActor stick figure is overlaid at the top for
+              // the visual, since a lifeline head alone renders as a plain box.
+              IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
+              IClass baseClass = getModelElementFactory().createClass();
+              baseClass.setName(classifierName);
+              lifeline.setBaseClassifier(baseClass);
+              addToDiagram(diagram, lifeline, lifelineName);
+              IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
+              if (headShape != null) {
+                headShape.setBounds(participantX, ACTOR_HEAD_Y, LIFELINE_W, LIFELINE_HEAD_H);
+                if (headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
+                  ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
+                      .setShowClassifier(false);
+                }
+              }
+              actorLifelineIds
+                  .computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>())
+                  .add(lifeline.getId());
+
+              // Stick figure overlay (decoration only; not a message participant).
               IInteractionActor actorLine = getModelElementFactory().createInteractionActor();
               IActor actor = getModelElementFactory().createActor();
               actor.setName(classifierName);
@@ -101,11 +127,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                   addToDiagram(diagram, actorLine, lifelineName);
               if (de instanceof IShapeUIModel) {
                 ((IShapeUIModel) de)
-                    .setBounds(
-                        LIFELINE_X0 + index * LIFELINE_DX,
-                        LIFELINE_Y0,
-                        LIFELINE_W,
-                        LIFELINE_HEAD_H);
+                    .setBounds(participantX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
               }
             } else {
               // VP forbids a no-name classifier, so the base classifier is named; it only carries
@@ -124,8 +146,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
               IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
               if (headShape != null) {
-                headShape.setBounds(
-                    LIFELINE_X0 + index * LIFELINE_DX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
+                headShape.setBounds(participantX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
                 if (headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
                   ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
                       .setShowClassifier(false);
@@ -480,23 +501,22 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       String sequenceNumber,
       boolean async,
       boolean isReturn) {
-    // A participant is either a lifeline (boundary/entity/control, has activation bars) or an actor
-    // (IInteractionActor stick figure, which cannot own activations).
+    // Every participant (boundary/entity/control AND actor) is a real lifeline. Actors additionally
+    // carry a stick figure overlay; their bar is continuous (down the line) rather than per call.
     IInteractionLifeLine from = SequenceDiagramUtils.findLifelineByName(diagram, fromLifeline);
     IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
-    IShapeUIModel fromActorShape = from == null ? findActorShape(diagram, fromLifeline) : null;
-    IShapeUIModel toActorShape = to == null ? findActorShape(diagram, toLifeline) : null;
-    if (from == null && fromActorShape == null) {
-      return "From participant not found: " + fromLifeline;
+    if (from == null) {
+      return "From lifeline not found: " + fromLifeline;
     }
-    if (to == null && toActorShape == null) {
-      return "To participant not found: " + toLifeline;
+    if (to == null) {
+      return "To lifeline not found: " + toLifeline;
     }
-    boolean fromIsActor = from == null;
-    boolean toIsActor = to == null;
+    boolean fromIsActor = isActorLifeline(diagram, from);
+    boolean toIsActor = isActorLifeline(diagram, to);
 
     int y = messageY(diagram, sequenceNumber);
-    boolean self = !fromIsActor && !toIsActor && from.getId().equals(to.getId());
+    boolean self = from.getId().equals(to.getId());
+    extendActorBars(diagram, y); // keep every actor's bar running the full length of the diagram
 
     IMessage message = getModelElementFactory().createMessage();
     // VP prepends the sequence number itself, so strip any leading "N:" the caller put in the name
@@ -507,37 +527,22 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     message.setAsynchronous(async);
 
-    // Every endpoint is an activation BAR (reliable anchor). Boundary/entity lifelines use the call
-    // stack: a call opens a bar on the callee, the sender reuses its open execution, a return
-    // closes
-    // it. Actors have no lifeline body, so each gets one bar down its line (getActorBar) that
-    // simply
-    // grows to span its messages.
+    // Every endpoint is an activation BAR (reliable anchor, owned by a lifeline so it sits at the
+    // right x). Boundary/entity bars follow the call stack (a call opens a bar on the callee, the
+    // sender reuses its open execution, a return closes it); an actor keeps one continuous bar.
     IActivationUIModel fromBar;
     IActivationUIModel toBar;
     if (self) {
-      fromBar = ensureOpenActivation(diagram, from, y);
+      fromBar = barFor(diagram, from, fromIsActor, y, false);
       toBar = fromBar;
       message.setType(IMessage.TYPE_RECURSIVE_MESSAGE);
     } else if (isReturn) {
-      fromBar =
-          fromIsActor
-              ? getActorBar(diagram, fromLifeline, y)
-              : ensureOpenActivation(diagram, from, y); // callee returning
-      toBar =
-          toIsActor
-              ? getActorBar(diagram, toLifeline, y)
-              : ensureOpenActivation(diagram, to, y); // caller, still open
+      fromBar = barFor(diagram, from, fromIsActor, y, false); // callee returning
+      toBar = barFor(diagram, to, toIsActor, y, false); // caller, still open
       message.setActionType(getModelElementFactory().createActionTypeReturn());
     } else {
-      fromBar =
-          fromIsActor
-              ? getActorBar(diagram, fromLifeline, y)
-              : ensureOpenActivation(diagram, from, y); // sender's execution
-      toBar =
-          toIsActor
-              ? getActorBar(diagram, toLifeline, y)
-              : openNewActivation(diagram, to, y); // callee's new execution
+      fromBar = barFor(diagram, from, fromIsActor, y, false); // sender's execution
+      toBar = barFor(diagram, to, toIsActor, y, true); // callee's new execution
       message.setActionType(getModelElementFactory().createActionTypeCall());
     }
     IShapeUIModel fromShape = fromBar;
@@ -556,12 +561,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     if (isReturn && !fromIsActor) {
       closeTopActivation(diagram, from, y); // end the callee's execution at the return
     }
-    if (!fromIsActor) {
-      extendLifelineToY(diagram, from, y);
-    }
-    if (!toIsActor) {
-      extendLifelineToY(diagram, to, y);
-    }
+    extendLifelineToY(diagram, from, y);
+    extendLifelineToY(diagram, to, y);
 
     // Anchor the connector to the per-execution activation bars (or the actor head shape).
     // Anchoring
@@ -653,16 +654,53 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return shape;
   }
 
+  /** True if this lifeline is an actor (continuous bar + stick figure overlay). */
+  private boolean isActorLifeline(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    java.util.Set<String> ids = actorLifelineIds.get(diagram.getName());
+    return ids != null && ids.contains(lifeline.getId());
+  }
+
+  /** Pick the endpoint bar: a continuous bar for actors, a call-stack bar for other lifelines. */
+  private IActivationUIModel barFor(
+      IInteractionDiagramUIModel diagram,
+      IInteractionLifeLine lifeline,
+      boolean isActor,
+      int y,
+      boolean openNew) {
+    if (isActor) {
+      return getActorBar(diagram, lifeline, y);
+    }
+    return openNew
+        ? openNewActivation(diagram, lifeline, y)
+        : ensureOpenActivation(diagram, lifeline, y);
+  }
+
+  /** Grow every actor bar down to {@code y} so it spans the full length of the diagram. */
+  private void extendActorBars(IInteractionDiagramUIModel diagram, int y) {
+    java.util.Map<String, String> byActor = actorBarId.get(diagram.getName());
+    if (byActor == null) {
+      return;
+    }
+    for (String id : byActor.values()) {
+      IActivationUIModel bar = findActivationShapeById(diagram, id);
+      if (bar != null) {
+        growDown(bar, y);
+      }
+    }
+  }
+
   /**
-   * Return the actor's single activation bar (down its line), creating it on first use. Actors are
-   * IInteractionActor stick figures without a lifeline body, so this ownerless activation bar gives
-   * messages a reliable anchor at the actor's x. The bar grows to span the actor's messages.
+   * Return the actor's single continuous activation bar (down its line), creating it on first use.
+   * The bar is OWNED by the actor's real lifeline, so it sits at the lifeline's x and messages
+   * anchored to it render in the right place (an ownerless activation anchors at x=0). It starts at
+   * the top of the message area and grows to span the diagram.
    */
   private IActivationUIModel getActorBar(
-      IInteractionDiagramUIModel diagram, String actorName, int y) {
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine actorLifeline, int y) {
     java.util.Map<String, String> byActor =
         actorBarId.computeIfAbsent(diagram.getName(), k -> new java.util.HashMap<>());
-    String id = byActor.get(actorName);
+    String id = byActor.get(actorLifeline.getId());
     if (id != null) {
       IActivationUIModel existing = findActivationShapeById(diagram, id);
       if (existing != null) {
@@ -670,17 +708,20 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         return existing;
       }
     }
-    IShapeUIModel head = findActorShape(diagram, actorName);
-    int cx = head != null ? head.getX() + head.getWidth() / 2 : 100;
+    int cx = lifelineCenterX(diagram, actorLifeline);
     IActivation activation = getModelElementFactory().createActivation();
+    actorLifeline.addActivation(activation);
     Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
     if (!(shapeObj instanceof IActivationUIModel)) {
       return null;
     }
     IActivationUIModel bar = (IActivationUIModel) shapeObj;
-    bar.setBounds(cx - IActivationUIModel.BODY_WIDTH / 2, y - 2, IActivationUIModel.BODY_WIDTH, 12);
+    int top = MSG_TOP_Y - 2;
+    int height = Math.max(12, (y + 8) - top);
+    bar.setBounds(
+        cx - IActivationUIModel.BODY_WIDTH / 2, top, IActivationUIModel.BODY_WIDTH, height);
     applyBlueFill(bar);
-    byActor.put(actorName, activation.getId());
+    byActor.put(actorLifeline.getId(), activation.getId());
     myActivations
         .computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>())
         .add(activation.getId());
@@ -760,37 +801,20 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return null;
   }
 
-  /** Count participants (lifelines + actors) already on the diagram, for horizontal indexing. */
+  /**
+   * Count participants for horizontal indexing. Every participant (boundary/entity/control AND
+   * actor) has exactly one real lifeline; an actor's stick figure overlay is not counted.
+   */
   private int participantCount(IInteractionDiagramUIModel diagram) {
     int n = 0;
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
-      if (obj instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel
-          || obj instanceof com.vp.plugin.diagram.shape.IInteractionActorUIModel) {
+      if (obj instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
         n++;
       }
     }
     return n;
-  }
-
-  /** Find an actor (IInteractionActor) head shape by participant name. */
-  private IShapeUIModel findActorShape(IInteractionDiagramUIModel diagram, String name) {
-    if (name == null) {
-      return null;
-    }
-    Iterator<?> iter = diagram.diagramElementIterator();
-    while (iter.hasNext()) {
-      Object obj = iter.next();
-      if (obj instanceof com.vp.plugin.diagram.shape.IInteractionActorUIModel) {
-        IShapeUIModel shape = (IShapeUIModel) obj;
-        IModelElement model = shape.getModelElement();
-        if (model != null && name.equals(model.getName())) {
-          return shape;
-        }
-      }
-    }
-    return null;
   }
 
   private IShapeUIModel findLifelineShape(
