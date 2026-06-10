@@ -504,17 +504,14 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
-    // Anchor the connector to the LIFELINE shapes (wide, stable) at the message y. Activation bars
-    // are only 8px wide and VP would not anchor the arrow start to them reliably (arrows drifted to
-    // the diagram's left edge). Direction follows from -> to, so returns (callee -> caller) come
-    // out
+    // Anchor the connector to the ACTIVATION bars (positioned at the lifeline centres). Connecting
+    // to the lifelines instead made VP auto-create an extra activation per message, which looked
+    // like fragmented bars. Direction follows from -> to, so returns (callee -> caller) come out
     // correct without flipping.
-    IShapeUIModel fromLine = findLifelineShape(diagram, from);
-    IShapeUIModel toLine = findLifelineShape(diagram, to);
-    IShapeUIModel src = fromLine != null ? fromLine : fromShape;
-    IShapeUIModel tgt = toLine != null ? toLine : toShape;
-    int fromCx = src.getX() + src.getWidth() / 2;
-    int toCx = tgt.getX() + tgt.getWidth() / 2;
+    IShapeUIModel src = fromShape;
+    IShapeUIModel tgt = toShape;
+    int fromCx = fromShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
+    int toCx = toShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
     Point[] points;
     if (self) {
       points =
