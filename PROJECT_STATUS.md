@@ -13,15 +13,26 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (35 tools total)
+### MCP Tool Services (39 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
 | Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts | 5 |
-| Use Case | create, addActor, addUseCase, addRelationship, generateReport | 5 |
-| Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, generateReport | 12 |
+| Use Case | create, addActor, addUseCase, addRelationship, addSystemBoundary, generateReport | 6 |
+| Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport | 14 |
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
+
+### Reference-style rendering (matches the course's Visual Paradigm samples)
+
+- **Blue fill (#7AD2FF)** is applied automatically to actors, use cases, lifelines and
+  activation bars (use-case and sequence diagrams) via `applyConventionalFill`. Class boxes and
+  ERD tables keep Visual Paradigm's default white — matching the reference exports in
+  `exports/services/screenshots` and `exports/account/screenshots`.
+- **`addSystemBoundary(diagramName, systemName)`** wraps all use cases of a UC diagram in a
+  labeled system rectangle (the module box). Call it AFTER `autoLayoutDiagram` so the box encloses
+  the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
+  `ISystem`, and sends the rectangle to back. Actors stay outside the box.
 
 ### Key Files
 

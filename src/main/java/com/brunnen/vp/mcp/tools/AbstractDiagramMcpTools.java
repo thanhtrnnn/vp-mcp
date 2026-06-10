@@ -107,6 +107,7 @@ public abstract class AbstractDiagramMcpTools {
     if (diagramElement instanceof com.vp.plugin.diagram.IShapeUIModel) {
       ((com.vp.plugin.diagram.IShapeUIModel) diagramElement).setCustomText(name);
     }
+    applyConventionalFill(diagramElement, element);
     String key = diagram.getName();
     DiagramLayoutEngine.ElementZone zone =
         DiagramLayoutEngine.classifyElement(diagram.getType(), element);
@@ -117,6 +118,43 @@ public abstract class AbstractDiagramMcpTools {
     diagramElement.setBounds(bounds[0], bounds[1], bounds[2], bounds[3]);
     elementZoneCounts.put(zoneKey, indexInZone + 1);
     return diagramElement;
+  }
+
+  /**
+   * The project's convention fill color (#7AD2FF) for use-case-style shapes. Matches the blue used
+   * in the reference Visual Paradigm diagrams and the cnpm PlantUML theme.
+   */
+  protected static final java.awt.Color VP_FILL_BLUE = new java.awt.Color(0x7A, 0xD2, 0xFF);
+
+  /**
+   * Apply the conventional fill color to a freshly added shape. Actors, use cases and lifelines get
+   * the project blue (#7AD2FF) to match the reference diagrams; class boxes and ERD tables keep
+   * Visual Paradigm's default white.
+   *
+   * @param de the diagram element just created
+   * @param element the underlying model element
+   */
+  protected void applyConventionalFill(IDiagramElement de, IModelElement element) {
+    if (element instanceof IActor
+        || element instanceof IUseCase
+        || element instanceof IInteractionLifeLine) {
+      applyBlueFill(de);
+    }
+  }
+
+  /**
+   * Fill a shape with the project blue (#7AD2FF). No-op for non-shape elements.
+   *
+   * @param de the diagram element to color
+   */
+  protected void applyBlueFill(IDiagramElement de) {
+    if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+      com.vp.plugin.diagram.format.IShapeUIModelFillColor fill =
+          ((com.vp.plugin.diagram.IShapeUIModel) de).getFillColor();
+      if (fill != null) {
+        fill.setColor1(VP_FILL_BLUE, true);
+      }
+    }
   }
 
   /**

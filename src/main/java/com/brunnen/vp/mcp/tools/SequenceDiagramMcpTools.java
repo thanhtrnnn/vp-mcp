@@ -121,7 +121,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
             IActivation activation = getModelElementFactory().createActivation();
             lifeline.addActivation(activation);
-            getDiagramManager().createDiagramElement(diagram, activation);
+            applyBlueFill(getDiagramManager().createDiagramElement(diagram, activation));
 
             return "Added activation to lifeline '" + lifelineName + "'";
           });
@@ -481,7 +481,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     // Create new activation if none exists
     IActivation activation = getModelElementFactory().createActivation();
     lifeline.addActivation(activation);
-    getDiagramManager().createDiagramElement(diagram, activation);
+    applyBlueFill(getDiagramManager().createDiagramElement(diagram, activation));
     return activation;
   }
 }

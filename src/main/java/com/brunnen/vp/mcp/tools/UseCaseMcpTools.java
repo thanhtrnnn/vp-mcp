@@ -6,6 +6,7 @@ import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
+import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.diagram.IUseCaseDiagramUIModel;
 import com.vp.plugin.model.IActor;
 import com.vp.plugin.model.IAssociation;
@@ -14,6 +15,7 @@ import com.vp.plugin.model.IGeneralization;
 import com.vp.plugin.model.IInclude;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.IRelationship;
+import com.vp.plugin.model.ISystem;
 import com.vp.plugin.model.IUseCase;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -160,6 +162,76 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
           });
     } catch (Exception e) {
       return "Error adding relationship: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addSystemBoundary",
+      description =
+          "Wrap all use cases of a use case diagram in a labeled system boundary rectangle "
+              + "(the module box). Call AFTER autoLayoutDiagram so the box encloses the laid-out "
+              + "use cases; actors stay outside.")
+  public String addSystemBoundary(String diagramName, String systemName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IUseCaseDiagramUIModel diagram =
+                (IUseCaseDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IUseCaseDiagramUIModel.class);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+
+            // Collect use case shapes and compute their bounding box.
+            List<IUseCase> useCases = new ArrayList<>();
+            int minX = Integer.MAX_VALUE;
+            int minY = Integer.MAX_VALUE;
+            int maxX = Integer.MIN_VALUE;
+            int maxY = Integer.MIN_VALUE;
+            Iterator<?> iter = diagram.diagramElementIterator();
+            while (iter.hasNext()) {
+              Object obj = iter.next();
+              if (obj instanceof IDiagramElement) {
+                IDiagramElement de = (IDiagramElement) obj;
+                if (de.getModelElement() instanceof IUseCase) {
+                  useCases.add((IUseCase) de.getModelElement());
+                  minX = Math.min(minX, de.getX());
+                  minY = Math.min(minY, de.getY());
+                  maxX = Math.max(maxX, de.getX() + de.getWidth());
+                  maxY = Math.max(maxY, de.getY() + de.getHeight());
+                }
+              }
+            }
+            if (useCases.isEmpty()) {
+              return "No use cases found on diagram '" + diagramName + "' to wrap";
+            }
+
+            ISystem system = getModelElementFactory().createSystem();
+            system.setName(systemName);
+            for (IUseCase uc : useCases) {
+              system.addUseCase(uc);
+            }
+
+            IDiagramElement sysDe = getDiagramManager().createDiagramElement(diagram, system);
+            if (sysDe instanceof IShapeUIModel) {
+              IShapeUIModel shape = (IShapeUIModel) sysDe;
+              shape.setCustomText(systemName);
+              int pad = 40;
+              shape.setBounds(
+                  minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad);
+              shape.sendToBack();
+            }
+
+            return "Added system boundary '"
+                + systemName
+                + "' wrapping "
+                + useCases.size()
+                + " use case(s) on diagram '"
+                + diagramName
+                + "'";
+          });
+    } catch (Exception e) {
+      return "Error adding system boundary: " + e.getMessage();
     }
   }
 
