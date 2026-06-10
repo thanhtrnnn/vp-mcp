@@ -26,6 +26,13 @@ import java.util.List;
 /** MCP tools for Visual Paradigm Sequence diagram operations. */
 public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
+  // diagramName -> lifelineId -> id of that lifeline's single activation bar. VP can return
+  // distinct
+  // proxies for the same lifeline whose activationIterator() does not reflect earlier additions, so
+  // the activation is tracked here by id to guarantee exactly one continuous bar per lifeline.
+  private final java.util.Map<String, java.util.Map<String, String>> lifelineActivationId =
+      new java.util.HashMap<>();
+
   @Tool(
       name = "createSequenceDiagram",
       description = "Create a new sequence diagram in Visual Paradigm")
@@ -39,6 +46,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM);
             diagram.setName(diagramName);
             dm.openDiagram(diagram);
+            lifelineActivationId.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -63,40 +71,37 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
 
-            String classifierName =
-                className != null && !className.trim().isEmpty() ? className.trim() : lifelineName;
             String type = lifelineType != null ? lifelineType.trim() : "";
+            int index = SequenceDiagramUtils.getAllLifelines(diagram).size();
 
+            // The lifeline head shows the lifeline name. The base classifier is left UNNAMED and
+            // only
+            // carries the type stereotype (for the boundary/entity/control icon), so the label
+            // reads
+            // just "LoginView" instead of "LoginView : LoginView" and never "ClassN".
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
             if ("actor".equalsIgnoreCase(type)) {
-              // Actor lifelines use an IActor classifier so VP renders a stick figure.
-              IActor actor = findReusableActor(classifierName);
-              if (actor == null) {
-                actor = getModelElementFactory().createActor();
-                actor.setName(classifierName);
-              }
+              IActor actor = getModelElementFactory().createActor();
+              actor.setName("");
               lifeline.setBaseClassifier(actor);
             } else {
-              // Reuse a classifier created for an earlier lifeline of the same name+type (so the
-              // same entity across several sequence diagrams keeps its name instead of VP
-              // auto-renaming the duplicate to "ClassN"). Plain class-diagram classes are not
-              // reused because they carry no boundary/entity/control stereotype.
-              IClass baseClass = findReusableClassifier(classifierName, type);
-              if (baseClass == null) {
-                baseClass = getModelElementFactory().createClass();
-                baseClass.setName(classifierName);
-                if (!type.isEmpty()) {
-                  baseClass.addStereotype(type);
-                }
+              IClass baseClass = getModelElementFactory().createClass();
+              baseClass.setName("");
+              if (!type.isEmpty()) {
+                baseClass.addStereotype(type);
               }
               lifeline.setBaseClassifier(baseClass);
             }
 
-            // Add to diagram
             addToDiagram(diagram, lifeline, lifelineName);
-            // Show only the classifier name on the head (avoid "LoginView : LoginView"). The shape
-            // caption set by addToDiagram still carries lifelineName for lookup.
-            lifeline.setName("");
+
+            // Tight horizontal spacing (the default 250px spread leaves huge gaps between
+            // lifelines).
+            IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
+            if (headShape != null) {
+              headShape.setBounds(
+                  LIFELINE_X0 + index * LIFELINE_DX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
+            }
 
             // Set alias if provided
             if (alias != null && !alias.trim().isEmpty()) {
@@ -428,10 +433,16 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // Each lifeline gets one continuous activation bar (grown to cover its messages). Messages are
   // drawn as connectors anchored to the lifeline shapes at the message y (createDiagramElement on a
   // message alone is unanchored and never rendered).
-  private static final int MSG_TOP_Y = 70;
-  private static final int MSG_STEP_Y = 18;
+  private static final int MSG_TOP_Y = 60;
+  private static final int MSG_STEP_Y = 36;
   private static final int SELF_LOOP_W = 36;
   private static final int SELF_LOOP_H = 10;
+  // Horizontal lifeline layout (tighter than the default 250px spread).
+  private static final int LIFELINE_X0 = 40;
+  private static final int LIFELINE_DX = 150;
+  private static final int LIFELINE_W = 90;
+  private static final int LIFELINE_Y0 = 30;
+  private static final int LIFELINE_HEAD_H = 40;
 
   private String createMessageConnector(
       IInteractionDiagramUIModel diagram,
@@ -511,7 +522,13 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     } else {
       points = new Point[] {new Point(fromCx, y), new Point(toCx, y)};
     }
-    getDiagramManager().createConnector(diagram, message, src, tgt, points);
+    com.vp.plugin.diagram.IDiagramElement msgShape =
+        getDiagramManager().createConnector(diagram, message, src, tgt, points);
+    if (msgShape != null) {
+      // Lift the label just above the arrow line so it stays readable.
+      msgShape.setModelElementNameAlignment(
+          com.vp.plugin.diagram.IDiagramElement.MODEL_ELEMENT_NAME_ALIGNMENT_ALIGN_TOP_MIDDLE);
+    }
 
     return "Added "
         + (isReturn ? "return message" : "message")
@@ -553,25 +570,19 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
    */
   private IActivationUIModel getOrCreateActivationShape(
       IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
-    IActivation activation = null;
-    Iterator<?> ait = lifeline.activationIterator();
-    while (ait.hasNext()) {
-      Object obj = ait.next();
-      if (obj instanceof IActivation) {
-        activation = (IActivation) obj;
-        break;
-      }
-    }
-    if (activation != null) {
-      IActivationUIModel existing = findActivationShapeById(diagram, activation.getId());
+    java.util.Map<String, String> byLifeline =
+        lifelineActivationId.computeIfAbsent(diagram.getName(), k -> new java.util.HashMap<>());
+    String activationId = byLifeline.get(lifeline.getId());
+    if (activationId != null) {
+      IActivationUIModel existing = findActivationShapeById(diagram, activationId);
       if (existing != null) {
         return existing;
       }
-    } else {
-      activation = getModelElementFactory().createActivation();
-      lifeline.addActivation(activation);
     }
 
+    IActivation activation = getModelElementFactory().createActivation();
+    lifeline.addActivation(activation);
+    byLifeline.put(lifeline.getId(), activation.getId());
     Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
     if (!(shapeObj instanceof IActivationUIModel)) {
       return null;
@@ -655,64 +666,6 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private int lifelineCenterX(IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
     IShapeUIModel shape = findLifelineShape(diagram, lifeline);
     return shape != null ? shape.getX() + shape.getWidth() / 2 : 100;
-  }
-
-  /**
-   * Find an existing class usable as a lifeline classifier: same name and (if given) carrying the
-   * lifeline-type stereotype. Returns null if none — only prior lifeline classifiers match, never
-   * plain class-diagram classes.
-   */
-  private IClass findReusableClassifier(String name, String stereotype) {
-    if (name == null || name.trim().isEmpty()) {
-      return null;
-    }
-    com.vp.plugin.model.IProject project = DiagramUtils.getProject();
-    if (project == null) {
-      return null;
-    }
-    String wanted = name.trim();
-    String st = stereotype != null ? stereotype.trim() : "";
-    Iterator<?> iter = project.allLevelModelElementIterator();
-    while (iter.hasNext()) {
-      Object obj = iter.next();
-      if (obj instanceof IClass && wanted.equals(((IClass) obj).getName())) {
-        IClass candidate = (IClass) obj;
-        if (st.isEmpty() || classHasStereotype(candidate, st)) {
-          return candidate;
-        }
-      }
-    }
-    return null;
-  }
-
-  private boolean classHasStereotype(IClass cls, String stereotype) {
-    Iterator<?> iter = cls.stereotypeIterator();
-    while (iter.hasNext()) {
-      if (stereotype.equals(iter.next())) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** Find an existing actor of the given name to reuse as a lifeline classifier (stick figure). */
-  private IActor findReusableActor(String name) {
-    if (name == null || name.trim().isEmpty()) {
-      return null;
-    }
-    com.vp.plugin.model.IProject project = DiagramUtils.getProject();
-    if (project == null) {
-      return null;
-    }
-    String wanted = name.trim();
-    Iterator<?> iter = project.allLevelModelElementIterator();
-    while (iter.hasNext()) {
-      Object obj = iter.next();
-      if (obj instanceof IActor && wanted.equals(((IActor) obj).getName())) {
-        return (IActor) obj;
-      }
-    }
-    return null;
   }
 
   /** Grow a lifeline's dashed line so it extends below message position {@code y}. */
