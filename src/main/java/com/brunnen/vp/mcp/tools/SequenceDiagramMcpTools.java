@@ -504,14 +504,17 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
-    // Anchor the connector to the ACTIVATION bars (positioned at the lifeline centres). Connecting
-    // to the lifelines instead made VP auto-create an extra activation per message, which looked
-    // like fragmented bars. Direction follows from -> to, so returns (callee -> caller) come out
-    // correct without flipping.
-    IShapeUIModel src = fromShape;
-    IShapeUIModel tgt = toShape;
-    int fromCx = fromShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
-    int toCx = toShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
+    // Anchor the connector to the LIFELINE shapes (arrows render correctly this way). Connecting to
+    // the thin activation bars made the arrows drift to the left edge. VP auto-creates an
+    // activation
+    // per message when connecting to lifelines; those are removed afterwards so only the one
+    // continuous bar per lifeline remains. Direction follows from -> to (returns callee -> caller).
+    IShapeUIModel fromLine = findLifelineShape(diagram, from);
+    IShapeUIModel toLine = findLifelineShape(diagram, to);
+    IShapeUIModel src = fromLine != null ? fromLine : fromShape;
+    IShapeUIModel tgt = toLine != null ? toLine : toShape;
+    int fromCx = src.getX() + src.getWidth() / 2;
+    int toCx = tgt.getX() + tgt.getWidth() / 2;
     Point[] points;
     if (self) {
       points =
@@ -532,6 +535,12 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
           com.vp.plugin.diagram.IDiagramElement.MODEL_ELEMENT_NAME_ALIGNMENT_ALIGN_TOP_MIDDLE);
     }
 
+    // Re-bind the message to our own continuous bars and delete the activation VP auto-created when
+    // the connector attached to the lifelines.
+    message.setFromActivation((IActivation) fromShape.getModelElement());
+    message.setToActivation((IActivation) toShape.getModelElement());
+    removeForeignActivations(diagram);
+
     return "Added "
         + (isReturn ? "return message" : "message")
         + " '"
@@ -541,6 +550,27 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         + "' to '"
         + toLifeline
         + "'";
+  }
+
+  /** Remove activation shapes VP auto-created for messages, keeping only our tracked bars. */
+  private void removeForeignActivations(IInteractionDiagramUIModel diagram) {
+    java.util.Map<String, String> mine = lifelineActivationId.get(diagram.getName());
+    java.util.Set<String> keep =
+        mine == null ? java.util.Collections.emptySet() : new java.util.HashSet<>(mine.values());
+    java.util.List<com.vp.plugin.diagram.IDiagramElement> remove = new ArrayList<>();
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IActivationUIModel) {
+        IModelElement model = ((IActivationUIModel) obj).getModelElement();
+        if (model != null && !keep.contains(model.getId())) {
+          remove.add((com.vp.plugin.diagram.IDiagramElement) obj);
+        }
+      }
+    }
+    for (com.vp.plugin.diagram.IDiagramElement de : remove) {
+      diagram.removeDiagramElement(de);
+    }
   }
 
   /** Strip a leading "N:" sequence prefix from a message name (VP renders the number itself). */
