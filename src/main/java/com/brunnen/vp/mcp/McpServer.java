@@ -6,11 +6,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.undertow.Undertow;
-import io.undertow.io.Sender;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 import io.undertow.util.Methods;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -29,7 +29,10 @@ public class McpServer {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private Undertow server;
   private final List<ToolDefinition> tools = new ArrayList<>();
-  private final Map<String, Sender> sessions = new ConcurrentHashMap<>();
+  // sessionId -> the live SSE output stream, so message responses are pushed back over SSE (MCP SSE
+  // transport). Without this the client waits forever for a response that was only sent as the POST
+  // body.
+  private final Map<String, OutputStream> sseStreams = new ConcurrentHashMap<>();
   private int port = 2026;
 
   public McpServer() {}
@@ -73,7 +76,7 @@ public class McpServer {
   public void stop() {
     if (server != null) {
       server.stop();
-      sessions.clear();
+      sseStreams.clear();
       System.out.println("MCP Server stopped");
     }
   }
@@ -124,26 +127,34 @@ public class McpServer {
     Executors.newSingleThreadExecutor()
         .submit(
             () -> {
+              OutputStream out = exchange.getOutputStream();
+              sseStreams.put(sessionId, out);
               try {
                 // Send endpoint event
                 String endpointUrl = "/mcp/messages?sessionId=" + sessionId;
                 String sseMsg = "event: endpoint\ndata: " + endpointUrl + "\n\n";
-                exchange.getOutputStream().write(sseMsg.getBytes(StandardCharsets.UTF_8));
-                exchange.getOutputStream().flush();
+                synchronized (out) {
+                  out.write(sseMsg.getBytes(StandardCharsets.UTF_8));
+                  out.flush();
+                }
 
                 // Keep connection alive
                 while (!Thread.currentThread().isInterrupted()
                     && exchange.getConnection().isOpen()) {
                   Thread.sleep(15000);
                   try {
-                    exchange.getOutputStream().write(":\n\n".getBytes(StandardCharsets.UTF_8));
-                    exchange.getOutputStream().flush();
+                    synchronized (out) {
+                      out.write(":\n\n".getBytes(StandardCharsets.UTF_8));
+                      out.flush();
+                    }
                   } catch (Exception e) {
                     break;
                   }
                 }
               } catch (Exception e) {
                 // Client disconnected
+              } finally {
+                sseStreams.remove(sessionId);
               }
             });
   }
@@ -197,12 +208,16 @@ public class McpServer {
 
                 // Notifications (no id) don't get a response
                 if (request.has("id") && !request.get("id").isNull()) {
-                  // Send response via SSE if session exists, otherwise as HTTP response
-                  Sender sseSender = sessionId != null ? sessions.get(sessionId) : null;
-                  if (sseSender != null) {
+                  // Push the response over the SSE stream if one is open for this session (MCP SSE
+                  // transport); otherwise return it as the HTTP response body.
+                  OutputStream sseOut = sessionId != null ? sseStreams.get(sessionId) : null;
+                  if (sseOut != null) {
                     String json = MAPPER.writeValueAsString(response);
                     String sseMsg = "event: message\ndata: " + json + "\n\n";
-                    sseSender.send(sseMsg);
+                    synchronized (sseOut) {
+                      sseOut.write(sseMsg.getBytes(StandardCharsets.UTF_8));
+                      sseOut.flush();
+                    }
                     exchange.setStatusCode(202);
                     exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
                     exchange.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
@@ -255,7 +270,7 @@ public class McpServer {
 
     ObjectNode serverInfo = MAPPER.createObjectNode();
     serverInfo.put("name", "visual-paradigm-mcp-server");
-    serverInfo.put("version", "1.25.0-actorhide");
+    serverInfo.put("version", "1.26.0-ssefix");
     result.set("serverInfo", serverInfo);
 
     result.put("protocolVersion", "2024-11-05");
