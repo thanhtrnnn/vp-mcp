@@ -34,6 +34,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // diagramName -> ids of every activation WE created (to delete VP's auto-created extras).
   private final java.util.Map<String, java.util.Set<String>> myActivations =
       new java.util.HashMap<>();
+  // Messages anchor to lifelines, so VP creates one small activation per message end (fragmented).
+  // We lay one continuous bar per lifeline over them (same blue, spanning first->last activity) so
+  // the lifeline reads as a single execution bar. diagramName -> lifelineId -> continuous bar id.
+  private final java.util.Map<String, java.util.Map<String, String>> continuousBarId =
+      new java.util.HashMap<>();
 
   @Tool(
       name = "createSequenceDiagram",
@@ -50,6 +55,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             dm.openDiagram(diagram);
             openStacks.remove(diagramName);
             myActivations.remove(diagramName);
+            continuousBarId.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -473,8 +479,6 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     message.setAsynchronous(async);
 
-    // Per-execution activation bars (call stack): a call opens a bar on the callee, the sender
-    // reuses its open execution, a return closes it.
     if (self) {
       message.setType(IMessage.TYPE_RECURSIVE_MESSAGE);
     } else if (isReturn) {
@@ -515,6 +519,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
     }
 
+    // Lay our continuous bar over VP's small per-message activations (created above) so each
+    // lifeline reads as one execution bar instead of fragmented squares. Done after the connector
+    // so our bar sits on top.
+    growContinuousBar(diagram, from, y);
+    growContinuousBar(diagram, to, y);
+    if (self) {
+      growContinuousBar(diagram, from, y + SELF_LOOP_H + 4);
+    }
+
     return "Added "
         + (isReturn ? "return message" : "message")
         + " '"
@@ -524,6 +537,41 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         + "' to '"
         + toLifeline
         + "'";
+  }
+
+  /**
+   * Grow (creating on first use) one continuous activation bar for a lifeline, spanning from its
+   * first message down to {@code y}. It is owned by the lifeline (so it sits at the lifeline x) and
+   * is the same blue as VP's per-message activations, which fall within it -- so the lifeline reads
+   * as a single bar rather than fragmented squares.
+   */
+  private void growContinuousBar(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, int y) {
+    java.util.Map<String, String> byLifeline =
+        continuousBarId.computeIfAbsent(diagram.getName(), k -> new java.util.HashMap<>());
+    String id = byLifeline.get(lifeline.getId());
+    if (id != null) {
+      IActivationUIModel existing = findActivationShapeById(diagram, id);
+      if (existing != null) {
+        growDown(existing, y);
+        return;
+      }
+    }
+    int cx = lifelineCenterX(diagram, lifeline);
+    IActivation activation = getModelElementFactory().createActivation();
+    lifeline.addActivation(activation);
+    Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
+    if (!(shapeObj instanceof IActivationUIModel)) {
+      return;
+    }
+    IActivationUIModel bar = (IActivationUIModel) shapeObj;
+    int top = y - 2;
+    bar.setBounds(cx - IActivationUIModel.BODY_WIDTH / 2, top, IActivationUIModel.BODY_WIDTH, 12);
+    applyBlueFill(bar);
+    byLifeline.put(lifeline.getId(), activation.getId());
+    myActivations
+        .computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>())
+        .add(activation.getId());
   }
 
   /** Strip a leading "N:" sequence prefix from a message name (VP renders the number itself). */

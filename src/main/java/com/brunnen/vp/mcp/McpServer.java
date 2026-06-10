@@ -255,7 +255,7 @@ public class McpServer {
 
     ObjectNode serverInfo = MAPPER.createObjectNode();
     serverInfo.put("name", "visual-paradigm-mcp-server");
-    serverInfo.put("version", "1.21.0-lifelineanchor");
+    serverInfo.put("version", "1.22.0-contbar");
     result.set("serverInfo", serverInfo);
 
     result.put("protocolVersion", "2024-11-05");
