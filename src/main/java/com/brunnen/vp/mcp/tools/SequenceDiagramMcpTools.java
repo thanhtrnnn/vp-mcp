@@ -62,14 +62,19 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
 
-            // Create a class as the base classifier for the lifeline
-            IClass baseClass = getModelElementFactory().createClass();
-            baseClass.setName(
-                className != null && !className.trim().isEmpty() ? className : lifelineName);
-
-            // Set stereotype for type (boundary, entity, control, actor)
-            if (lifelineType != null && !lifelineType.trim().isEmpty()) {
-              baseClass.addStereotype(lifelineType.trim());
+            // Base classifier for the lifeline. Reuse a classifier created for an earlier lifeline
+            // of the same name+type (so the same entity across several sequence diagrams keeps its
+            // name instead of VP auto-renaming the duplicate to "ClassN"). Plain class-diagram
+            // classes are not reused because they carry no boundary/entity/control stereotype.
+            String classifierName =
+                className != null && !className.trim().isEmpty() ? className.trim() : lifelineName;
+            IClass baseClass = findReusableClassifier(classifierName, lifelineType);
+            if (baseClass == null) {
+              baseClass = getModelElementFactory().createClass();
+              baseClass.setName(classifierName);
+              if (lifelineType != null && !lifelineType.trim().isEmpty()) {
+                baseClass.addStereotype(lifelineType.trim());
+              }
             }
 
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
@@ -581,6 +586,44 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private int lifelineCenterX(IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
     IShapeUIModel shape = findLifelineShape(diagram, lifeline);
     return shape != null ? shape.getX() + shape.getWidth() / 2 : 100;
+  }
+
+  /**
+   * Find an existing class usable as a lifeline classifier: same name and (if given) carrying the
+   * lifeline-type stereotype. Returns null if none — only prior lifeline classifiers match, never
+   * plain class-diagram classes.
+   */
+  private IClass findReusableClassifier(String name, String stereotype) {
+    if (name == null || name.trim().isEmpty()) {
+      return null;
+    }
+    com.vp.plugin.model.IProject project = DiagramUtils.getProject();
+    if (project == null) {
+      return null;
+    }
+    String wanted = name.trim();
+    String st = stereotype != null ? stereotype.trim() : "";
+    Iterator<?> iter = project.allLevelModelElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IClass && wanted.equals(((IClass) obj).getName())) {
+        IClass candidate = (IClass) obj;
+        if (st.isEmpty() || classHasStereotype(candidate, st)) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  }
+
+  private boolean classHasStereotype(IClass cls, String stereotype) {
+    Iterator<?> iter = cls.stereotypeIterator();
+    while (iter.hasNext()) {
+      if (stereotype.equals(iter.next())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Grow a lifeline's dashed line so it extends below message position {@code y}. */
