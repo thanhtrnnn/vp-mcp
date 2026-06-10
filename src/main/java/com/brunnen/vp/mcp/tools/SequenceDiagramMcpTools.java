@@ -26,11 +26,14 @@ import java.util.List;
 /** MCP tools for Visual Paradigm Sequence diagram operations. */
 public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
-  // diagramName -> lifelineId -> id of that lifeline's single activation bar. VP can return
-  // distinct
-  // proxies for the same lifeline whose activationIterator() does not reflect earlier additions, so
-  // the activation is tracked here by id to guarantee exactly one continuous bar per lifeline.
-  private final java.util.Map<String, java.util.Map<String, String>> lifelineActivationId =
+  // Per-execution activation bars follow the call stack (like the course sample image_12): a call
+  // opens an activation on the callee, the matching return closes it. State is tracked by model id
+  // because VP returns distinct proxies for the same element across calls.
+  // diagramName -> lifelineId -> stack of OPEN activation ids (top = innermost execution).
+  private final java.util.Map<String, java.util.Map<String, java.util.Deque<String>>> openStacks =
+      new java.util.HashMap<>();
+  // diagramName -> ids of every activation WE created (to delete VP's auto-created extras).
+  private final java.util.Map<String, java.util.Set<String>> myActivations =
       new java.util.HashMap<>();
 
   @Tool(
@@ -46,7 +49,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM);
             diagram.setName(diagramName);
             dm.openDiagram(diagram);
-            lifelineActivationId.remove(diagramName);
+            openStacks.remove(diagramName);
+            myActivations.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -153,7 +157,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Lifeline not found: " + lifelineName;
             }
 
-            IActivationUIModel shape = getOrCreateActivationShape(diagram, lifeline);
+            IActivationUIModel shape = ensureOpenActivation(diagram, lifeline, MSG_TOP_Y);
             if (shape == null) {
               return "Could not create activation for lifeline '" + lifelineName + "'";
             }
@@ -478,15 +482,21 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     message.setAsynchronous(async);
 
-    // One continuous activation bar per lifeline, grown to cover every message touching it (rather
-    // than a separate bar per call, which looked fragmented).
-    IActivationUIModel fromShape = getOrCreateActivationShape(diagram, from);
-    IActivationUIModel toShape = self ? fromShape : getOrCreateActivationShape(diagram, to);
+    // Per-execution activation bars (call stack). A call opens an activation on the callee; the
+    // sender uses its already-open execution. A return closes the callee's activation.
+    IActivationUIModel fromShape;
+    IActivationUIModel toShape;
     if (self) {
+      fromShape = ensureOpenActivation(diagram, from, y);
+      toShape = fromShape;
       message.setType(IMessage.TYPE_RECURSIVE_MESSAGE);
     } else if (isReturn) {
+      fromShape = ensureOpenActivation(diagram, from, y); // callee returning
+      toShape = ensureOpenActivation(diagram, to, y); // caller, still open
       message.setActionType(getModelElementFactory().createActionTypeReturn());
     } else {
+      fromShape = ensureOpenActivation(diagram, from, y); // sender's execution
+      toShape = openNewActivation(diagram, to, y); // callee's new execution
       message.setActionType(getModelElementFactory().createActionTypeCall());
     }
     if (fromShape == null || toShape == null) {
@@ -496,19 +506,21 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     message.setFromActivation((IActivation) fromShape.getModelElement());
     message.setToActivation((IActivation) toShape.getModelElement());
 
-    growActivation(fromShape, y);
-    growActivation(toShape, y);
+    growDown(fromShape, y);
+    growDown(toShape, y);
     if (self) {
-      growActivation(fromShape, y + SELF_LOOP_H + 4);
+      growDown(fromShape, y + SELF_LOOP_H + 4);
+    }
+    if (isReturn) {
+      closeTopActivation(diagram, from, y); // end the callee's execution at the return
     }
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
-    // Anchor the connector to the LIFELINE shapes (arrows render correctly this way). Connecting to
-    // the thin activation bars made the arrows drift to the left edge. VP auto-creates an
-    // activation
-    // per message when connecting to lifelines; those are removed afterwards so only the one
-    // continuous bar per lifeline remains. Direction follows from -> to (returns callee -> caller).
+    // Anchor the connector to the LIFELINE shapes (arrows render correctly this way; anchoring to
+    // the thin activation bars made arrows drift to the left edge). VP auto-creates an activation
+    // per message when connecting to lifelines; those are deleted afterwards so only our per-
+    // execution bars remain. Direction follows from -> to (returns callee -> caller).
     IShapeUIModel fromLine = findLifelineShape(diagram, from);
     IShapeUIModel toLine = findLifelineShape(diagram, to);
     IShapeUIModel src = fromLine != null ? fromLine : fromShape;
@@ -535,11 +547,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
     }
 
-    // Re-bind the message to our own continuous bars and delete the activation VP auto-created when
-    // the connector attached to the lifelines.
+    // Re-bind the message to our own bars and delete the activation VP auto-created when the
+    // connector attached to the lifelines.
     message.setFromActivation((IActivation) fromShape.getModelElement());
     message.setToActivation((IActivation) toShape.getModelElement());
-    removeForeignActivations(diagram);
+    deleteForeignActivations(diagram);
 
     return "Added "
         + (isReturn ? "return message" : "message")
@@ -552,24 +564,23 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         + "'";
   }
 
-  /** Remove activation shapes VP auto-created for messages, keeping only our tracked bars. */
-  private void removeForeignActivations(IInteractionDiagramUIModel diagram) {
-    java.util.Map<String, String> mine = lifelineActivationId.get(diagram.getName());
-    java.util.Set<String> keep =
-        mine == null ? java.util.Collections.emptySet() : new java.util.HashSet<>(mine.values());
-    java.util.List<com.vp.plugin.diagram.IDiagramElement> remove = new ArrayList<>();
+  /** Delete activations VP auto-created for messages, keeping only the ones we created. */
+  private void deleteForeignActivations(IInteractionDiagramUIModel diagram) {
+    java.util.Set<String> mine =
+        myActivations.getOrDefault(diagram.getName(), java.util.Collections.emptySet());
+    java.util.List<IModelElement> remove = new ArrayList<>();
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
       if (obj instanceof IActivationUIModel) {
         IModelElement model = ((IActivationUIModel) obj).getModelElement();
-        if (model != null && !keep.contains(model.getId())) {
-          remove.add((com.vp.plugin.diagram.IDiagramElement) obj);
+        if (model != null && !mine.contains(model.getId())) {
+          remove.add(model);
         }
       }
     }
-    for (com.vp.plugin.diagram.IDiagramElement de : remove) {
-      diagram.removeDiagramElement(de);
+    for (IModelElement model : remove) {
+      model.delete();
     }
   }
 
@@ -595,49 +606,71 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return name.trim();
   }
 
-  /**
-   * Return the single activation bar for a lifeline, creating it on first use. One continuous bar
-   * per lifeline (grown to cover its messages) reads better than a separate bar per call. Lookups
-   * are by model id because VP can hand back distinct proxy objects for the same model.
-   */
-  private IActivationUIModel getOrCreateActivationShape(
-      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
-    java.util.Map<String, String> byLifeline =
-        lifelineActivationId.computeIfAbsent(diagram.getName(), k -> new java.util.HashMap<>());
-    String activationId = byLifeline.get(lifeline.getId());
-    if (activationId != null) {
-      IActivationUIModel existing = findActivationShapeById(diagram, activationId);
-      if (existing != null) {
-        return existing;
-      }
-    }
+  private java.util.Deque<String> stackOf(String diagramName, String lifelineId) {
+    return openStacks
+        .computeIfAbsent(diagramName, k -> new java.util.HashMap<>())
+        .computeIfAbsent(lifelineId, k -> new java.util.ArrayDeque<>());
+  }
 
+  /** Open a NEW execution (activation bar) on a lifeline and push it on the stack. */
+  private IActivationUIModel openNewActivation(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, int y) {
     IActivation activation = getModelElementFactory().createActivation();
     lifeline.addActivation(activation);
-    byLifeline.put(lifeline.getId(), activation.getId());
     Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
     if (!(shapeObj instanceof IActivationUIModel)) {
       return null;
     }
     IActivationUIModel shape = (IActivationUIModel) shapeObj;
+    int depth = stackOf(diagram.getName(), lifeline.getId()).size();
     int centerX = lifelineCenterX(diagram, lifeline);
     shape.setBounds(
-        centerX - IActivationUIModel.BODY_WIDTH / 2,
-        MSG_TOP_Y - 6,
+        centerX - IActivationUIModel.BODY_WIDTH / 2 + depth * 5,
+        y - 2,
         IActivationUIModel.BODY_WIDTH,
-        10);
+        12);
     applyBlueFill(shape);
+    stackOf(diagram.getName(), lifeline.getId()).push(activation.getId());
+    myActivations
+        .computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>())
+        .add(activation.getId());
     return shape;
   }
 
-  /** Grow an activation bar so its span covers message position {@code y} (both directions). */
-  private void growActivation(IActivationUIModel shape, int y) {
+  /** Top (innermost) open execution on a lifeline, or null. */
+  private IActivationUIModel topActivationShape(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    String id = stackOf(diagram.getName(), lifeline.getId()).peek();
+    return id == null ? null : findActivationShapeById(diagram, id);
+  }
+
+  /** The lifeline's current open execution, opening one if it has none. */
+  private IActivationUIModel ensureOpenActivation(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, int y) {
+    IActivationUIModel top = topActivationShape(diagram, lifeline);
+    return top != null ? top : openNewActivation(diagram, lifeline, y);
+  }
+
+  /** Close the lifeline's innermost open execution at position {@code y}. */
+  private void closeTopActivation(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, int y) {
+    String id = stackOf(diagram.getName(), lifeline.getId()).poll();
+    if (id == null) {
+      return;
+    }
+    IActivationUIModel shape = findActivationShapeById(diagram, id);
+    if (shape != null) {
+      growDown(shape, y);
+    }
+  }
+
+  /** Grow an activation bar downward so its bottom reaches message position {@code y}. */
+  private void growDown(IActivationUIModel shape, int y) {
     int top = shape.getY();
     int bottom = top + shape.getHeight();
-    int newTop = Math.min(top, y - 4);
     int newBottom = Math.max(bottom, y + 8);
-    if (newTop != top || newBottom != bottom) {
-      shape.setBounds(shape.getX(), newTop, IActivationUIModel.BODY_WIDTH, newBottom - newTop);
+    if (newBottom > bottom) {
+      shape.setBounds(shape.getX(), top, IActivationUIModel.BODY_WIDTH, newBottom - top);
     }
   }
 
