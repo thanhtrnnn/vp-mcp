@@ -448,6 +448,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     int y = messageY(diagram, sequenceNumber);
     extendActivation(fromShape, y);
     extendActivation(toShape, y);
+    // Grow the dashed lifelines downward so they reach past the last message.
+    extendLifelineToY(diagram, from, y);
+    extendLifelineToY(diagram, to, y);
 
     int fx = fromShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
     int tx = toShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
@@ -500,23 +503,33 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return MSG_TOP_Y + (idx - 1) * MSG_STEP_Y;
   }
 
-  /** Return the activation shape for a lifeline, creating one (with bounds) on first use. */
+  /**
+   * Return the activation shape for a lifeline, creating one (with bounds) on first use. VP can
+   * hand back distinct proxy objects for the same model, so all lookups are by model id, never
+   * {@code ==}.
+   */
   private IActivationUIModel getOrCreateActivationShape(
       IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
-    Iterator<?> deIter = diagram.diagramElementIterator();
-    while (deIter.hasNext()) {
-      Object obj = deIter.next();
-      if (obj instanceof IActivationUIModel) {
-        IActivationUIModel shape = (IActivationUIModel) obj;
-        IModelElement model = shape.getModelElement();
-        if (model instanceof IActivation && lifelineOwnsActivation(lifeline, (IActivation) model)) {
-          return shape;
-        }
+    // Reuse the lifeline's existing activation (one bar per lifeline) and its shape if present.
+    IActivation activation = null;
+    Iterator<?> ait = lifeline.activationIterator();
+    while (ait.hasNext()) {
+      Object obj = ait.next();
+      if (obj instanceof IActivation) {
+        activation = (IActivation) obj;
+        break;
       }
     }
+    if (activation != null) {
+      IActivationUIModel existingShape = findActivationShapeById(diagram, activation.getId());
+      if (existingShape != null) {
+        return existingShape;
+      }
+    } else {
+      activation = getModelElementFactory().createActivation();
+      lifeline.addActivation(activation);
+    }
 
-    IActivation activation = getModelElementFactory().createActivation();
-    lifeline.addActivation(activation);
     Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
     if (!(shapeObj instanceof IActivationUIModel)) {
       return null;
@@ -532,28 +545,55 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return shape;
   }
 
-  private boolean lifelineOwnsActivation(IInteractionLifeLine lifeline, IActivation activation) {
-    Iterator<?> iter = lifeline.activationIterator();
-    while (iter.hasNext()) {
-      if (iter.next() == activation) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private int lifelineCenterX(IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+  private IActivationUIModel findActivationShapeById(
+      IInteractionDiagramUIModel diagram, String activationId) {
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
-      if (obj instanceof IShapeUIModel) {
-        IShapeUIModel shape = (IShapeUIModel) obj;
-        if (shape.getModelElement() == lifeline) {
-          return shape.getX() + shape.getWidth() / 2;
+      if (obj instanceof IActivationUIModel) {
+        IModelElement model = ((IActivationUIModel) obj).getModelElement();
+        if (model != null && activationId.equals(model.getId())) {
+          return (IActivationUIModel) obj;
         }
       }
     }
-    return 100;
+    return null;
+  }
+
+  private IShapeUIModel findLifelineShape(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    String lifelineId = lifeline.getId();
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      // Activation shapes are IShapeUIModel too, but their model id differs from the lifeline id.
+      if (obj instanceof IShapeUIModel && !(obj instanceof IActivationUIModel)) {
+        IShapeUIModel shape = (IShapeUIModel) obj;
+        IModelElement model = shape.getModelElement();
+        if (model != null && lifelineId.equals(model.getId())) {
+          return shape;
+        }
+      }
+    }
+    return null;
+  }
+
+  private int lifelineCenterX(IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    IShapeUIModel shape = findLifelineShape(diagram, lifeline);
+    return shape != null ? shape.getX() + shape.getWidth() / 2 : 100;
+  }
+
+  /** Grow a lifeline's dashed line so it extends below message position {@code y}. */
+  private void extendLifelineToY(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline, int y) {
+    IShapeUIModel shape = findLifelineShape(diagram, lifeline);
+    if (shape == null) {
+      return;
+    }
+    int needed = (y + 40) - shape.getY();
+    if (shape.getHeight() < needed) {
+      shape.setBounds(shape.getX(), shape.getY(), shape.getWidth(), needed);
+    }
   }
 
   /** Grow an activation bar so its vertical span covers message position {@code y}. */
