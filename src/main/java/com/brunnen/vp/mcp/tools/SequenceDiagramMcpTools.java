@@ -72,21 +72,22 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             String type = lifelineType != null ? lifelineType.trim() : "";
+            String classifierName =
+                className != null && !className.trim().isEmpty() ? className.trim() : lifelineName;
             int index = SequenceDiagramUtils.getAllLifelines(diagram).size();
 
-            // The lifeline head shows the lifeline name. The base classifier is left UNNAMED and
-            // only
-            // carries the type stereotype (for the boundary/entity/control icon), so the label
-            // reads
-            // just "LoginView" instead of "LoginView : LoginView" and never "ClassN".
+            // VP forbids a no-name classifier, so the base classifier is named; it only carries the
+            // type stereotype (for the boundary/entity/control icon). setShowClassifier(false)
+            // below
+            // hides the ": Classifier" suffix so the head reads just the lifeline name.
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
             if ("actor".equalsIgnoreCase(type)) {
               IActor actor = getModelElementFactory().createActor();
-              actor.setName("");
+              actor.setName(classifierName);
               lifeline.setBaseClassifier(actor);
             } else {
               IClass baseClass = getModelElementFactory().createClass();
-              baseClass.setName("");
+              baseClass.setName(classifierName);
               if (!type.isEmpty()) {
                 baseClass.addStereotype(type);
               }
@@ -96,11 +97,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             addToDiagram(diagram, lifeline, lifelineName);
 
             // Tight horizontal spacing (the default 250px spread leaves huge gaps between
-            // lifelines).
+            // lifelines) and hide the duplicated ": Classifier" on the head.
             IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
             if (headShape != null) {
               headShape.setBounds(
                   LIFELINE_X0 + index * LIFELINE_DX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
+              if (headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
+                ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
+                    .setShowClassifier(false);
+              }
             }
 
             // Set alias if provided
