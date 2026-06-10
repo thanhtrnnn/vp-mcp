@@ -462,7 +462,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     boolean self = from.getId().equals(to.getId());
 
     IMessage message = getModelElementFactory().createMessage();
-    message.setName(messageName);
+    // VP prepends the sequence number itself, so strip any leading "N:" the caller put in the name
+    // (otherwise the label reads "2: 2: call").
+    message.setName(stripLeadingNumber(messageName));
     if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
       message.setSequenceNumber(sequenceNumber.trim());
     }
@@ -501,20 +503,35 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     message.setFromActivation((IActivation) fromShape.getModelElement());
     message.setToActivation((IActivation) toShape.getModelElement());
 
-    // Both endpoints must span this y, otherwise the connector snaps to a bar end and the arrow
-    // start/end lands at the wrong vertical position instead of on the message line.
     growActivationDown(fromShape, y);
     growActivationDown(toShape, y);
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
-    // A return drawn callee->caller comes out reversed (VP flips the visual for return action
-    // types), so feed the connector caller->callee for returns.
-    IActivationUIModel source = isReturn ? toShape : fromShape;
-    IActivationUIModel target = isReturn ? fromShape : toShape;
-    getDiagramManager()
-        .createConnector(
-            diagram, message, source, target, connectorPoints(source, target, y, self));
+    // Anchor the connector to the LIFELINE shapes (wide, stable) at the message y. Activation bars
+    // are only 8px wide and VP would not anchor the arrow start to them reliably (arrows drifted to
+    // the diagram's left edge). Direction follows from -> to, so returns (callee -> caller) come
+    // out
+    // correct without flipping.
+    IShapeUIModel fromLine = findLifelineShape(diagram, from);
+    IShapeUIModel toLine = findLifelineShape(diagram, to);
+    IShapeUIModel src = fromLine != null ? fromLine : fromShape;
+    IShapeUIModel tgt = toLine != null ? toLine : toShape;
+    int fromCx = src.getX() + src.getWidth() / 2;
+    int toCx = tgt.getX() + tgt.getWidth() / 2;
+    Point[] points;
+    if (self) {
+      points =
+          new Point[] {
+            new Point(fromCx, y),
+            new Point(fromCx + SELF_LOOP_W, y),
+            new Point(fromCx + SELF_LOOP_W, y + SELF_LOOP_H),
+            new Point(fromCx, y + SELF_LOOP_H)
+          };
+    } else {
+      points = new Point[] {new Point(fromCx, y), new Point(toCx, y)};
+    }
+    getDiagramManager().createConnector(diagram, message, src, tgt, points);
 
     return "Added "
         + (isReturn ? "return message" : "message")
@@ -527,28 +544,26 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         + "'";
   }
 
-  private Point[] connectorPoints(
-      IActivationUIModel fromShape, IActivationUIModel toShape, int y, boolean self) {
-    int w = IActivationUIModel.BODY_WIDTH;
-    if (self) {
-      int x = fromShape.getX() + w;
-      return new Point[] {
-        new Point(x, y),
-        new Point(x + SELF_LOOP_W, y),
-        new Point(x + SELF_LOOP_W, y + SELF_LOOP_H),
-        new Point(x, y + SELF_LOOP_H)
-      };
+  /** Strip a leading "N:" sequence prefix from a message name (VP renders the number itself). */
+  private String stripLeadingNumber(String name) {
+    if (name == null) {
+      return "";
     }
-    int startX;
-    int endX;
-    if (toShape.getX() >= fromShape.getX()) {
-      startX = fromShape.getX() + w;
-      endX = toShape.getX();
-    } else {
-      startX = fromShape.getX();
-      endX = toShape.getX() + w;
+    int colon = name.indexOf(':');
+    if (colon > 0) {
+      String prefix = name.substring(0, colon).trim();
+      boolean allDigits = !prefix.isEmpty();
+      for (int i = 0; i < prefix.length(); i++) {
+        if (!Character.isDigit(prefix.charAt(i))) {
+          allDigits = false;
+          break;
+        }
+      }
+      if (allDigits) {
+        return name.substring(colon + 1).trim();
+      }
     }
-    return new Point[] {new Point(startX, y), new Point(endX, y)};
+    return name.trim();
   }
 
   // --- Call-stack activation management (state in openActivations, keyed by diagram + lifeline)
