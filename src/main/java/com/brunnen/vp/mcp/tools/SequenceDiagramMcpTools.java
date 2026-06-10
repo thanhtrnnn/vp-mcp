@@ -39,6 +39,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // the lifeline reads as a single execution bar. diagramName -> lifelineId -> continuous bar id.
   private final java.util.Map<String, java.util.Map<String, String>> continuousBarId =
       new java.util.HashMap<>();
+  // Actor lifelines get their covered bar stretched the full diagram length (first message ->
+  // last),
+  // not just their own active span. diagramName -> set of actor lifeline ids.
+  private final java.util.Map<String, java.util.Set<String>> actorLifelineIds =
+      new java.util.HashMap<>();
 
   @Tool(
       name = "createSequenceDiagram",
@@ -56,6 +61,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             openStacks.remove(diagramName);
             myActivations.remove(diagramName);
             continuousBarId.remove(diagramName);
+            actorLifelineIds.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -111,6 +117,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             if (alias != null && !alias.trim().isEmpty()) {
               lifeline.setNickname(alias.trim());
+            }
+            if (isActor) {
+              actorLifelineIds
+                  .computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>())
+                  .add(lifeline.getId());
             }
 
             StringBuilder result = new StringBuilder();
@@ -527,6 +538,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     if (self) {
       coverTopBar(diagram, from, y + SELF_LOOP_H + 4);
     }
+    // Actors carry one bar down the whole diagram (first step -> last), so stretch theirs to the
+    // top and to the latest message on every message.
+    extendActorBarsFull(diagram, y);
 
     return "Added "
         + (isReturn ? "return message" : "message")
@@ -561,6 +575,28 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     growDown(bar, y);
+  }
+
+  /** Stretch each actor's covered bar to span the whole diagram (MSG_TOP_Y down to {@code y}). */
+  private void extendActorBarsFull(IInteractionDiagramUIModel diagram, int y) {
+    java.util.Set<String> actors = actorLifelineIds.get(diagram.getName());
+    java.util.Map<String, String> bars = continuousBarId.get(diagram.getName());
+    if (actors == null || bars == null) {
+      return;
+    }
+    int top = MSG_TOP_Y - 2;
+    for (String lifelineId : actors) {
+      String barId = bars.get(lifelineId);
+      if (barId == null) {
+        continue; // actor's bar not created yet (no message has touched it)
+      }
+      IActivationUIModel bar = findActivationShapeById(diagram, barId);
+      if (bar == null) {
+        continue;
+      }
+      int bottom = Math.max(bar.getY() + bar.getHeight(), y + 8);
+      bar.setBounds(bar.getX(), top, IActivationUIModel.BODY_WIDTH, bottom - top);
+    }
   }
 
   /** The topmost (smallest y) activation sitting on a lifeline's vertical line. */
