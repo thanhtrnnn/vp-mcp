@@ -7,6 +7,8 @@ import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IInteractionDiagramUIModel;
+import com.vp.plugin.diagram.IShapeUIModel;
+import com.vp.plugin.diagram.shape.IActivationUIModel;
 import com.vp.plugin.model.IActivation;
 import com.vp.plugin.model.IClass;
 import com.vp.plugin.model.ICombinedFragment;
@@ -15,7 +17,9 @@ import com.vp.plugin.model.IInteractionLifeLine;
 import com.vp.plugin.model.IInteractionOperand;
 import com.vp.plugin.model.IMessage;
 import com.vp.plugin.model.IModelElement;
+import java.awt.Point;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 /** MCP tools for Visual Paradigm Sequence diagram operations. */
@@ -119,9 +123,10 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Lifeline not found: " + lifelineName;
             }
 
-            IActivation activation = getModelElementFactory().createActivation();
-            lifeline.addActivation(activation);
-            applyBlueFill(getDiagramManager().createDiagramElement(diagram, activation));
+            IActivationUIModel shape = getOrCreateActivationShape(diagram, lifeline);
+            if (shape == null) {
+              return "Could not create activation for lifeline '" + lifelineName + "'";
+            }
 
             return "Added activation to lifeline '" + lifelineName + "'";
           });
@@ -150,45 +155,10 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
 
-            IInteractionLifeLine from =
-                SequenceDiagramUtils.findLifelineByName(diagram, fromLifeline);
-            if (from == null) {
-              return "From lifeline not found: " + fromLifeline;
-            }
-
-            IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
-            if (to == null) {
-              return "To lifeline not found: " + toLifeline;
-            }
-
-            IMessage message = getModelElementFactory().createMessage();
-            message.setName(messageName);
-            if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
-              message.setSequenceNumber(sequenceNumber.trim());
-            }
-
-            // Set message type
-            if ("asynch".equalsIgnoreCase(messageType) || "async".equalsIgnoreCase(messageType)) {
-              message.setAsynchronous(true);
-            } else {
-              message.setAsynchronous(false);
-            }
-
-            // Find or create activations
-            IActivation fromAct = findOrCreateActivation(from, diagram);
-            IActivation toAct = findOrCreateActivation(to, diagram);
-            message.setFromActivation(fromAct);
-            message.setToActivation(toAct);
-
-            getDiagramManager().createDiagramElement(diagram, message);
-
-            return "Added message '"
-                + messageName
-                + "' from '"
-                + fromLifeline
-                + "' to '"
-                + toLifeline
-                + "'";
+            boolean async =
+                "asynch".equalsIgnoreCase(messageType) || "async".equalsIgnoreCase(messageType);
+            return createMessageConnector(
+                diagram, fromLifeline, toLifeline, messageName, sequenceNumber, async, false);
           });
     } catch (Exception e) {
       return "Error adding message: " + e.getMessage();
@@ -214,38 +184,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
 
-            IInteractionLifeLine from =
-                SequenceDiagramUtils.findLifelineByName(diagram, fromLifeline);
-            if (from == null) {
-              return "From lifeline not found: " + fromLifeline;
-            }
-
-            IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
-            if (to == null) {
-              return "To lifeline not found: " + toLifeline;
-            }
-
-            IMessage message = getModelElementFactory().createMessage();
-            message.setName(messageName);
-            if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
-              message.setSequenceNumber(sequenceNumber.trim());
-            }
-            message.setAsynchronous(false);
-
-            IActivation fromAct = findOrCreateActivation(from, diagram);
-            IActivation toAct = findOrCreateActivation(to, diagram);
-            message.setFromActivation(fromAct);
-            message.setToActivation(toAct);
-
-            getDiagramManager().createDiagramElement(diagram, message);
-
-            return "Added return message '"
-                + messageName
-                + "' from '"
-                + fromLifeline
-                + "' to '"
-                + toLifeline
-                + "'";
+            return createMessageConnector(
+                diagram, fromLifeline, toLifeline, messageName, sequenceNumber, false, true);
           });
     } catch (Exception e) {
       return "Error adding return message: " + e.getMessage();
@@ -463,25 +403,165 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  private IActivation findOrCreateActivation(
-      IInteractionLifeLine lifeline, IInteractionDiagramUIModel diagram) {
-    // Find the last (most recent) activation
-    IActivation lastActivation = null;
-    java.util.Iterator<?> iter = lifeline.activationIterator();
-    while (iter.hasNext()) {
-      Object obj = iter.next();
-      if (obj instanceof IActivation) {
-        lastActivation = (IActivation) obj;
-      }
+  // --- Sequence geometry ---
+  // Messages are positioned top-to-bottom by their sequence number so VP renders them in order.
+  // A lifeline gets one activation bar (IActivationUIModel) whose vertical span is grown to cover
+  // every message touching it. Messages are drawn as connectors between the two activation shapes —
+  // createDiagramElement(message) alone produces an unanchored element that VP does not render.
+  private static final int MSG_TOP_Y = 120;
+  private static final int MSG_STEP_Y = 38;
+  private static final int SELF_LOOP_W = 48;
+  private static final int SELF_LOOP_H = 16;
+
+  private String createMessageConnector(
+      IInteractionDiagramUIModel diagram,
+      String fromLifeline,
+      String toLifeline,
+      String messageName,
+      String sequenceNumber,
+      boolean async,
+      boolean isReturn) {
+    IInteractionLifeLine from = SequenceDiagramUtils.findLifelineByName(diagram, fromLifeline);
+    if (from == null) {
+      return "From lifeline not found: " + fromLifeline;
     }
-    if (lastActivation != null) {
-      return lastActivation;
+    IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
+    if (to == null) {
+      return "To lifeline not found: " + toLifeline;
     }
 
-    // Create new activation if none exists
+    IMessage message = getModelElementFactory().createMessage();
+    message.setName(messageName);
+    if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
+      message.setSequenceNumber(sequenceNumber.trim());
+    }
+    message.setAsynchronous(async);
+
+    IActivationUIModel fromShape = getOrCreateActivationShape(diagram, from);
+    IActivationUIModel toShape = getOrCreateActivationShape(diagram, to);
+    if (fromShape == null || toShape == null) {
+      return "Could not create activation for: " + (fromShape == null ? fromLifeline : toLifeline);
+    }
+    message.setFromActivation((IActivation) fromShape.getModelElement());
+    message.setToActivation((IActivation) toShape.getModelElement());
+
+    int y = messageY(diagram, sequenceNumber);
+    extendActivation(fromShape, y);
+    extendActivation(toShape, y);
+
+    int fx = fromShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
+    int tx = toShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
+    Point[] points;
+    if (from == to) {
+      // Self-message: a small loop on the same lifeline (e.g. Entity executing its own method).
+      extendActivation(fromShape, y + SELF_LOOP_H);
+      points =
+          new Point[] {
+            new Point(fx, y),
+            new Point(fx + SELF_LOOP_W, y),
+            new Point(fx + SELF_LOOP_W, y + SELF_LOOP_H),
+            new Point(fx, y + SELF_LOOP_H)
+          };
+    } else {
+      points = new Point[] {new Point(fx, y), new Point(tx, y)};
+    }
+    getDiagramManager().createConnector(diagram, message, fromShape, toShape, points);
+
+    return "Added "
+        + (isReturn ? "return message" : "message")
+        + " '"
+        + messageName
+        + "' from '"
+        + fromLifeline
+        + "' to '"
+        + toLifeline
+        + "'";
+  }
+
+  /** Compute the vertical position of a message from its sequence number (1-based). */
+  private int messageY(IInteractionDiagramUIModel diagram, String sequenceNumber) {
+    int idx = -1;
+    if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
+      String s = sequenceNumber.trim();
+      int dot = s.indexOf('.');
+      if (dot > 0) {
+        s = s.substring(0, dot);
+      }
+      try {
+        idx = Integer.parseInt(s.trim());
+      } catch (NumberFormatException ignored) {
+        idx = -1;
+      }
+    }
+    if (idx < 1) {
+      // Fallback: append after the messages already on the diagram.
+      idx = SequenceDiagramUtils.getAllMessages(diagram).size() + 1;
+    }
+    return MSG_TOP_Y + (idx - 1) * MSG_STEP_Y;
+  }
+
+  /** Return the activation shape for a lifeline, creating one (with bounds) on first use. */
+  private IActivationUIModel getOrCreateActivationShape(
+      IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    Iterator<?> deIter = diagram.diagramElementIterator();
+    while (deIter.hasNext()) {
+      Object obj = deIter.next();
+      if (obj instanceof IActivationUIModel) {
+        IActivationUIModel shape = (IActivationUIModel) obj;
+        IModelElement model = shape.getModelElement();
+        if (model instanceof IActivation && lifelineOwnsActivation(lifeline, (IActivation) model)) {
+          return shape;
+        }
+      }
+    }
+
     IActivation activation = getModelElementFactory().createActivation();
     lifeline.addActivation(activation);
-    applyBlueFill(getDiagramManager().createDiagramElement(diagram, activation));
-    return activation;
+    Object shapeObj = getDiagramManager().createDiagramElement(diagram, activation);
+    if (!(shapeObj instanceof IActivationUIModel)) {
+      return null;
+    }
+    IActivationUIModel shape = (IActivationUIModel) shapeObj;
+    int centerX = lifelineCenterX(diagram, lifeline);
+    shape.setBounds(
+        centerX - IActivationUIModel.BODY_WIDTH / 2,
+        MSG_TOP_Y - 12,
+        IActivationUIModel.BODY_WIDTH,
+        MSG_STEP_Y);
+    applyBlueFill(shape);
+    return shape;
+  }
+
+  private boolean lifelineOwnsActivation(IInteractionLifeLine lifeline, IActivation activation) {
+    Iterator<?> iter = lifeline.activationIterator();
+    while (iter.hasNext()) {
+      if (iter.next() == activation) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private int lifelineCenterX(IInteractionDiagramUIModel diagram, IInteractionLifeLine lifeline) {
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IShapeUIModel) {
+        IShapeUIModel shape = (IShapeUIModel) obj;
+        if (shape.getModelElement() == lifeline) {
+          return shape.getX() + shape.getWidth() / 2;
+        }
+      }
+    }
+    return 100;
+  }
+
+  /** Grow an activation bar so its vertical span covers message position {@code y}. */
+  private void extendActivation(IActivationUIModel shape, int y) {
+    int top = shape.getY();
+    int bottom = top + shape.getHeight();
+    int newTop = Math.min(top, y - 6);
+    int newBottom = Math.max(bottom, y + 18);
+    shape.setBounds(shape.getX(), newTop, IActivationUIModel.BODY_WIDTH, newBottom - newTop);
   }
 }

@@ -170,12 +170,9 @@ public final class DiagramLayoutEngine {
   }
 
   private static void applySequenceLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    LayoutOption$Hierarchical opt = dm.createHierarchicalLayoutOption();
-    opt.setOrientation(LayoutOption$Orientation.TopToBottom);
-    opt.setMinimumLayerDistance(80);
-    opt.setMinimumShapeDistance(120);
-    opt.setConnectorStyle(LayoutOption$ConnectorStyle.Polyline);
-    dm.openAndLayoutDiagram(diagram, opt);
+    // Sequence diagrams are positioned manually (lifelines spread horizontally on creation,
+    // messages/activations placed top-to-bottom by sequence number). A graph auto-layout would
+    // scramble that vertical ordering, so this is intentionally a no-op.
   }
 
   private static void applyErdLayout(DiagramManager dm, IDiagramUIModel diagram) {
