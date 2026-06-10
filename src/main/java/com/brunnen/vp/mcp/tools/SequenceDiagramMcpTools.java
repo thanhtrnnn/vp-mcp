@@ -81,11 +81,12 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             int index = SequenceDiagramUtils.getAllLifelines(diagram).size();
 
             // VP forbids a no-name classifier, so the base classifier is named; it only carries the
-            // type stereotype (for the boundary/entity/control icon). setShowClassifier(false)
-            // below
-            // hides the ": Classifier" suffix so the head reads just the lifeline name.
+            // type stereotype (for the boundary/entity/control icon). For non-actors,
+            // setShowClassifier(false) below hides the ": Classifier" suffix. Actors keep the
+            // classifier shown so VP renders the stick figure.
+            boolean isActor = "actor".equalsIgnoreCase(type);
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
-            if ("actor".equalsIgnoreCase(type)) {
+            if (isActor) {
               IActor actor = getModelElementFactory().createActor();
               actor.setName(classifierName);
               lifeline.setBaseClassifier(actor);
@@ -106,7 +107,10 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             if (headShape != null) {
               headShape.setBounds(
                   LIFELINE_X0 + index * LIFELINE_DX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
-              if (headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
+              // Hide the ": Classifier" suffix on boundary/entity/control heads; keep it on actors
+              // so VP draws the stick figure.
+              if (!isActor
+                  && headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
                 ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
                     .setShowClassifier(false);
               }
@@ -442,7 +446,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // Each lifeline gets one continuous activation bar (grown to cover its messages). Messages are
   // drawn as connectors anchored to the lifeline shapes at the message y (createDiagramElement on a
   // message alone is unanchored and never rendered).
-  private static final int MSG_TOP_Y = 60;
+  private static final int MSG_TOP_Y = 100;
   private static final int MSG_STEP_Y = 36;
   private static final int SELF_LOOP_W = 36;
   private static final int SELF_LOOP_H = 10;
@@ -517,16 +521,12 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     extendLifelineToY(diagram, from, y);
     extendLifelineToY(diagram, to, y);
 
-    // Anchor the connector to the LIFELINE shapes (arrows render correctly this way; anchoring to
-    // the thin activation bars made arrows drift to the left edge). VP auto-creates an activation
-    // per message when connecting to lifelines; those are deleted afterwards so only our per-
-    // execution bars remain. Direction follows from -> to (returns callee -> caller).
-    IShapeUIModel fromLine = findLifelineShape(diagram, from);
-    IShapeUIModel toLine = findLifelineShape(diagram, to);
-    IShapeUIModel src = fromLine != null ? fromLine : fromShape;
-    IShapeUIModel tgt = toLine != null ? toLine : toShape;
-    int fromCx = src.getX() + src.getWidth() / 2;
-    int toCx = tgt.getX() + tgt.getWidth() / 2;
+    // Anchor the connector to OUR per-execution activation bars. Anchoring to the lifelines made VP
+    // auto-create extra activations whose deletion cascaded and removed the messages. Each bar is
+    // short and at the message y, so the arrow attaches at the right place (no drift). Direction
+    // follows from -> to (returns callee -> caller).
+    int fromCx = fromShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
+    int toCx = toShape.getX() + IActivationUIModel.BODY_WIDTH / 2;
     Point[] points;
     if (self) {
       points =
@@ -540,18 +540,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       points = new Point[] {new Point(fromCx, y), new Point(toCx, y)};
     }
     com.vp.plugin.diagram.IDiagramElement msgShape =
-        getDiagramManager().createConnector(diagram, message, src, tgt, points);
+        getDiagramManager().createConnector(diagram, message, fromShape, toShape, points);
     if (msgShape instanceof com.vp.plugin.diagram.IBaseDiagramElement) {
       // resetCaption() (as in the VP Open API sample) makes the message label render on the arrow.
-      // setRequestResetCaption(true) did not show it.
       ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
     }
-
-    // Re-bind the message to our own bars and delete the activation VP auto-created when the
-    // connector attached to the lifelines.
-    message.setFromActivation((IActivation) fromShape.getModelElement());
-    message.setToActivation((IActivation) toShape.getModelElement());
-    deleteForeignActivations(diagram);
 
     return "Added "
         + (isReturn ? "return message" : "message")
@@ -562,26 +555,6 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         + "' to '"
         + toLifeline
         + "'";
-  }
-
-  /** Delete activations VP auto-created for messages, keeping only the ones we created. */
-  private void deleteForeignActivations(IInteractionDiagramUIModel diagram) {
-    java.util.Set<String> mine =
-        myActivations.getOrDefault(diagram.getName(), java.util.Collections.emptySet());
-    java.util.List<IModelElement> remove = new ArrayList<>();
-    Iterator<?> iter = diagram.diagramElementIterator();
-    while (iter.hasNext()) {
-      Object obj = iter.next();
-      if (obj instanceof IActivationUIModel) {
-        IModelElement model = ((IActivationUIModel) obj).getModelElement();
-        if (model != null && !mine.contains(model.getId())) {
-          remove.add(model);
-        }
-      }
-    }
-    for (IModelElement model : remove) {
-      model.delete();
-    }
   }
 
   /** Strip a leading "N:" sequence prefix from a message name (VP renders the number itself). */
