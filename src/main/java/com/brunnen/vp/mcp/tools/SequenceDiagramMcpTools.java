@@ -114,6 +114,20 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
                     .setShowClassifier(false);
               }
+              if (isActor) {
+                // Make the box invisible (transparent fill + border, white text) so it can be
+                // replaced/overlaid with a stick figure while keeping the lifeline + messages.
+                if (headShape.getFillColor() != null) {
+                  headShape.getFillColor().setTransparency(100, true);
+                }
+                if (headShape.getLineModel() != null) {
+                  headShape.getLineModel().setTransparency(100, true);
+                }
+                com.vp.plugin.diagram.format.IElementFont font = headShape.getElementFont();
+                if (font != null) {
+                  font.setColor(java.awt.Color.WHITE);
+                }
+              }
             }
             if (alias != null && !alias.trim().isEmpty()) {
               lifeline.setNickname(alias.trim());
