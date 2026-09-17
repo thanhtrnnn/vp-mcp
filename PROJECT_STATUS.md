@@ -57,7 +57,8 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   support may auto-name roles of associations created between persistable classes).
 - **Audit/export**: `getRelationshipDetails` returns JSON (classes with abstract flag, stereotypes,
   owner, attributes, bounds; relationships with both ends' multiplicity, aggregation kind, role,
-  connector points and label rectangles). `exportDiagramImage` writes a PNG.
+  connector points and label rectangles). `exportDiagramImage` writes a PNG with an empty
+  watermark.
 - **Project**: `newProject`, `saveProject`, `saveProjectAs` (never overwrites an existing file) and
   `getProjectInfo` (name and file path, useful as a guard before editing).
 

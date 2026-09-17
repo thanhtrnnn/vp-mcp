@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.ExportDiagramAsImageOption;
+import com.vp.plugin.ExportDiagramAsImageWatermark;
 import com.vp.plugin.diagram.ICaptionUIModel;
 import com.vp.plugin.diagram.IClassDiagramUIModel;
 import com.vp.plugin.diagram.IConnectorUIModel;
@@ -1217,11 +1218,13 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (active == null || !active.getId().equals(diagram.getId())) {
               return "Diagram could not be activated: " + diagramName;
             }
+            ExportDiagramAsImageOption exportOption =
+                new ExportDiagramAsImageOption(ExportDiagramAsImageOption.IMAGE_TYPE_PNG);
+            ExportDiagramAsImageWatermark emptyWatermark = (graphics, width, height) -> {};
+            exportOption.setWatermark(emptyWatermark);
             ApplicationManager.instance()
                 .getModelConvertionManager()
-                .exportActiveDiagramAsImage(
-                    file,
-                    new ExportDiagramAsImageOption(ExportDiagramAsImageOption.IMAGE_TYPE_PNG));
+                .exportActiveDiagramAsImage(file, exportOption);
             return file.isFile()
                 ? "Exported '" + diagramName + "' to " + file + " (" + file.length() + " bytes)"
                 : "Export did not produce a file: " + file;
