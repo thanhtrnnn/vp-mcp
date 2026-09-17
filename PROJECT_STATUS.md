@@ -13,13 +13,14 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (39 tools total)
+### MCP Tool Services (51 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
 | Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts | 5 |
 | Use Case | create, addActor, addUseCase, addRelationship, addSystemBoundary, generateReport | 6 |
-| Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport | 14 |
+| Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport, setElementBounds, addStereotypeToClasses, removeRelationship, setAssociationProperties, getRelationshipDetails, rerouteConnectors, layoutConnectorLabels, exportDiagramImage | 22 |
+| Project | newProject, saveProject, saveProjectAs, getProjectInfo | 4 |
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
 
@@ -34,6 +35,32 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
 
+### Class diagram editing, audit and project tools (server version 1.27.8)
+
+- **Scoped lookups**: `addAttribute(..., diagramName)` only uses the class shown on that diagram, so
+  same-named classes in other diagrams/packages are never modified. `addClass` accepts `x`, `y` and
+  `modelPackage` (model-only package, no package shape) to keep same-named classes apart.
+- **Generalization direction**: VP stores a generalization as from = general (parent), to =
+  specific (child). `addGeneralization(fromClass = child, toClass = parent)` and
+  `addClass(extendsClass)` now create it that way, so the triangle is drawn at the parent.
+- **Connector anchoring**: with null points VP anchors connector ends at the shapes' top-left
+  corners. Class connectors are created with explicit center points; `rerouteConnectors` re-anchors
+  all connectors after moving shapes. VP then draws an axis-aligned line through the middle of the
+  shapes' overlap, or a center-to-center diagonal when they do not overlap. Open (or export) a
+  diagram before rerouting it after a restart, otherwise the ends fall back to the corners.
+- **Labels**: `layoutConnectorLabels` places multiplicities next to each end (absolute diagram
+  coordinates), the association name mid-line and hides role names; ends leaving a shape in a fan
+  are staggered. Shape wrappers returned by the API are not canonical objects, compare them by id.
+- **Data-model helpers**: `addStereotypeToClasses(diagram, "*", "ORM Persistable")`,
+  `removeRelationship` (deletes the model element), `setAssociationProperties` (edits
+  association/aggregation/composition in either direction; role `-` clears a role name; VP's ORM
+  support may auto-name roles of associations created between persistable classes).
+- **Audit/export**: `getRelationshipDetails` returns JSON (classes with abstract flag, stereotypes,
+  owner, attributes, bounds; relationships with both ends' multiplicity, aggregation kind, role,
+  connector points and label rectangles). `exportDiagramImage` writes a PNG.
+- **Project**: `newProject`, `saveProject`, `saveProjectAs` (never overwrites an existing file) and
+  `getProjectInfo` (name and file path, useful as a guard before editing).
+
 ### Key Files
 
 | File | Purpose |
@@ -45,7 +72,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 | `StandaloneServer.java` | Standalone entry for Docker (no VP dependency) |
 | `tools/AbstractDiagramMcpTools.java` | Base class with zone-aware positioning, layout, and management tools |
 | `tools/UseCaseMcpTools.java` | 5 use case diagram tools |
-| `tools/ClassDiagramMcpTools.java` | 12 class diagram tools |
+| `tools/ClassDiagramMcpTools.java` | 22 class diagram tools + 4 project tools |
 | `tools/ErdMcpTools.java` | 7 ERD tools |
 | `tools/SequenceDiagramMcpTools.java` | 7 sequence diagram tools |
 | `util/DiagramUtils.java` | Shared VP API helpers (diagram/element lookup) |
@@ -95,3 +122,6 @@ Docker uses multi-stage build with VP API stub JAR for compilation.
 - [x] findDiagramElementByModel uses object identity instead of name matching
 - [x] findOrCreateActivation returns last (most recent) activation
 - [x] addCombinedFragment warns about unfound lifelines
+- [x] New class/project tools exercised end-to-end in VP 18.1: two e-commerce class diagrams built,
+  saved with saveProjectAs into three files, converted to data models, and checked against the
+  saved .vpp files (SQLite) with zero differences
