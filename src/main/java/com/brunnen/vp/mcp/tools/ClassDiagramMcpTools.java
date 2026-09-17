@@ -1255,6 +1255,33 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   @Tool(
+      name = "openProject",
+      description =
+          "VP File > Open: open an existing .vpp file, replacing the open project (save it first;"
+              + " VP may ask about unsaved changes)")
+  public String openProject(String filePath) {
+    try {
+      return runOnEdt(
+          () -> {
+            if (filePath == null || filePath.trim().isEmpty()) {
+              return "filePath is required";
+            }
+            File file = new File(filePath.trim());
+            if (!file.isFile()) {
+              return "File does not exist: " + file;
+            }
+            boolean ok = ApplicationManager.instance().getProjectManager().openProject(file);
+            IProject project = DiagramUtils.getProject();
+            return ok && project != null
+                ? "Opened project " + project.getProjectFile()
+                : "Open failed for " + file;
+          });
+    } catch (Exception e) {
+      return "Error opening project: " + e.getMessage();
+    }
+  }
+
+  @Tool(
       name = "saveProjectAs",
       description =
           "VP File > Save As: save the open project to a new .vpp path (parent folder must exist,"

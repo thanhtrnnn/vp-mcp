@@ -13,14 +13,14 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (51 tools total)
+### MCP Tool Services (52 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
 | Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts | 5 |
 | Use Case | create, addActor, addUseCase, addRelationship, addSystemBoundary, generateReport | 6 |
 | Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport, setElementBounds, addStereotypeToClasses, removeRelationship, setAssociationProperties, getRelationshipDetails, rerouteConnectors, layoutConnectorLabels, exportDiagramImage | 22 |
-| Project | newProject, saveProject, saveProjectAs, getProjectInfo | 4 |
+| Project | newProject, openProject, saveProject, saveProjectAs, getProjectInfo | 5 |
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
 
@@ -35,7 +35,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
 
-### Class diagram editing, audit and project tools (server version 1.27.8)
+### Class diagram editing, audit and project tools (server version 1.27.9)
 
 - **Scoped lookups**: `addAttribute(..., diagramName)` only uses the class shown on that diagram, so
   same-named classes in other diagrams/packages are never modified. `addClass` accepts `x`, `y` and
@@ -59,8 +59,12 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   owner, attributes, bounds; relationships with both ends' multiplicity, aggregation kind, role,
   connector points and label rectangles). `exportDiagramImage` writes a PNG with an empty
   watermark.
-- **Project**: `newProject`, `saveProject`, `saveProjectAs` (never overwrites an existing file) and
-  `getProjectInfo` (name and file path, useful as a guard before editing).
+- **Project**: `newProject`, `openProject` (save first: VP may ask about unsaved changes),
+  `saveProject`, `saveProjectAs` (never overwrites an existing file) and `getProjectInfo` (name
+  and file path, useful as a guard before editing). VP reopens the last project on startup and
+  ignores a file passed at launch, so switch files with `openProject`.
+- **Known issue**: `GET /api/tools` returns HTTP 500; use `initialize` / `tools/call` or
+  `POST /api/execute` instead.
 
 ### Key Files
 
@@ -73,7 +77,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 | `StandaloneServer.java` | Standalone entry for Docker (no VP dependency) |
 | `tools/AbstractDiagramMcpTools.java` | Base class with zone-aware positioning, layout, and management tools |
 | `tools/UseCaseMcpTools.java` | 5 use case diagram tools |
-| `tools/ClassDiagramMcpTools.java` | 22 class diagram tools + 4 project tools |
+| `tools/ClassDiagramMcpTools.java` | 22 class diagram tools + 5 project tools |
 | `tools/ErdMcpTools.java` | 7 ERD tools |
 | `tools/SequenceDiagramMcpTools.java` | 7 sequence diagram tools |
 | `util/DiagramUtils.java` | Shared VP API helpers (diagram/element lookup) |
@@ -110,6 +114,8 @@ Docker uses multi-stage build with VP API stub JAR for compilation.
 - [x] 35 tools registered and invocable via JSON-RPC
 - [x] Docker build succeeds with Java 11
 - [x] VP plugin loads successfully (verified in VP log)
+- [x] Current plugin build installed and reloaded in Visual Paradigm; Claude Code user-scope MCP
+  `visual-paradigm` connects to `http://localhost:2026/sse`
 - [x] Connectors use `createConnector()` with IDiagramElement refs (not `createDiagramElement`)
 - [x] Diagram management tools: listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts
 - [x] Zone-aware element positioning (actors left, UCs right; boundary/DAO/entity layers)
