@@ -3,13 +3,14 @@ package com.brunnen.vp.mcp;
 import com.brunnen.vp.mcp.tools.ClassDiagramMcpTools;
 import com.brunnen.vp.mcp.tools.ErdMcpTools;
 import com.brunnen.vp.mcp.tools.SequenceDiagramMcpTools;
+import com.brunnen.vp.mcp.tools.StateMachineDiagramMcpTools;
 import com.brunnen.vp.mcp.tools.UseCaseMcpTools;
 import com.vp.plugin.VPPlugin;
 import com.vp.plugin.VPPluginInfo;
 
 /**
- * Visual Paradigm MCP Plugin. Provides MCP server integration for Use Case, Class, Sequence, and
- * ERD diagrams.
+ * Visual Paradigm MCP Plugin. Provides MCP server integration for Use Case, Class, Sequence, ERD,
+ * and state machine diagrams.
  */
 public final class VPMcpPlugin implements VPPlugin {
 
@@ -27,7 +28,8 @@ public final class VPMcpPlugin implements VPPlugin {
           new UseCaseMcpTools(),
           new ClassDiagramMcpTools(),
           new ErdMcpTools(),
-          new SequenceDiagramMcpTools());
+          new SequenceDiagramMcpTools(),
+          new StateMachineDiagramMcpTools());
       mcpServer.start();
     } catch (Exception e) {
       System.err.println("Failed to start MCP server: " + e.getMessage());

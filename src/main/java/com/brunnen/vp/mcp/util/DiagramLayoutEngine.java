@@ -144,6 +144,8 @@ public final class DiagramLayoutEngine {
       applySequenceLayout(dm, diagram);
     } else if (IDiagramTypeConstants.DIAGRAM_TYPE_ER_DIAGRAM.equals(type)) {
       applyErdLayout(dm, diagram);
+    } else if (IDiagramTypeConstants.DIAGRAM_TYPE_STATE_DIAGRAM.equals(type)) {
+      applyStateLayout(dm, diagram);
     } else {
       dm.autoLayout(diagram);
     }
@@ -173,6 +175,17 @@ public final class DiagramLayoutEngine {
     // Sequence diagrams are positioned manually (lifelines spread horizontally on creation,
     // messages/activations placed top-to-bottom by sequence number). A graph auto-layout would
     // scramble that vertical ordering, so this is intentionally a no-op.
+  }
+
+  private static void applyStateLayout(DiagramManager dm, IDiagramUIModel diagram) {
+    // State machines read as a flow: initial state on the left, final state on the right.
+    LayoutOption$Hierarchical opt = dm.createHierarchicalLayoutOption();
+    opt.setOrientation(LayoutOption$Orientation.LeftToRight);
+    opt.setMinimumLayerDistance(110);
+    opt.setMinimumShapeDistance(70);
+    opt.setShapePlacement(LayoutOption$ShapePlacement.Polyline);
+    opt.setConnectorStyle(LayoutOption$ConnectorStyle.Polyline);
+    dm.openAndLayoutDiagram(diagram, opt);
   }
 
   private static void applyErdLayout(DiagramManager dm, IDiagramUIModel diagram) {

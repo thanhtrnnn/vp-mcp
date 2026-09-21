@@ -312,7 +312,7 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "listDiagrams",
       description =
-          "List all diagrams in the project, optionally filtered by type (UseCase, Class, Sequence, ER)")
+          "List all diagrams in the project, optionally filtered by type (UseCase, Class, Sequence, ER, State)")
   public String listDiagrams(String type) {
     try {
       return runOnEdt(
@@ -647,6 +647,18 @@ public abstract class AbstractDiagramMcpTools {
     }
     if (model instanceof IMessage) {
       return "Message";
+    }
+    if (model instanceof com.vp.plugin.model.IInitialPseudoState) {
+      return "InitialState";
+    }
+    if (model instanceof com.vp.plugin.model.IFinalState2) {
+      return "FinalState";
+    }
+    if (model instanceof com.vp.plugin.model.IState2) {
+      return "State";
+    }
+    if (model instanceof com.vp.plugin.model.ITransition2) {
+      return "Transition";
     }
     return model.getClass().getSimpleName();
   }

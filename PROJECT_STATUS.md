@@ -13,7 +13,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (52 tools total)
+### MCP Tool Services (57 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
@@ -23,6 +23,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 | Project | newProject, openProject, saveProject, saveProjectAs, getProjectInfo | 5 |
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
+| State machine | createStateDiagram, addState, addInitialState, addFinalState, addTransition | 5 |
 
 ### Reference-style rendering (matches the course's Visual Paradigm samples)
 
@@ -34,6 +35,26 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   labeled system rectangle (the module box). Call it AFTER `autoLayoutDiagram` so the box encloses
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
+
+### State machine diagrams (server version 1.28.0)
+
+- **`createStateDiagram(diagramName)`** creates a UML state machine diagram
+  (`DIAGRAM_TYPE_STATE_DIAGRAM`).
+- **`addState(diagramName, stateName, entryAction, doActivity, exitAction, x, y)`** adds an
+  `IState2` box. The optional entry/do/exit texts become the extra caption lines
+  (`entry / …`, `do / …`, `exit / …`); pass `""` to omit them. `x`/`y` > 0 place the box,
+  otherwise it is auto-positioned.
+- **`addInitialState` / `addFinalState`** add `IInitialPseudoState` / `IFinalState2` as 30x30
+  shapes. `stateName` is the model name used as the handle in `addTransition`; the shape itself is
+  drawn without a caption so the circle stays clean.
+- **`addTransition(diagramName, fromState, toState, label)`** creates an `ITransition2` connector.
+  The label is the UML text form `event [guard] / effect` and is stored as the transition name so
+  VP renders it on the arrow; a blank label leaves the arrow unlabelled. Passing the same state
+  twice draws a self-transition.
+- **Layout**: `autoLayoutDiagram` uses a hierarchical LeftToRight layout for state diagrams, so the
+  initial state ends up on the left and the final state on the right.
+- **Pure helpers** live in `util/StateMachineUtils` (caption building, label normalization, name
+  validation) and are covered by `StateMachineUtilsTest`.
 
 ### Class diagram editing, audit and project tools (server version 1.27.9)
 
