@@ -36,7 +36,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
 
-### State machine diagrams (server version 1.28.0)
+### State machine diagrams (server version 1.28.4)
 
 - **`createStateDiagram(diagramName)`** creates a UML state machine diagram
   (`DIAGRAM_TYPE_STATE_DIAGRAM`).
@@ -45,14 +45,19 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   (`entry / …`, `do / …`, `exit / …`); pass `""` to omit them. `x`/`y` > 0 place the box,
   otherwise it is auto-positioned.
 - **`addInitialState` / `addFinalState`** add `IInitialPseudoState` / `IFinalState2` as 30x30
-  shapes. `stateName` is the model name used as the handle in `addTransition`; the shape itself is
-  drawn without a caption so the circle stays clean.
+  shapes. `stateName` is both the handle used by `addTransition` and the label VP draws under the
+  shape (VP always renders the model name there; blanking the custom text does not hide it), so
+  pass a display-friendly name such as `Start` / `End`.
 - **`addTransition(diagramName, fromState, toState, label)`** creates an `ITransition2` connector.
   The label is the UML text form `event [guard] / effect` and is stored as the transition name so
   VP renders it on the arrow; a blank label leaves the arrow unlabelled. Passing the same state
   twice draws a self-transition.
+- **Captions need `resetCaption()`**: freshly created state shapes and transition connectors come
+  out blank until `IBaseDiagramElement.resetCaption()` is called (same quirk as sequence messages).
+  It re-renders from the model name, so custom entry/do/exit text is applied *after* the reset.
 - **Layout**: `autoLayoutDiagram` uses a hierarchical LeftToRight layout for state diagrams, so the
-  initial state ends up on the left and the final state on the right.
+  initial state ends up on the left and the final state on the right. Explicit `x`/`y` on `addState`
+  is usually better for a readable flow — long transition labels collide when states sit close.
 - **Pure helpers** live in `util/StateMachineUtils` (caption building, label normalization, name
   validation) and are covered by `StateMachineUtilsTest`.
 

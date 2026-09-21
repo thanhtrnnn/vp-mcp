@@ -4,6 +4,7 @@ import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.StateMachineUtils;
 import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.IBaseDiagramElement;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -83,6 +84,9 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
             IDiagramElement de = addToDiagram(diagram, state, stateName);
             applyBounds(de, x, y, STATE_WIDTH, STATE_HEIGHT);
 
+            // resetCaption() first: it re-renders the caption from the model name, so any custom
+            // entry/do/exit text has to be applied afterwards or it would be overwritten.
+            resetCaption(de);
             String body =
                 StateMachineUtils.buildStateCaption(stateName, entryAction, doActivity, exitAction);
             if (body != null && de instanceof IShapeUIModel) {
@@ -100,8 +104,9 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addInitialState",
       description =
           "Add the initial pseudo state (filled circle) to a state machine diagram. stateName is "
-              + "the model name used to reference it in addTransition; the circle itself is drawn "
-              + "without a caption. x/y (>0) place it explicitly")
+              + "the handle used by addTransition AND the label Visual Paradigm draws under the "
+              + "circle, so use a display-friendly name like \"Start\". x/y (>0) place it "
+              + "explicitly")
   public String addInitialState(String diagramName, String stateName, int x, int y) {
     return addPseudoState(diagramName, stateName, x, y, true);
   }
@@ -109,9 +114,9 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addFinalState",
       description =
-          "Add a final state (bullseye) to a state machine diagram. stateName is the model name "
-              + "used to reference it in addTransition; the shape itself is drawn without a "
-              + "caption. x/y (>0) place it explicitly")
+          "Add a final state (bullseye) to a state machine diagram. stateName is the handle used "
+              + "by addTransition AND the label Visual Paradigm draws under the shape, so use a "
+              + "display-friendly name like \"End\". x/y (>0) place it explicitly")
   public String addFinalState(String diagramName, String stateName, int x, int y) {
     return addPseudoState(diagramName, stateName, x, y, false);
   }
@@ -154,7 +159,10 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
               transition.setName(caption);
             }
 
-            getDiagramManager().createConnector(diagram, transition, fromElement, toElement, null);
+            IDiagramElement connector =
+                getDiagramManager()
+                    .createConnector(diagram, transition, fromElement, toElement, null);
+            resetCaption(connector);
 
             String suffix = caption == null ? "" : " [" + caption + "]";
             return "Added transition '" + fromState + "' -> '" + toState + "'" + suffix;
@@ -187,15 +195,29 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
                     : getModelElementFactory().createFinalState2();
             IDiagramElement de = addToDiagram(diagram, state, stateName);
             applyBounds(de, x, y, PSEUDO_SIZE, PSEUDO_SIZE);
-            // The circle carries no caption; the model name stays as the handle for addTransition.
-            if (de instanceof IShapeUIModel) {
-              ((IShapeUIModel) de).setCustomText("");
-            }
+            // resetCaption() renders the model name, so blank the caption afterwards: the circle
+            // carries no label while the model name stays as the handle for addTransition.
+            // Visual Paradigm always draws the model name under the circle, so pick a stateName
+            // that reads well on the diagram (e.g. "Start"/"End"); it is also the handle used by
+            // addTransition.
+            resetCaption(de);
 
             return "Added " + kind + " '" + stateName + "' to diagram '" + diagramName + "'";
           });
     } catch (Exception e) {
       return "Error adding " + kind + ": " + e.getMessage();
+    }
+  }
+
+  /**
+   * Force Visual Paradigm to render the caption of a freshly created shape or connector. Without
+   * this the state boxes and transition arrows come out blank.
+   *
+   * @param de the diagram element
+   */
+  private void resetCaption(IDiagramElement de) {
+    if (de instanceof IBaseDiagramElement) {
+      ((IBaseDiagramElement) de).resetCaption();
     }
   }
 
