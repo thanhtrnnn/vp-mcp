@@ -20,6 +20,7 @@ import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.diagram.connector.IAssociationUIModel;
 import com.vp.plugin.diagram.connector.IHasRoleConnectorUIModel;
 import com.vp.plugin.diagram.format.IShapeUIModelFillColor;
+import com.vp.plugin.diagram.shape.IClassUIModel;
 import com.vp.plugin.model.IAssociation;
 import com.vp.plugin.model.IAssociationEnd;
 import com.vp.plugin.model.IAttribute;
@@ -249,13 +250,38 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addOperation", description = "Add an operation/method to a class")
+  @Tool(
+      name = "addOperation",
+      description =
+          "Add an operation/method to a class. params is 'name: Type, ...'. visibility is"
+              + " public/private/protected/package (empty = VP default). When diagramName is"
+              + " given, only the class shown on that diagram is used (no project-wide fallback)")
   public String addOperation(
-      String className, String operationName, String returnType, String params) {
+      String className,
+      String operationName,
+      String returnType,
+      String params,
+      String visibility,
+      boolean isAbstract,
+      String diagramName) {
     try {
       return runOnEdt(
           () -> {
-            IClass cls = findModelElement(className, IClass.class, null);
+            IClass cls;
+            if (isSet(diagramName)) {
+              IClassDiagramUIModel diagram =
+                  (IClassDiagramUIModel)
+                      DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+              if (diagram == null) {
+                return "Diagram not found: " + diagramName;
+              }
+              cls = findClassOnDiagram(diagram, className);
+              if (cls == null) {
+                return "Class not on diagram: " + className;
+              }
+            } else {
+              cls = findModelElement(className, IClass.class, null);
+            }
             if (cls == null) {
               return "Class not found: " + className;
             }
@@ -293,6 +319,12 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                   op.addParameter(paramElem);
                 }
               }
+            }
+            if (isSet(visibility)) {
+              op.setVisibility(visibility.trim());
+            }
+            if (isAbstract) {
+              op.setAbstract(true);
             }
             cls.addOperation(op);
 
@@ -899,8 +931,12 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addStereotypeToClasses",
       description =
           "Apply a stereotype (e.g. 'ORM Persistable') to classes on a diagram. classNames is a"
-              + " comma-separated list, or '*' for every class on the diagram")
-  public String addStereotypeToClasses(String diagramName, String classNames, String stereotype) {
+              + " comma-separated list, or '*' for every class on the diagram. robustnessIcon"
+              + " true/false sets whether boundary/control/entity classes are drawn as robustness"
+              + " icons on this diagram (false keeps the class box with its members); empty leaves"
+              + " it unchanged")
+  public String addStereotypeToClasses(
+      String diagramName, String classNames, String stereotype, String robustnessIcon) {
     try {
       return runOnEdt(
           () -> {
@@ -922,6 +958,11 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 }
               }
             }
+            if (isSet(robustnessIcon)
+                && !"true".equalsIgnoreCase(robustnessIcon.trim())
+                && !"false".equalsIgnoreCase(robustnessIcon.trim())) {
+              return "robustnessIcon must be true or false: " + robustnessIcon;
+            }
             List<String> applied = new ArrayList<>();
             Set<String> seen = new LinkedHashSet<>();
             for (IClass cls : ClassDiagramUtils.getClassesInDiagram(diagram)) {
@@ -933,6 +974,16 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 cls.addStereotype(stereotype.trim());
               }
               applied.add(cls.getName());
+            }
+            if (isSet(robustnessIcon)) {
+              boolean icon = Boolean.parseBoolean(robustnessIcon.trim());
+              for (IDiagramElement de : getDiagramElementsList(diagram)) {
+                if (de instanceof IClassUIModel
+                    && de.getModelElement() instanceof IClass
+                    && seen.contains(de.getModelElement().getName())) {
+                  ((IClassUIModel) de).setDisplayAsRobustnessAnalysisIcon(icon);
+                }
+              }
             }
             wanted.removeAll(seen);
             String result =
@@ -1004,8 +1055,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "setAssociationProperties",
       description =
           "Update an existing association/aggregation/composition between two classes (either"
-              + " direction). fromMultiplicity/fromRole apply to the end attached to fromClass."
-              + " Empty values leave the property unchanged; role '-' clears the role name")
+              + " direction). fromMultiplicity/fromRole/fromNavigable apply to the end attached to"
+              + " fromClass. Empty values leave the property unchanged; role '-' clears the role"
+              + " name; navigable is true, false or unspecified")
   public String setAssociationProperties(
       String diagramName,
       String fromClass,
@@ -1014,7 +1066,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
       String fromMultiplicity,
       String toMultiplicity,
       String fromRole,
-      String toRole) {
+      String toRole,
+      String fromNavigable,
+      String toNavigable) {
     try {
       return runOnEdt(
           () -> {
@@ -1058,6 +1112,17 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             if (isSet(toRole)) {
               toEnd.setName("-".equals(toRole.trim()) ? "" : toRole.trim());
+            }
+            for (String nav : new String[] {fromNavigable, toNavigable}) {
+              if (isSet(nav) && navigableCode(nav) == null) {
+                return "navigable must be true, false or unspecified: " + nav;
+              }
+            }
+            if (isSet(fromNavigable)) {
+              fromEnd.setNavigable(navigableCode(fromNavigable));
+            }
+            if (isSet(toNavigable)) {
+              toEnd.setNavigable(navigableCode(toNavigable));
             }
             return "Updated association '"
                 + fromClass
@@ -1119,6 +1184,26 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                     an.put("type", a.getTypeAsString());
                     an.put("visibility", a.getVisibility());
                   }
+                }
+                ArrayNode ops = c.putArray("operations");
+                Iterator<?> oit = cls.operationIterator();
+                while (oit.hasNext()) {
+                  Object o = oit.next();
+                  if (o instanceof IOperation) {
+                    IOperation op = (IOperation) o;
+                    ObjectNode on = ops.addObject();
+                    on.put("name", op.getName());
+                    on.put("returnType", op.getReturnTypeAsString());
+                    on.put("visibility", op.getVisibility());
+                    on.put("abstract", op.isAbstract());
+                    ArrayNode ps = on.putArray("params");
+                    for (IParameter p : op.toParameterArray()) {
+                      ps.add(p.getName() + ": " + p.getTypeAsString());
+                    }
+                  }
+                }
+                if (de instanceof IClassUIModel) {
+                  c.put("robustnessIcon", ((IClassUIModel) de).isDisplayAsRobustnessAnalysisIcon());
                 }
                 c.putArray("bounds")
                     .add(de.getX())
@@ -1595,6 +1680,25 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     node.put("multiplicity", end.getMultiplicity());
     node.put("aggregation", end.getAggregationKind());
     node.put("role", end.getName());
+    int nav = end.getNavigable();
+    node.put(
+        "navigable",
+        nav == IAssociationEnd.NAVIGABLE_NAVIGABLE
+            ? "true"
+            : nav == IAssociationEnd.NAVIGABLE_NON_NAVIGABLE ? "false" : "unspecified");
+  }
+
+  private static Integer navigableCode(String value) {
+    switch (value.trim().toLowerCase()) {
+      case "true":
+        return IAssociationEnd.NAVIGABLE_NAVIGABLE;
+      case "false":
+        return IAssociationEnd.NAVIGABLE_NON_NAVIGABLE;
+      case "unspecified":
+        return IAssociationEnd.NAVIGABLE_UNSPECIFIED;
+      default:
+        return null;
+    }
   }
 
   private IClass findClassOnDiagram(IDiagramUIModel diagram, String className) {

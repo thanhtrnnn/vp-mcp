@@ -81,9 +81,21 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   `removeRelationship` (deletes the model element), `setAssociationProperties` (edits
   association/aggregation/composition in either direction; role `-` clears a role name; VP's ORM
   support may auto-name roles of associations created between persistable classes).
+- **Design-diagram helpers (server version 1.29.0)**: `addOperation` takes `visibility`,
+  `isAbstract` and a `diagramName` that restricts the class lookup to that diagram (same rule as
+  `addAttribute`, so classes with the same name in other packages are left alone).
+  `setAssociationProperties` takes `fromNavigable`/`toNavigable` (`true`, `false` or
+  `unspecified`). New association ends are navigable on both sides and VP hides the arrows of a
+  two-way association, so for a one-way arrow set the source end to `unspecified` and the target
+  end to `true`. `addStereotypeToClasses` takes `robustnessIcon`: `false` keeps
+  `boundary`/`control`/`entity` classes drawn as class boxes with their members instead of
+  robustness icons.
+- **Axis-aligned lines**: when two shapes' projections overlap, VP does not always draw the line
+  through the middle of the overlap; it can use a shape's center clamped into the overlap. Layout
+  checks should test every candidate position.
 - **Audit/export**: `getRelationshipDetails` returns JSON (classes with abstract flag, stereotypes,
-  owner, attributes, bounds; relationships with both ends' multiplicity, aggregation kind, role,
-  connector points and label rectangles). `exportDiagramImage` writes a PNG with an empty
+  owner, attributes, operations, robustness-icon flag, bounds; relationships with both ends'
+  multiplicity, aggregation kind, role, navigability, connector points and label rectangles). `exportDiagramImage` writes a PNG with an empty
   watermark.
 - **Project**: `newProject`, `openProject` (save first: VP may ask about unsaved changes),
   `saveProject`, `saveProjectAs` (never overwrites an existing file) and `getProjectInfo` (name
