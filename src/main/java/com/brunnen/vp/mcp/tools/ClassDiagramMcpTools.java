@@ -34,6 +34,7 @@ import com.vp.plugin.model.IParameter;
 import com.vp.plugin.model.IProject;
 import com.vp.plugin.model.IRealization;
 import com.vp.plugin.model.IRelationship;
+import com.vp.plugin.model.IUsage;
 import java.awt.Color;
 import java.awt.Point;
 import java.io.File;
@@ -155,9 +156,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                     IDiagramElement ifaceDe = findDiagramElementByName(diagram, trimmed);
                     if (ifaceDe != null) {
                       IRealization real = getModelElementFactory().createRealization();
-                      real.setFrom(cls);
-                      real.setTo(iface);
-                      connectCentered(diagram, real, classDe, ifaceDe);
+                      real.setFrom(iface); // VP: supplier -> client
+                      real.setTo(cls);
+                      connectCentered(diagram, real, ifaceDe, classDe);
                     }
                   }
                 }
@@ -563,7 +564,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
   @Tool(
       name = "addRealization",
-      description = "Add a realization (implements) relationship between classes")
+      description =
+          "Add a realization (implements) relationship: fromClass implements the interface"
+              + " toClass (triangle on toClass)")
   public String addRealization(String diagramName, String fromClass, String toClass) {
     try {
       return runOnEdt(
@@ -586,9 +589,11 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IRealization real = getModelElementFactory().createRealization();
-            real.setFrom(source);
-            real.setTo(target);
-            connectCentered(diagram, real, fromElement, toElement);
+            // VP stores a realization supplier -> client (like a generalization); from = client
+            // would draw the triangle on the implementing class.
+            real.setFrom(target);
+            real.setTo(source);
+            connectCentered(diagram, real, toElement, fromElement);
 
             return "Added realization from '" + fromClass + "' implements '" + toClass + "'";
           });
@@ -658,6 +663,161 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
           });
     } catch (Exception e) {
       return "Error adding package: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addPackageShape",
+      description =
+          "Add a package frame at the given bounds. parentPackage (a package already on the"
+              + " diagram) nests it in that package, in the model and on the diagram; otherwise"
+              + " modelPackage (optional) is the model package that owns it. backgroundColor is"
+              + " '#RRGGBB' or empty")
+  public String addPackageShape(
+      String diagramName,
+      String packageName,
+      String parentPackage,
+      String modelPackage,
+      int x,
+      int y,
+      int width,
+      int height,
+      String backgroundColor) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+            if (!isSet(packageName)) {
+              return "packageName is required";
+            }
+            if (findPackageShape(diagram, packageName.trim()) != null) {
+              return "Package already on diagram: " + packageName;
+            }
+            IShapeUIModel parentShape = null;
+            if (isSet(parentPackage)) {
+              parentShape = findPackageShape(diagram, parentPackage.trim());
+              if (parentShape == null) {
+                return "Parent package not on diagram: " + parentPackage;
+              }
+            }
+            IPackage pkg = getModelElementFactory().createPackage();
+            pkg.setName(packageName.trim());
+            if (parentShape != null) {
+              ((IPackage) parentShape.getModelElement()).addChild(pkg);
+            } else if (isSet(modelPackage)) {
+              findOrCreateModelPackage(modelPackage.trim()).addChild(pkg);
+            }
+            IDiagramElement de = addToDiagram(diagram, pkg, packageName.trim());
+            if (parentShape != null && de instanceof IShapeUIModel) {
+              parentShape.addChild((IShapeUIModel) de);
+            }
+            if (width > 0 && height > 0) {
+              de.setBounds(x, y, width, height);
+            }
+            if (isSet(backgroundColor) && de instanceof IShapeUIModel) {
+              ((IShapeUIModel) de)
+                  .getFillColor()
+                  .setColor1(Color.decode(backgroundColor.trim()), true);
+            }
+            return "Added package '"
+                + packageName.trim()
+                + "'"
+                + (parentShape != null ? " in '" + parentPackage.trim() + "'" : "")
+                + " at "
+                + de.getX()
+                + ","
+                + de.getY()
+                + " "
+                + de.getWidth()
+                + "x"
+                + de.getHeight();
+          });
+    } catch (Exception e) {
+      return "Error adding package: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "moveIntoPackage",
+      description =
+          "Put a class (or package) shown on a diagram into a package frame on the same diagram:"
+              + " the package becomes its owner in the model and its container on the diagram."
+              + " Bounds are kept")
+  public String moveIntoPackage(String diagramName, String elementName, String packageName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+            IShapeUIModel pkgShape = findPackageShape(diagram, packageName);
+            if (pkgShape == null) {
+              return "Package not on diagram: " + packageName;
+            }
+            IDiagramElement de = findDiagramElementByName(diagram, elementName);
+            if (!(de instanceof IShapeUIModel) || de.getModelElement() == null) {
+              return "Element not on diagram: " + elementName;
+            }
+            int x = de.getX();
+            int y = de.getY();
+            int w = de.getWidth();
+            int h = de.getHeight();
+            ((IPackage) pkgShape.getModelElement()).addChild(de.getModelElement());
+            pkgShape.addChild((IShapeUIModel) de);
+            de.setBounds(x, y, w, h);
+            ((IShapeUIModel) de).bringToFront(); // a frame created later would hide it
+            return "Moved '" + elementName + "' into package '" + packageName + "'";
+          });
+    } catch (Exception e) {
+      return "Error moving into package: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addUsage",
+      description =
+          "Add a usage dependency (dashed arrow labelled <<use>>) from one class or package to"
+              + " another on a class diagram")
+  public String addUsage(String diagramName, String fromName, String toName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return "Diagram not found: " + diagramName;
+            }
+            IDiagramElement from = findDiagramElementByName(diagram, fromName);
+            IDiagramElement to = findDiagramElementByName(diagram, toName);
+            if (from == null || to == null) {
+              return "Element not on diagram: " + (from == null ? fromName : toName);
+            }
+            IUsage usage = getModelElementFactory().createUsage();
+            usage.setFrom(from.getModelElement());
+            usage.setTo(to.getModelElement());
+            usage.addStereotype("use"); // VP draws a usage as a bare dashed arrow otherwise
+            Point[] points = {center(from), center(to)};
+            IDiagramElement connector =
+                getDiagramManager().createConnector(diagram, usage, from, to, points);
+            if (connector instanceof IConnectorUIModel) {
+              centerConnector((IConnectorUIModel) connector);
+            }
+            if (connector != null) {
+              connector.resetCaption(); // fresh connectors render blank until the caption is reset
+            }
+            return "Added usage from '" + fromName + "' to '" + toName + "'";
+          });
+    } catch (Exception e) {
+      return "Error adding usage: " + e.getMessage();
     }
   }
 
@@ -1771,6 +1931,17 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     IAssociationEnd b = (IAssociationEnd) assoc.getToEnd();
     return (a != null && kind.equalsIgnoreCase(a.getAggregationKind()))
         || (b != null && kind.equalsIgnoreCase(b.getAggregationKind()));
+  }
+
+  private IShapeUIModel findPackageShape(IDiagramUIModel diagram, String packageName) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IShapeUIModel
+          && de.getModelElement() instanceof IPackage
+          && packageName.equals(de.getModelElement().getName())) {
+        return (IShapeUIModel) de;
+      }
+    }
+    return null;
   }
 
   private IPackage findOrCreateModelPackage(String packageName) {

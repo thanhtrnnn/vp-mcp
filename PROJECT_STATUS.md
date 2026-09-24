@@ -13,13 +13,13 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (57 tools total)
+### MCP Tool Services (60 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
 | Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts | 5 |
 | Use Case | create, addActor, addUseCase, addRelationship, addSystemBoundary, generateReport | 6 |
-| Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport, setElementBounds, addStereotypeToClasses, removeRelationship, setAssociationProperties, getRelationshipDetails, rerouteConnectors, layoutConnectorLabels, exportDiagramImage | 22 |
+| Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport, setElementBounds, addStereotypeToClasses, removeRelationship, setAssociationProperties, getRelationshipDetails, rerouteConnectors, layoutConnectorLabels, exportDiagramImage, addPackageShape, moveIntoPackage, addUsage | 25 |
 | Project | newProject, openProject, saveProject, saveProjectAs, getProjectInfo | 5 |
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
@@ -90,6 +90,15 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   end to `true`. `addStereotypeToClasses` takes `robustnessIcon`: `false` keeps
   `boundary`/`control`/`entity` classes drawn as class boxes with their members instead of
   robustness icons.
+- **Layered (MVC) diagrams, server version 1.30.0**: `addPackageShape` draws a package frame at
+  given bounds, optionally nested in another frame (`parentPackage`, model and diagram) or owned
+  by a model package. `moveIntoPackage` makes a package the owner of a class in the model and its
+  container on the diagram, and brings the class to front (a frame created later would hide it).
+  `addUsage` draws a `<<use>>` dependency between classes or packages; VP stores the keyword as a
+  stereotype and only renders it after `resetCaption()` on the new connector.
+- **Realization direction**: VP stores a realization supplier -> client, like a generalization.
+  `addRealization(fromClass=impl, toClass=interface)` and `addClass(implementsInterfaces=...)`
+  therefore store from = interface, so the hollow triangle ends on the interface.
 - **Axis-aligned lines**: when two shapes' projections overlap, VP does not always draw the line
   through the middle of the overlap; it can use a shape's center clamped into the overlap. Layout
   checks should test every candidate position.
