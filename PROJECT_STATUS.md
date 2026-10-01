@@ -55,6 +55,13 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Captions need `resetCaption()`**: freshly created state shapes and transition connectors come
   out blank until `IBaseDiagramElement.resetCaption()` is called (same quirk as sequence messages).
   It re-renders from the model name, so custom entry/do/exit text is applied *after* the reset.
+- **Use case / sequence captions (1.31.1-uc)**: `addActor` and `addSystemBoundary` now call
+  `resetCaption()` too (actor and system names were invisible in VP 18.1). An actor's name is a
+  detached label, so `setElementBounds` resets the caption after moving an actor. Actor lifelines in
+  `addLifeline` get a real `IActor` base classifier instead of a transparent white-text box, so the
+  participant is visible (VP still draws it as a box, not a stick figure).
+- **Build with JDK 26**: SpotBugs 4.7 cannot read class files of major version 70 and PMD crashes
+  while parsing, so `./run install` needs `-Dspotbugs.skip=true -Dpmd.skip=true -Dcpd.skip=true`.
 - **Layout**: `autoLayoutDiagram` uses a hierarchical LeftToRight layout for state diagrams, so the
   initial state ends up on the left and the final state on the right. Explicit `x`/`y` on `addState`
   is usually better for a readable flow — long transition labels collide when states sit close.

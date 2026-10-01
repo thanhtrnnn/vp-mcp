@@ -1071,6 +1071,11 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             } else {
               de.setBounds(x, y, width, height);
             }
+            if (de.getModelElement() instanceof com.vp.plugin.model.IActor
+                && de instanceof com.vp.plugin.diagram.IBaseDiagramElement) {
+              // An actor's name is a detached label that stays behind when the figure moves.
+              ((com.vp.plugin.diagram.IBaseDiagramElement) de).resetCaption();
+            }
             return "Bounds of '"
                 + elementName
                 + "': "

@@ -10,6 +10,7 @@ import com.vp.plugin.diagram.IInteractionDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.diagram.shape.IActivationUIModel;
 import com.vp.plugin.model.IActivation;
+import com.vp.plugin.model.IActor;
 import com.vp.plugin.model.IClass;
 import com.vp.plugin.model.ICombinedFragment;
 import com.vp.plugin.model.IInteractionConstraint;
@@ -94,18 +95,22 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
             int participantX = LIFELINE_X0 + index * LIFELINE_DX;
             // Every participant is a real lifeline so its activation bars and message arrows anchor
-            // correctly. Boundary/entity/control carry their type stereotype for the head icon;
-            // actors are left as a plain box (the API renders actor classifiers as boxes anyway)
-            // and
-            // can be turned into a stick figure by hand in VP -- the lifeline, its activations and
-            // the arrows are all preserved through that change.
+            // correctly. Boundary/entity/control carry their type stereotype for the head icon; an
+            // actor lifeline gets a real IActor as its base classifier so VP draws the stick
+            // figure.
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
-            IClass baseClass = getModelElementFactory().createClass();
-            baseClass.setName(classifierName);
-            if (!type.isEmpty() && !isActor) {
-              baseClass.addStereotype(type);
+            if (isActor) {
+              IActor baseActor = getModelElementFactory().createActor();
+              baseActor.setName(classifierName);
+              lifeline.setBaseClassifier(baseActor);
+            } else {
+              IClass baseClass = getModelElementFactory().createClass();
+              baseClass.setName(classifierName);
+              if (!type.isEmpty()) {
+                baseClass.addStereotype(type);
+              }
+              lifeline.setBaseClassifier(baseClass);
             }
-            lifeline.setBaseClassifier(baseClass);
             addToDiagram(diagram, lifeline, lifelineName);
             IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
             if (headShape != null) {
@@ -113,20 +118,6 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               if (headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
                 ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
                     .setShowClassifier(false);
-              }
-              if (isActor) {
-                // Make the box invisible (transparent fill + border, white text) so it can be
-                // replaced/overlaid with a stick figure while keeping the lifeline + messages.
-                if (headShape.getFillColor() != null) {
-                  headShape.getFillColor().setTransparency(100, true);
-                }
-                if (headShape.getLineModel() != null) {
-                  headShape.getLineModel().setTransparency(100, true);
-                }
-                com.vp.plugin.diagram.format.IElementFont font = headShape.getElementFont();
-                if (font != null) {
-                  font.setColor(java.awt.Color.WHITE);
-                }
               }
             }
             if (alias != null && !alias.trim().isEmpty()) {

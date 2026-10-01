@@ -3,6 +3,7 @@ package com.brunnen.vp.mcp.tools;
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.IBaseDiagramElement;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -57,7 +58,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
 
             IActor actor = getModelElementFactory().createActor();
-            addToDiagram(diagram, actor, actorName);
+            resetCaption(addToDiagram(diagram, actor, actorName));
 
             return "Added actor '" + actorName + "' to diagram '" + diagramName + "'";
           });
@@ -220,6 +221,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               shape.setBounds(
                   minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad);
               shape.sendToBack();
+              resetCaption(shape);
             }
 
             return "Added system boundary '"
@@ -232,6 +234,13 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
           });
     } catch (Exception e) {
       return "Error adding system boundary: " + e.getMessage();
+    }
+  }
+
+  /** Freshly created actor and system shapes render without a name until the caption is reset. */
+  private static void resetCaption(IDiagramElement de) {
+    if (de instanceof IBaseDiagramElement) {
+      ((IBaseDiagramElement) de).resetCaption();
     }
   }
 
