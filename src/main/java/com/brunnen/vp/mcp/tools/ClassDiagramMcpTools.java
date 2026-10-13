@@ -733,9 +733,17 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return diagramNotFound(diagramName);
             }
 
+            if (!isSet(interfaceName)) {
+              return "Interface name must not be empty";
+            }
             IClass iface = getModelElementFactory().createClass();
             iface.addStereotype("Interface");
-            fitShape(addToDiagram(diagram, iface, interfaceName));
+            IDiagramElement ifaceDe = addToDiagram(diagram, iface, interfaceName.trim());
+            fitShape(ifaceDe);
+            // the first free slot of the class rows, like a class (the layer zone of the name
+            // would put it 1000 px away from the classes that implement it)
+            int[] spot = classSlot(diagram, ifaceDe, 50, ifaceDe.getY());
+            ifaceDe.setBounds(spot[0], spot[1], ifaceDe.getWidth(), ifaceDe.getHeight());
 
             return "Added interface '" + interfaceName + "' to diagram '" + diagramName + "'";
           });

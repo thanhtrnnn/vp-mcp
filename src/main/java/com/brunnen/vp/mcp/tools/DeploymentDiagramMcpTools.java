@@ -245,7 +245,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     int[] spot =
         com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
-            DiagramUtils.labelSpotsAlong(pts, w, h), w, h, obstacles);
+            DiagramUtils.labelSpotsBeside(pts, w, h), w, h, obstacles);
     cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, h);
   }
 

@@ -182,4 +182,27 @@ public class DiagramUtilsTest {
     assertTrue(DiagramUtils.matchesTypeFilter("ObjectDiagram", "ObjectDiagram"));
     assertTrue(DiagramUtils.diagramTypesFor("bogus").isEmpty());
   }
+
+  @Test
+  public void labelSpotsBesideStartAboveAShallowLineAndRightOfASteepOne() {
+    java.util.List<int[]> flat =
+        DiagramUtils.labelSpotsBeside(new int[][] {{100, 100}, {300, 100}}, 80, 14);
+    assertTrue("above the line, centered", flat.get(0)[1] + 14 <= 100 && flat.get(0)[0] == 160);
+    java.util.List<int[]> steep =
+        DiagramUtils.labelSpotsBeside(new int[][] {{100, 100}, {100, 300}}, 80, 14);
+    assertTrue("right of the line", steep.get(0)[0] > 100);
+  }
+
+  @Test
+  public void routeBendsKeepsBendsOutOfForbiddenBands() {
+    int[] a = {40, 100, 100, 40};
+    int[] b = {400, 100, 100, 40};
+    java.util.List<int[]> obstacles = new java.util.ArrayList<>();
+    obstacles.add(new int[] {200, 90, 100, 60}); // between the two: the straight line is blocked
+    java.util.List<int[]> forbidden = new java.util.ArrayList<>();
+    forbidden.add(new int[] {0, 0, 1000, 126}); // everything above y = 126
+    int[][] bends = DiagramUtils.routeBends(a, b, 0, 1, 80, obstacles, forbidden);
+    assertEquals(1, bends.length);
+    assertTrue("the bend goes below, not into the band", bends[0][1] > 126);
+  }
 }

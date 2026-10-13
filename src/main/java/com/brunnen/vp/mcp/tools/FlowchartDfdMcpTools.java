@@ -1,6 +1,7 @@
 package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
+import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdNotation;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdRole;
@@ -1266,38 +1267,11 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     }
     int w = caption.getWidth();
     int h = caption.getHeight() > 0 ? caption.getHeight() : 14;
-    // the longest leg of the visible line
-    int best = 0;
-    double longest = -1;
-    for (int i = 0; i + 1 < points.length; i++) {
-      double len = points[i].distance(points[i + 1]);
-      if (len > longest) {
-        longest = len;
-        best = i;
-      }
+    int[][] pts = new int[points.length][];
+    for (int i = 0; i < points.length; i++) {
+      pts[i] = new int[] {points[i].x, points[i].y};
     }
-    Point a = points[best];
-    Point b = points[best + 1];
-    double dx = b.x - a.x;
-    double dy = b.y - a.y;
-    double len = Math.max(1, Math.hypot(dx, dy));
-    boolean shallow = Math.abs(dx) >= Math.abs(dy);
-    // the normal pointing up (shallow line) or right (steep line) first
-    double nx = -dy / len;
-    double ny = dx / len;
-    if (shallow ? ny > 0 : nx < 0) {
-      nx = -nx;
-      ny = -ny;
-    }
-    double clearance = shallow ? h / 2.0 + 6 : w / 2.0 + 8;
-    List<int[]> candidates = new ArrayList<>();
-    for (double t : new double[] {0.5, 0.35, 0.65, 0.2, 0.8}) {
-      for (double side : new double[] {1, -1}) {
-        double cx = a.x + dx * t + nx * clearance * side;
-        double cy = a.y + dy * t + ny * clearance * side;
-        candidates.add(new int[] {(int) Math.round(cx - w / 2.0), (int) Math.round(cy - h / 2.0)});
-      }
-    }
+    List<int[]> candidates = DiagramUtils.labelSpotsBeside(pts, w, h);
     int[] spot =
         com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
             candidates, w, h, labelObstacles(diagram, flow));

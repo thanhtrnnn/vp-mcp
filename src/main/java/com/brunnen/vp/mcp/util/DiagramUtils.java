@@ -534,6 +534,51 @@ public final class DiagramUtils {
     return result;
   }
 
+  /**
+   * Candidate top-left corners for a connector label beside its line, best first: on the longest
+   * leg, above a horizontal or shallow one and to the right of a steep one (a label centered on the
+   * line is struck through by it), in the middle, then towards either end, then on the other side.
+   *
+   * @param points the connector points {x, y}
+   * @param w label width
+   * @param h label height
+   * @return candidate corners, best first
+   */
+  public static List<int[]> labelSpotsBeside(int[][] points, int w, int h) {
+    int best = 0;
+    double longest = -1;
+    for (int i = 0; i + 1 < points.length; i++) {
+      double len = Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+      if (len > longest) {
+        longest = len;
+        best = i;
+      }
+    }
+    int[] a = points[best];
+    int[] b = points[Math.min(best + 1, points.length - 1)];
+    double dx = b[0] - a[0];
+    double dy = b[1] - a[1];
+    double len = Math.max(1, Math.hypot(dx, dy));
+    boolean shallow = Math.abs(dx) >= Math.abs(dy);
+    // the normal pointing up (shallow line) or right (steep line) first
+    double nx = -dy / len;
+    double ny = dx / len;
+    if (shallow ? ny > 0 : nx < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    double clearance = shallow ? h / 2.0 + 6 : w / 2.0 + 8;
+    List<int[]> candidates = new ArrayList<>();
+    for (double t : new double[] {0.5, 0.35, 0.65, 0.2, 0.8}) {
+      for (double side : new double[] {1, -1}) {
+        double cx = a[0] + dx * t + nx * clearance * side;
+        double cy = a[1] + dy * t + ny * clearance * side;
+        candidates.add(new int[] {(int) Math.round(cx - w / 2.0), (int) Math.round(cy - h / 2.0)});
+      }
+    }
+    return candidates;
+  }
+
   /** Smallest coordinate a bend point may have (VP drops points outside the canvas). */
   private static final int MIN_COORD = 5;
 

@@ -117,12 +117,16 @@ PNGs, `getDiagramGeometry` dumps). What changed and the quirks behind it:
   of the lines between them.
 
 Remaining limitations: an operand guard of a combined fragment is drawn by VP at the operand's
-top-left (no caption to move), so it can cross the first lifeline's bar; VP draws no X for the
-destroy message of an API-created lifeline; BPMN boundary events, annotations, call activities and
-loop markers, and UML composite states / choice / history are not available; the sequence actor
-still has a box head; the DFD and BPMN layouts are greedy (explicit x/y remain best for large
-diagrams); `rerouteConnectors` on a diagram family without its own routing is straight
-center-to-center.
+top-left (operand shapes have no caption to move; probed with `getDiagramGeometry`), so it can
+cross the first lifeline's bar; VP draws no X for the destroy message of an API-created lifeline
+(`setStopped(true)` and a reopen change nothing: the lifeline just ends at the arrow); not
+available: BPMN boundary events, text annotations, call activities and loop markers, UML composite
+states / choice / history / internal transitions, activity send-signal / accept-event actions and
+pins, sequence found/lost messages; the sequence actor still has a box head; the DFD, BPMN and
+communication layouts are greedy (explicit x/y remain best for large diagrams);
+`rerouteConnectors` on a diagram family without its own routing is straight center-to-center; the
+audit's "roof" bend of a cross-lane decision flow did not reproduce after the placement changes
+and has no dedicated fix; `removeRelationship` does not list Usage.
 
 ### Round-2 audit fixes (server version 1.32.2.x)
 

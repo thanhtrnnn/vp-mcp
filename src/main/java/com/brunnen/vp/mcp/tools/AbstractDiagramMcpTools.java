@@ -55,7 +55,7 @@ public abstract class AbstractDiagramMcpTools {
       new java.util.concurrent.ConcurrentHashMap<>();
 
   protected AbstractDiagramMcpTools() {
-    FAMILIES.putIfAbsent(getClass(), this);
+    FAMILIES.put(getClass(), this); // the newest instance is the one the server registers
   }
 
   /**
@@ -650,13 +650,16 @@ public abstract class AbstractDiagramMcpTools {
     if (duplicateConnector(from, to, model) != null) {
       // the model was never placed anywhere: no orphan is left behind
       String label = connectorLabel(model);
+      // name the ends in the direction the arrow is drawn (VP stores a generalization, extend or
+      // realization the other way round)
+      boolean reversed = isStoredReversed(model);
       model.delete();
       throw new IllegalStateException(
           label
               + " from '"
-              + shapeName(from)
+              + shapeName(reversed ? to : from)
               + "' to '"
-              + shapeName(to)
+              + shapeName(reversed ? from : to)
               + "' already exists on diagram '"
               + diagram.getName()
               + "'");
