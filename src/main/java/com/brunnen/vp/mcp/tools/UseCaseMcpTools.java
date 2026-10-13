@@ -9,6 +9,7 @@ import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.diagram.IUseCaseDiagramUIModel;
+import com.vp.plugin.diagram.shape.IUseCaseUIModel;
 import com.vp.plugin.model.IActor;
 import com.vp.plugin.model.IAssociation;
 import com.vp.plugin.model.IExtend;
@@ -21,6 +22,7 @@ import com.vp.plugin.model.IUseCase;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import javax.swing.SwingUtilities;
 
 /** MCP tools for Visual Paradigm Use Case diagram operations. */
 public class UseCaseMcpTools extends AbstractDiagramMcpTools {
@@ -32,23 +34,29 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            requireProject();
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_USE_CASE_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_USE_CASE_DIAGRAM, diagramName);
             diagram.setAutoFitShapesSize(true);
             useCenterConnectionPoints(diagram);
+            // The course notation never shows the "extension points" compartment of an extended
+            // use case (VP adds one with a default "ExtensionPoint" entry for every <<extend>>).
+            ((IUseCaseDiagramUIModel) diagram).setShowUseCaseExtensionPoint(false);
             dm.openDiagram(diagram);
-            return "Created use case diagram: " + diagramName;
+            return "Created use case diagram: " + diagram.getName();
           });
     } catch (Exception e) {
       return "Error creating use case diagram: " + e.getMessage();
     }
   }
 
-  @Tool(name = "addActor", description = "Add an actor to a use case diagram")
-  public String addActor(String actorName, String diagramName) {
+  @Tool(
+      name = "addActor",
+      description =
+          "Add an actor to a use case diagram. x/y (>0) place it explicitly (e.g. an abstract"
+              + " parent actor above its children); otherwise it goes below the lowest actor of"
+              + " the actor column on the left, its name clear of the next figure")
+  public String addActor(String actorName, String diagramName, int x, int y) {
     try {
       return runOnEdt(
           () -> {
@@ -76,13 +84,17 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
             IDiagramElement de = addToDiagram(diagram, actor, name);
             fitShape(de);
-            de.resetCaption();
+            placeInColumn(diagram, de, ACTOR_COLUMN_X, ACTOR_GAP, x, y);
+            de.resetCaption(); // the name is a detached label laid out at the final bounds
 
             return "Added actor '"
                 + name
                 + "' to diagram '"
                 + diagramName
-                + "'"
+                + "' at "
+                + de.getX()
+                + ","
+                + de.getY()
                 + (reused ? " (existing actor of the project)" : "");
           });
     } catch (Exception e) {
@@ -90,8 +102,12 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addUseCase", description = "Add a use case to a use case diagram")
-  public String addUseCase(String useCaseName, String diagramName) {
+  @Tool(
+      name = "addUseCase",
+      description =
+          "Add a use case to a use case diagram. x/y (>0) place it explicitly; otherwise it goes"
+              + " below the lowest use case of the use case column")
+  public String addUseCase(String useCaseName, String diagramName, int x, int y) {
     try {
       return runOnEdt(
           () -> {
@@ -116,14 +132,21 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               nameInOwner(useCase, null, name);
             }
             IDiagramElement de = addToDiagram(diagram, useCase, name);
-            fitShape(de);
+            if (de instanceof IUseCaseUIModel) {
+              ((IUseCaseUIModel) de).setShowExtensionPoint(false);
+            }
             de.resetCaption();
+            fitShape(de);
+            placeInColumn(diagram, de, USE_CASE_COLUMN_X, USE_CASE_GAP, x, y);
 
             return "Added use case '"
                 + name
                 + "' to diagram '"
                 + diagramName
-                + "'"
+                + "' at "
+                + de.getX()
+                + ","
+                + de.getY()
                 + (reused ? " (existing use case of the project)" : "");
           });
     } catch (Exception e) {
@@ -135,8 +158,12 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       name = "addRelationship",
       description =
           "Add a relationship (Include/Extend/Generalization/Association) between elements in a"
-              + " use case diagram. For Extend, sourceName is the extending use case and"
-              + " targetName the base use case the arrow points to")
+              + " use case diagram. Include: sourceName is the base use case, targetName the"
+              + " included one. Extend: sourceName is the extending (optional) use case and"
+              + " targetName the base use case the arrow points to. Generalization: sourceName is"
+              + " the child and targetName the parent (the hollow triangle is drawn at"
+              + " targetName). A relationship already joining the pair is reported, not drawn"
+              + " twice")
   public String addRelationship(
       String diagramName, String sourceName, String targetName, String relationshipType) {
     try {
@@ -172,43 +199,136 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             if (fromElement == null || toElement == null) {
               return "Element not on diagram: " + (fromElement == null ? sourceName : targetName);
             }
-
-            IDiagramElement connector;
-            if ("Include".equalsIgnoreCase(relationshipType)) {
-              IInclude include = getModelElementFactory().createInclude();
-              include.setFrom(source);
-              include.setTo(target);
-              connector = connectCentered(diagram, include, fromElement, toElement);
-              return connected(connector, "Include", sourceName, targetName);
-            } else if ("Extend".equalsIgnoreCase(relationshipType)) {
-              // VP's IExtend runs from the extended (base) use case to the extension and draws
-              // the arrowhead and the extension points on its from end, so the base
-              // (targetName) is "from" and the extending use case (sourceName) is "to".
-              IExtend extend = getModelElementFactory().createExtend();
-              extend.setFrom(target);
-              extend.setTo(source);
-              connector = connectCentered(diagram, extend, toElement, fromElement);
-              return connected(connector, "Extend", sourceName, targetName);
-            } else if ("Generalization".equalsIgnoreCase(relationshipType)) {
-              IGeneralization gen = getModelElementFactory().createGeneralization();
-              gen.setFrom(source);
-              gen.setTo(target);
-              connector = connectCentered(diagram, gen, fromElement, toElement);
-              return connected(connector, "Generalization", sourceName, targetName);
-            } else if ("Association".equalsIgnoreCase(relationshipType)) {
-              IAssociation assoc = getModelElementFactory().createAssociation();
-              assoc.setFrom(source);
-              assoc.setTo(target);
-              connector = connectCentered(diagram, assoc, fromElement, toElement);
-              return connected(connector, "Association", sourceName, targetName);
-            } else {
+            String kind = relationshipKind(relationshipType);
+            if (kind == null) {
               return "Unknown relationship type: "
                   + relationshipType
                   + ". Use Include, Extend, Generalization, or Association.";
             }
+            if (fromElement.getId().equals(toElement.getId())) {
+              return "A " + kind + " needs two different elements (got '" + sourceName + "' twice)";
+            }
+            if (findRelationship(diagram, kind, source, target) != null) {
+              return kind
+                  + " between '"
+                  + sourceName
+                  + "' and '"
+                  + targetName
+                  + "' already exists on diagram '"
+                  + diagramName
+                  + "'";
+            }
+
+            IDiagramElement connector;
+            switch (kind) {
+              case "Include":
+                IInclude include = getModelElementFactory().createInclude();
+                include.setFrom(source);
+                include.setTo(target);
+                connector = connectCentered(diagram, include, fromElement, toElement);
+                break;
+              case "Extend":
+                // VP's IExtend runs from the extended (base) use case to the extension and draws
+                // the arrowhead on its from end, so the base (targetName) is "from" and the
+                // extending use case (sourceName) is "to".
+                IExtend extend = getModelElementFactory().createExtend();
+                extend.setFrom(target);
+                extend.setTo(source);
+                connector = connectCentered(diagram, extend, toElement, fromElement);
+                hideExtensionPoints(toElement);
+                break;
+              case "Generalization":
+                // VP stores a generalization as from = general (parent), to = specific (child)
+                // and draws the hollow triangle on the from end.
+                IGeneralization gen = getModelElementFactory().createGeneralization();
+                gen.setFrom(target);
+                gen.setTo(source);
+                connector = connectCentered(diagram, gen, toElement, fromElement);
+                break;
+              default:
+                IAssociation assoc = getModelElementFactory().createAssociation();
+                assoc.setFrom(source);
+                assoc.setTo(target);
+                connector = connectCentered(diagram, assoc, fromElement, toElement);
+                break;
+            }
+            return connected(connector, kind, sourceName, targetName);
           });
     } catch (Exception e) {
       return "Error adding relationship: " + e.getMessage();
+    }
+  }
+
+  /** Canonical relationship kind (Include, Extend, Generalization, Association), or null. */
+  private static String relationshipKind(String type) {
+    if (type == null) {
+      return null;
+    }
+    for (String kind : new String[] {"Include", "Extend", "Generalization", "Association"}) {
+      if (kind.equalsIgnoreCase(type.trim())) {
+        return kind;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The relationship of that kind already drawn between the two elements: in the requested
+   * direction for include, extend and generalization (whatever VP's storage direction), in either
+   * direction for an association.
+   */
+  private IModelElement findRelationship(
+      IDiagramUIModel diagram, String kind, IModelElement source, IModelElement target) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      IModelElement model = de.getModelElement();
+      if (!(model instanceof IRelationship)) {
+        continue;
+      }
+      IRelationship rel = (IRelationship) model;
+      boolean sameKind;
+      switch (kind) {
+        case "Include":
+          sameKind = model instanceof IInclude;
+          break;
+        case "Extend":
+          sameKind = model instanceof IExtend;
+          break;
+        case "Generalization":
+          sameKind = model instanceof IGeneralization;
+          break;
+        default:
+          sameKind = model instanceof IAssociation;
+          break;
+      }
+      if (!sameKind) {
+        continue;
+      }
+      // the source/target the caller named, i.e. the drawn direction
+      IModelElement from = isStoredReversed(model) ? rel.getTo() : rel.getFrom();
+      IModelElement to = isStoredReversed(model) ? rel.getFrom() : rel.getTo();
+      boolean forward = same(from, source) && same(to, target);
+      boolean backward = same(from, target) && same(to, source);
+      if (forward || ("Association".equals(kind) && backward)) {
+        return model;
+      }
+    }
+    return null;
+  }
+
+  private static boolean same(IModelElement a, IModelElement b) {
+    return a != null && b != null && a.getId().equals(b.getId());
+  }
+
+  /**
+   * Hide the "extension points" compartment VP adds to an extended use case and shrink the ellipse
+   * back to its name.
+   */
+  private void hideExtensionPoints(IDiagramElement useCase) {
+    if (useCase instanceof IUseCaseUIModel) {
+      ((IUseCaseUIModel) useCase).setShowExtensionPoint(false);
+      useCase.resetCaption();
+      fitShape(useCase);
+      recenterConnectorsOf(useCase);
     }
   }
 
@@ -217,7 +337,8 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       description =
           "Wrap all use cases of a use case diagram in a labeled system boundary rectangle "
               + "(the module box). Call AFTER autoLayoutDiagram so the box encloses the laid-out "
-              + "use cases; actors the box would cover are moved outside it.")
+              + "use cases; actors the box would cover are moved outside it. A diagram has one "
+              + "boundary: calling it again renames and re-sizes the existing box.")
   public String addSystemBoundary(String diagramName, String systemName) {
     try {
       return runOnEdt(
@@ -253,10 +374,34 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               return "No use cases found on diagram '" + diagramName + "' to wrap";
             }
 
-            ISystem system = getModelElementFactory().createSystem();
-            system.setName(systemName);
+            String boundaryName = systemName == null ? "" : systemName.trim();
+            if (boundaryName.isEmpty()) {
+              return "System name must not be empty";
+            }
+            // One boundary per diagram: a second call renames and re-sizes the existing one.
+            IShapeUIModel existingBox = null;
+            for (IDiagramElement de : getDiagramElementsList(diagram)) {
+              if (de.getModelElement() instanceof ISystem && de instanceof IShapeUIModel) {
+                existingBox = (IShapeUIModel) de;
+              }
+            }
+            ISystem system;
+            if (existingBox != null) {
+              system = (ISystem) existingBox.getModelElement();
+              if (!boundaryName.equals(system.getName())) {
+                system.setName(boundaryName);
+              }
+            } else {
+              system = findRootElement(boundaryName, ISystem.class);
+              if (system == null) {
+                system = getModelElementFactory().createSystem();
+                nameInOwner(system, null, boundaryName);
+              }
+            }
             for (IUseCase uc : useCases) {
-              system.addUseCase(uc);
+              if (uc.getParent() == null || !uc.getParent().getId().equals(system.getId())) {
+                system.addUseCase(uc);
+              }
             }
 
             int pad = 40;
@@ -300,17 +445,31 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               moved.add(de.getModelElement().getName());
             }
 
-            IDiagramElement sysDe = getDiagramManager().createDiagramElement(diagram, system);
+            IDiagramElement sysDe =
+                existingBox != null
+                    ? existingBox
+                    : getDiagramManager().createDiagramElement(diagram, system);
             if (sysDe instanceof IShapeUIModel) {
               IShapeUIModel shape = (IShapeUIModel) sysDe;
-              shape.setCustomText(systemName);
+              shape.setCustomText(boundaryName);
               shape.setBounds(boxX, boxY, boxW, boxH);
               shape.sendToBack();
               resetCaption(shape);
+              if (existingBox != null) {
+                // Renaming a shown element makes VP fit its shape to the new name once our call
+                // returns (the diagram auto-fits); the box is a container, so its bounds are
+                // applied again after that.
+                final int bx = boxX;
+                final int by = boxY;
+                final int bw = boxW;
+                final int bh = boxH;
+                SwingUtilities.invokeLater(() -> shape.setBounds(bx, by, bw, bh));
+              }
             }
 
-            return "Added system boundary '"
-                + systemName
+            return (existingBox != null ? "Updated" : "Added")
+                + " system boundary '"
+                + boundaryName
                 + "' wrapping "
                 + useCases.size()
                 + " use case(s) on diagram '"
@@ -323,6 +482,34 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding system boundary: " + e.getMessage();
     }
+  }
+
+  /** Left edge of the auto-placed actor column and the use case column. */
+  private static final int ACTOR_COLUMN_X = 50;
+
+  private static final int USE_CASE_COLUMN_X = 300;
+
+  /** Free space below an actor figure (its name is drawn under it) and between use cases. */
+  private static final int ACTOR_GAP = 50;
+
+  private static final int USE_CASE_GAP = 30;
+
+  /** Top of the auto-placed columns. */
+  private static final int COLUMN_TOP = 50;
+
+  /**
+   * Explicit x/y when given, otherwise the first free spot of a single column starting at {@code
+   * columnX}: below the shapes already in it, {@code gap} apart.
+   */
+  private void placeInColumn(
+      IUseCaseDiagramUIModel diagram, IDiagramElement de, int columnX, int gap, int x, int y) {
+    if (x > 0 || y > 0) {
+      de.setBounds(Math.max(x, 0), Math.max(y, 0), de.getWidth(), de.getHeight());
+      return;
+    }
+    // a row narrower than any second shape: every shape gets a row of its own
+    int[] spot = freeSpot(diagram, de, columnX, COLUMN_TOP, columnX + de.getWidth(), gap);
+    de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
   }
 
   private static String connected(
@@ -409,14 +596,12 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
                     relType = "Relationship";
                   }
                   IRelationship rel = (IRelationship) model;
+                  // the drawn direction: extension -> base, child -> parent
+                  IModelElement fromEnd = isStoredReversed(model) ? rel.getTo() : rel.getFrom();
+                  IModelElement toEnd = isStoredReversed(model) ? rel.getFrom() : rel.getTo();
                   String from =
-                      rel.getFrom() != null
-                          ? nameMap.getOrDefault(rel.getFrom(), rel.getFrom().getName())
-                          : "?";
-                  String to =
-                      rel.getTo() != null
-                          ? nameMap.getOrDefault(rel.getTo(), rel.getTo().getName())
-                          : "?";
+                      fromEnd != null ? nameMap.getOrDefault(fromEnd, fromEnd.getName()) : "?";
+                  String to = toEnd != null ? nameMap.getOrDefault(toEnd, toEnd.getName()) : "?";
                   relationshipDetails.add(relType + ": " + from + " -> " + to);
                 }
               }
