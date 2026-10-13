@@ -13,7 +13,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (107 tools total)
+### MCP Tool Services (111 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
@@ -24,11 +24,11 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
 | State machine | createStateDiagram, addState, addInitialState, addFinalState, addTransition | 5 |
-| Activity | createActivityDiagram, addActivityPartition, addActivityAction, addActivityControlNode, addActivityObjectNode, addActivityFlow | 6 |
-| Component | createComponentDiagram, addComponent, addComponentInterface, addProvidedInterface, addRequiredInterface, addComponentDependency, addPort | 7 |
-| Deployment | createDeploymentDiagram, addDeploymentNode, addDeploymentArtifact, addDeploymentComponent, addCommunicationPath, addDeployDependency | 6 |
+| Activity | createActivityDiagram, addActivityPartition, addActivityAction, addActivityControlNode, addActivityObjectNode, addActivityFlow, addActivityFrame | 7 |
+| Component | createComponentDiagram, addComponent, addComponentInterface, addProvidedInterface, addRequiredInterface, addComponentDependency, addPort, addComponentPackage | 8 |
+| Deployment | createDeploymentDiagram, addDeploymentNode, addDeploymentArtifact, addDeploymentComponent, addCommunicationPath, addDeployDependency, addDeploymentDependency | 7 |
 | Package / Object | createPackageDiagram, addPackageElement, addPackageDependency, addClassInPackage, createObjectDiagram, addObject, addObjectLink | 7 |
-| Communication | createCommunicationDiagram, addCommunicationLifeline, addCommunicationLink, addCommunicationMessage | 4 |
+| Communication | createCommunicationDiagram, addCommunicationLifeline, addCommunicationLink, addCommunicationMessage, moveCommunicationLifeline | 5 |
 | Flowchart / DFD | createFlowchart, addFlowchartShape, addFlowchartFlow, createDataFlowDiagram, addDfdProcess, addDfdExternalEntity, addDfdDataStore, addDfdDataFlow | 8 |
 | BPMN | createBpmnDiagram, addBpmnPool, addBpmnLane, addBpmnTask, addBpmnEvent, addBpmnGateway, addBpmnDataObject, addBpmnSequenceFlow, addBpmnMessageFlow | 9 |
 
@@ -42,6 +42,71 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   labeled system rectangle (the module box). Call it AFTER `autoLayoutDiagram` so the box encloses
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
+
+### Round-2 audit fixes (server version 1.32.2.x)
+
+Graded against the course notation brief (BG HP TTTN 2 CNPM 2020 + lab samples) and verified live
+in VP 18.1 on F2*/Z_* diagrams (exported PNGs). What changed and the quirks behind it:
+
+- **Diagram names**: every `create*Diagram` goes through `newDiagram()`: a blank name or one any
+  diagram already has is refused before VP creates anything (lookups take the last match, so a
+  duplicate hid the first diagram), and a diagram VP refuses to name is deleted again.
+- **Removing**: `IDiagramUIModel.removeDiagramElement()` leaves the shape on the diagram;
+  `removeDiagramElement` now calls `IBaseDiagramElement.deleteViewOnly()` (model kept).
+- **Aggregation kind**: `IAssociationEnd.getAggregationKind()` returns "composite"/"shared" although
+  it is set with `AGGREGATION_KIND_COMPOSITED`/`_AGGREGATION` ("Composited"/"Aggregation");
+  `aggregationOf()` accepts both (element list, `removeRelationship`).
+- **Routing**: `DiagramUtils.routeBends` takes the bend from the middle of the border-clipped
+  segment, never inside or on an end shape (+15 px), treats nodes/artifacts/components/packages
+  that hold neither end as obstacles and falls back to a two-bend orthogonal detour. `overlay()`
+  draws two opposite connectors as one double-headed line.
+- **Use case**: VP stores a generalization from the general element (triangle on the from end):
+  `addRelationship(Generalization)` now sets from = target (parent). The "extension points"
+  compartment is hidden with `IUseCaseDiagramUIModel.setShowUseCaseExtensionPoint(false)` and
+  `IUseCaseUIModel.setShowExtensionPoint(false)` + refit. `addActor`/`addUseCase` take x/y;
+  duplicate/self relationships are refused; a second `addSystemBoundary` updates the box.
+- **Sequence**: rows follow the full sequence number (1, 1.1, 1.1.1, 1.2, 2). A lifeline's
+  robustness icon comes from the lifeline's own stereotype, never from the shared class. VP's
+  per-message activation stubs are drawn in front of the long bar whatever the z-order
+  (`bringToFront` has no effect): they are made fully transparent (fill and line transparency 100)
+  and the bar grows over a stub sticking out below it. Fragments reserve a header + guard row.
+- **State**: auto-placement is top to bottom (the book's screen flow), avoiding self-loop areas and
+  labels; a forward/back pair has its labels on the outer side of each bend.
+- **Activity**: `addActivityFrame` (rounded titled `IActivity` shape, white, sent to back, sized
+  around its nodes and the guards of their outgoing flows) and `addActivityFlow(..., twoWay)` for
+  the book's design diagram. Initial/final nodes show their name. Lane relayout moves each row as
+  a whole (`relocateRow`). Guards and the decision question take the first spot clear of nodes,
+  labels, flow lines, frame borders and the canvas edge (6 px, then 16 px off the line); a crowded
+  guard on an explicit layout is reported as a WARNING. VP anchors a slanted flow at a fork/join
+  bar's corner: such flows get explicit ports 12 px in from the bar ends (`barPort`,
+  `setRequestRebuild(false)`).
+- **Communication**: VP re-routes every self link out of the top edge when it lays the diagram out
+  on reopening; the loops are put back on a free side (below first) with their messages.
+  `moveCommunicationLifeline` (and `setElementBounds` on a communication diagram) re-anchors the
+  links and re-lays their message arrows. `addCommunicationLifeline(..., lifelineType)` draws
+  boundary/control/entity icons via the lifeline's stereotype. Participants are found as
+  `:Classifier` too.
+- **Class**: `addClass` reuses a same-named class of the owner (no "Class2"); rows wrap after
+  about three classes; named associations widen the gap for their labels; self/cyclic
+  generalizations and unknown visibilities are refused.
+- **Component / deployment / package / object**: `addComponentPackage` + `addComponent(...,
+  packageName)` (layer frames); an auto-placed component moves next to its first connection at a
+  spot clear of shapes and drawn lines. `addDeploymentComponent` accepts an artifact host and
+  `addDeploymentDependency` draws dashed component/artifact dependencies (MVC inside the .war).
+  New top-level nodes stay on the node row. `addPackageDependency(kind=line)` is a plain line;
+  nested packages that exist are reused; `addObject` with an empty name is anonymous.
+- **BPMN / flowchart / DFD / ERD**: message flows run in the gap between pools; gateway branches
+  and joins use the top/bottom vertex; loop-backs go over the top; a labelled branch gets room and
+  its label is placed clear of node names; data objects move under their task. Flowcharts are one
+  column; a merge target returns to the column and its side branch is an elbow. DFD rows are 220
+  px apart and labels slide along their line. Duplicate FKs and bad relationship types are refused.
+
+Remaining limitations: a sequence actor lifeline keeps a box head (VP draws no stick figure for an
+API-created lifeline that anchors messages); guards in a cramped explicit activity layout can
+still touch a line (reported as a WARNING); VP may draw a moved communication link vertically near
+a box corner when the two boxes overlap horizontally; component auto-placement is greedy (explicit
+x/y remain best for large diagrams); a 2-3 px stub notch can remain at the very end of a sequence
+bar.
 
 ### Round-1 audit fixes (server version 1.32.1.x)
 
@@ -138,8 +203,7 @@ Verified live in VP 18.1 on F1_* diagrams (exported PNGs). What changed and the 
 - **Deployment**: a free artifact that was auto-placed moves under (or beside) the node of its
   `<<deploy>>` arrow.
 
-Remaining limitations: sequence diagrams still show VP's small per-message activation ticks (left
-alone: the message anchoring depends on them); no assembly/delegation connectors on component
+Remaining limitations: no assembly/delegation connectors on component
 diagrams; BPMN event labels can touch container borders; detours on long diagonals may run near
 the diagram edge; labels of two nearly parallel connectors (not joining the same pair) can still
 overlap.

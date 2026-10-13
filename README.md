@@ -25,16 +25,16 @@ The plugin includes an embedded MCP server that:
 - Runs on **port 2026** with SSE endpoint `/sse`
 - Provides **tool capabilities** for external MCP clients
 
-#### Available MCP Tools (107 total)
+#### Available MCP Tools (111 total)
 
 The main tools per diagram family are listed below. Project, layout and export helpers
 (for example `listDiagrams`, `exportDiagramImage`, `saveProject`) are also available.
 
 ##### Use Case Diagram (5 tools)
 - **createUseCaseDiagram(diagramName)**: Create new use case diagrams
-- **addActor(actorName, diagramName)**: Add actors to specific diagrams
-- **addUseCase(useCaseName, diagramName)**: Add use cases to diagrams
-- **addRelationship(sourceName, targetName, relationshipType)**: Create Include/Extend relationships
+- **addActor(actorName, diagramName, x, y)**: Add actors (x/y > 0 place them, else a column on the left)
+- **addUseCase(useCaseName, diagramName, x, y)**: Add use cases (x/y > 0 place them, else a column)
+- **addRelationship(diagramName, sourceName, targetName, relationshipType)**: Create Include/Extend/Generalization/Association relationships (Generalization: source = child, target = parent)
 - **generateUseCaseReport(diagramName)**: Generate use case analysis report
 
 ##### Class Diagram (12 tools)
@@ -62,50 +62,54 @@ The main tools per diagram family are listed below. Project, layout and export h
 
 ##### Sequence Diagram (7 tools)
 - **createSequenceDiagram(diagramName)**: Create new sequence diagrams
-- **addLifeline(diagramName, lifelineName, className)**: Add lifelines (participants)
+- **addLifeline(diagramName, lifelineName, className, lifelineType, alias)**: Add lifelines (participants); lifelineType actor/boundary/control/entity draws the icon for this lifeline only
 - **addActivation(diagramName, lifelineName)**: Add activation bars
 - **addMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber, messageType)**: Add sync/async messages
 - **addReturnMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber)**: Add return messages
 - **addCombinedFragment(diagramName, operator, guard, coveredLifelines, fromSeq, toSeq, operandStarts)**: Add an alt/opt/loop/break/par frame around messages fromSeq..toSeq (guards `a|else` give one operand each)
 - **generateSequenceReport(diagramName)**: Generate sequence diagram analysis report
 
-##### Activity Diagram (6 tools)
+##### Activity Diagram (7 tools)
 - **createActivityDiagram(diagramName)**: Create new activity diagrams
 - **addActivityPartition(diagramName, partitionName, x, y, width, height)**: Add a vertical swimlane lane
 - **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text
 - **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes
 - **addActivityObjectNode(diagramName, objectName, state, partitionName, x, y)**: Add an object node with optional [state], optionally in a lane
-- **addActivityFlow(diagramName, fromNode, toNode, guard)**: Add a control or object flow with optional [guard]
+- **addActivityFlow(diagramName, fromNode, toNode, guard, twoWay)**: Add a control or object flow with optional [guard]; twoWay draws a double-headed exchange (action <-> "XxxDAO: method()")
+- **addActivityFrame(diagramName, title, nodeNames, x, y, width, height)**: Add a rounded titled frame around nodes ("Xử lí tại gdXxx.jsp")
 
-##### Component Diagram (7 tools)
+##### Component Diagram (8 tools)
 - **createComponentDiagram(diagramName)**: Create new component diagrams
-- **addComponent(diagramName, componentName, stereotype, parentComponent, x, y)**: Add (nested) components
+- **addComponent(diagramName, componentName, stereotype, parentComponent, x, y, packageName)**: Add (nested) components, optionally inside a package (layer) frame
+- **addComponentPackage(diagramName, packageName, parentPackage, x, y, width, height)**: Add a package (layer) frame
 - **addComponentInterface(diagramName, interfaceName, x, y)**: Add an interface (an `<<interface>>` box)
 - **addProvidedInterface(diagramName, componentName, interfaceName)**: Component provides an interface
 - **addRequiredInterface(diagramName, componentName, interfaceName)**: Component requires an interface
 - **addComponentDependency(diagramName, fromComponent, toComponent, stereotype)**: Add a dependency
 - **addPort(diagramName, componentName, portName)**: Add a port on a component's edge
 
-##### Deployment Diagram (6 tools)
+##### Deployment Diagram (7 tools)
 - **createDeploymentDiagram(diagramName)**: Create new deployment diagrams
 - **addDeploymentNode(diagramName, nodeName, kind, parentNode, x, y, width, height)**: Add node/device/executionEnvironment, optionally nested
 - **addDeploymentArtifact(diagramName, artifactName, nodeName, x, y)**: Add an artifact, optionally inside a node
-- **addDeploymentComponent(diagramName, componentName, nodeName)**: Add a component inside a node
+- **addDeploymentComponent(diagramName, componentName, nodeName)**: Add a component inside a node or an artifact
 - **addCommunicationPath(diagramName, fromNode, toNode, label)**: Connect two nodes
 - **addDeployDependency(diagramName, artifactName, nodeName)**: Add a <<deploy>> dependency
+- **addDeploymentDependency(diagramName, fromElement, toElement, label)**: Add a dashed dependency between components or artifacts
 
 ##### Package and Object Diagrams (7 tools)
 - **createPackageDiagram(diagramName)**: Create new package diagrams
 - **addPackageElement(diagramName, packageName, parentPackage, x, y, width, height)**: Add (nested) packages
-- **addPackageDependency(diagramName, fromPackage, toPackage, kind)**: Add use/import/access/merge dependencies
+- **addPackageDependency(diagramName, fromPackage, toPackage, kind)**: Add use/import/access/merge dependencies, or a plain `line`
 - **addClassInPackage(diagramName, packageName, className)**: Show a class inside a package
 - **createObjectDiagram(diagramName)**: Create new object diagrams
-- **addObject(diagramName, objectName, className, slots, x, y)**: Add an object with `attr=value;...` slots
+- **addObject(diagramName, objectName, className, slots, x, y)**: Add an object with `attr=value;...` slots (empty objectName: anonymous `: Class`)
 - **addObjectLink(diagramName, fromObject, toObject, label)**: Link two objects
 
-##### Communication Diagram (4 tools)
+##### Communication Diagram (5 tools)
 - **createCommunicationDiagram(diagramName)**: Create new communication diagrams
-- **addCommunicationLifeline(diagramName, lifelineName, classifierName, isActor, x, y)**: Add a lifeline or actor
+- **addCommunicationLifeline(diagramName, lifelineName, classifierName, isActor, x, y, lifelineType)**: Add a lifeline or actor; lifelineType boundary/control/entity draws the robustness icon
+- **moveCommunicationLifeline(diagramName, lifelineName, x, y)**: Move a participant; its links and message arrows follow
 - **addCommunicationLink(diagramName, fromLifeline, toLifeline)**: Link two participants
 - **addCommunicationMessage(diagramName, fromLifeline, toLifeline, sequenceNumber, messageText)**: Add a numbered message
 
