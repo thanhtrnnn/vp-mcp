@@ -22,10 +22,13 @@ The plugin includes an embedded MCP server that:
 
 - **Auto-starts** when Visual Paradigm plugin is loaded
 - **Auto-stops** when Visual Paradigm plugin is unloaded
-- Runs on **port 8080** with SSE endpoint `/mcp/messages`
+- Runs on **port 2026** with SSE endpoint `/sse`
 - Provides **tool capabilities** for external MCP clients
 
-#### Available MCP Tools (31 total)
+#### Available MCP Tools (107 total)
+
+The main tools per diagram family are listed below. Project, layout and export helpers
+(for example `listDiagrams`, `exportDiagramImage`, `saveProject`) are also available.
 
 ##### Use Case Diagram (5 tools)
 - **createUseCaseDiagram(diagramName)**: Create new use case diagrams
@@ -66,6 +69,67 @@ The plugin includes an embedded MCP server that:
 - **addCombinedFragment(diagramName, operator, guard, coveredLifelines)**: Add alt/opt/loop fragments
 - **generateSequenceReport(diagramName)**: Generate sequence diagram analysis report
 
+##### Activity Diagram (6 tools)
+- **createActivityDiagram(diagramName)**: Create new activity diagrams
+- **addActivityPartition(diagramName, partitionName, x, y, width, height)**: Add a vertical swimlane lane
+- **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text
+- **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes
+- **addActivityObjectNode(diagramName, objectName, state, x, y)**: Add an object node with optional [state]
+- **addActivityFlow(diagramName, fromNode, toNode, guard)**: Add a control or object flow with optional [guard]
+
+##### Component Diagram (7 tools)
+- **createComponentDiagram(diagramName)**: Create new component diagrams
+- **addComponent(diagramName, componentName, stereotype, parentComponent, x, y)**: Add (nested) components
+- **addComponentInterface(diagramName, interfaceName, x, y)**: Add an interface (ball notation)
+- **addProvidedInterface(diagramName, componentName, interfaceName)**: Component provides an interface
+- **addRequiredInterface(diagramName, componentName, interfaceName)**: Component requires an interface
+- **addComponentDependency(diagramName, fromComponent, toComponent, stereotype)**: Add a dependency
+- **addPort(diagramName, componentName, portName)**: Add a port on a component's edge
+
+##### Deployment Diagram (6 tools)
+- **createDeploymentDiagram(diagramName)**: Create new deployment diagrams
+- **addDeploymentNode(diagramName, nodeName, kind, parentNode, x, y, width, height)**: Add node/device/executionEnvironment, optionally nested
+- **addDeploymentArtifact(diagramName, artifactName, nodeName, x, y)**: Add an artifact, optionally inside a node
+- **addDeploymentComponent(diagramName, componentName, nodeName)**: Add a component inside a node
+- **addCommunicationPath(diagramName, fromNode, toNode, label)**: Connect two nodes
+- **addDeployDependency(diagramName, artifactName, nodeName)**: Add a <<deploy>> dependency
+
+##### Package and Object Diagrams (7 tools)
+- **createPackageDiagram(diagramName)**: Create new package diagrams
+- **addPackageElement(diagramName, packageName, parentPackage, x, y, width, height)**: Add (nested) packages
+- **addPackageDependency(diagramName, fromPackage, toPackage, kind)**: Add use/import/access/merge dependencies
+- **addClassInPackage(diagramName, packageName, className)**: Show a class inside a package
+- **createObjectDiagram(diagramName)**: Create new object diagrams
+- **addObject(diagramName, objectName, className, slots, x, y)**: Add an object with `attr=value;...` slots
+- **addObjectLink(diagramName, fromObject, toObject, label)**: Link two objects
+
+##### Communication Diagram (4 tools)
+- **createCommunicationDiagram(diagramName)**: Create new communication diagrams
+- **addCommunicationLifeline(diagramName, lifelineName, classifierName, isActor, x, y)**: Add a lifeline or actor
+- **addCommunicationLink(diagramName, fromLifeline, toLifeline)**: Link two participants
+- **addCommunicationMessage(diagramName, fromLifeline, toLifeline, sequenceNumber, messageText)**: Add a numbered message
+
+##### Flowchart and Data Flow Diagram (8 tools)
+- **createFlowchart(diagramName)**: Create new flowcharts
+- **addFlowchartShape(diagramName, shapeName, kind, x, y)**: Add terminator/process/decision/inputOutput/document/... shapes
+- **addFlowchartFlow(diagramName, fromShape, toShape, label)**: Connect two flowchart shapes
+- **createDataFlowDiagram(diagramName, notation)**: Create a DFD (standard, ganeSarson, yourdonDeMarco, yourdonCoad)
+- **addDfdProcess(diagramName, processName, processId, x, y)**: Add a process (auto-numbered)
+- **addDfdExternalEntity(diagramName, entityName, x, y)**: Add an external entity
+- **addDfdDataStore(diagramName, storeName, storeId, x, y)**: Add a data store (auto D1, D2, ...)
+- **addDfdDataFlow(diagramName, fromElement, toElement, label)**: Add a data flow
+
+##### BPMN Business Process Diagram (9 tools)
+- **createBpmnDiagram(diagramName)**: Create new BPMN diagrams
+- **addBpmnPool(diagramName, poolName, x, y, width, height)**: Add a pool
+- **addBpmnLane(diagramName, poolName, laneName)**: Add a lane to a pool
+- **addBpmnTask(diagramName, taskName, laneName, kind, x, y)**: Add a task (user/service/manual/send/receive/script/subprocess)
+- **addBpmnEvent(diagramName, eventName, laneName, position, trigger, x, y)**: Add a start/intermediate/end event
+- **addBpmnGateway(diagramName, gatewayName, laneName, kind, x, y)**: Add an exclusive/parallel/inclusive/eventBased gateway
+- **addBpmnDataObject(diagramName, name, laneName, x, y)**: Add a data object
+- **addBpmnSequenceFlow(diagramName, fromElement, toElement, condition)**: Add a sequence flow (data association for data objects)
+- **addBpmnMessageFlow(diagramName, fromElement, toElement, label)**: Add a message flow between pools
+
 ### Plugin User Interface
 
 - **Toggle MCP Server**: Start/stop the MCP server from Visual Paradigm toolbar
@@ -103,13 +167,20 @@ Build, test and install with the `./run` command:
 
 4. **Start Visual Paradigm** - the MCP server will start automatically
 
+On macOS, start Visual Paradigm with:
+
+```bash
+open -a "/Applications/Visual Paradigm.app"
+```
+
 ### Using the MCP Server
 
 Once Visual Paradigm is running with the plugin:
 
-- **MCP Server Endpoint**: `http://localhost:8080/mcp/messages` (SSE)
+- **MCP Server Endpoint**: `http://localhost:2026/sse` (SSE)
 - **Server Name**: `visual-paradigm-mcp-server`
-- **Available Tools**: 31 diagram operations (Use Case, Class, ERD, Sequence)
+- **Available Tools**: 107 diagram operations (Use Case, Class, ERD, Sequence, State Machine,
+  Activity, Component, Deployment, Package, Object, Communication, Flowchart, DFD, BPMN)
 
 #### Connecting with Claude or MCP Clients
 
@@ -119,7 +190,7 @@ Configure your MCP client to connect to:
 {
   "transport": {
     "type": "sse",
-    "url": "http://localhost:8080/mcp/messages"
+    "url": "http://localhost:2026/sse"
   }
 }
 ```
@@ -176,7 +247,7 @@ Display all MCP features and their descriptions:
 
 **MCP Server Logging**: Check Visual Paradigm console output for:
 
-- `"MCP Server started on port 8080"` - successful startup
+- `"MCP Server started on port 2026"` - successful startup
 - `"MCP Server stopped"` - clean shutdown
 - Error messages if startup fails
 

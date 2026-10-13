@@ -1,0 +1,240 @@
+package com.brunnen.vp.mcp.util;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdNotation;
+import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdRole;
+import com.brunnen.vp.mcp.util.FlowchartDfdUtils.FlowchartKind;
+import com.brunnen.vp.mcp.util.FlowchartDfdUtils.Grid;
+import com.vp.plugin.diagram.IDiagramTypeConstants;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import org.junit.Test;
+
+/** Test class for FlowchartDfdUtils. */
+public class FlowchartDfdUtilsTest {
+
+  @Test
+  public void testParseFlowchartKindCanonicalNames() {
+    for (FlowchartKind kind : FlowchartKind.values()) {
+      assertEquals(
+          "Canonical name parses: " + kind.label(),
+          kind,
+          FlowchartDfdUtils.parseFlowchartKind(kind.label()));
+    }
+  }
+
+  @Test
+  public void testParseFlowchartKindIgnoresCaseAndSeparators() {
+    assertEquals(FlowchartKind.INPUT_OUTPUT, FlowchartDfdUtils.parseFlowchartKind("Input/Output"));
+    assertEquals(
+        FlowchartKind.PREDEFINED_PROCESS,
+        FlowchartDfdUtils.parseFlowchartKind("predefined_process"));
+    assertEquals(
+        FlowchartKind.MANUAL_INPUT, FlowchartDfdUtils.parseFlowchartKind(" Manual Input "));
+    assertEquals(FlowchartKind.DECISION, FlowchartDfdUtils.parseFlowchartKind("DECISION"));
+  }
+
+  @Test
+  public void testParseFlowchartKindAliases() {
+    assertEquals(FlowchartKind.TERMINATOR, FlowchartDfdUtils.parseFlowchartKind("start"));
+    assertEquals(FlowchartKind.TERMINATOR, FlowchartDfdUtils.parseFlowchartKind("End"));
+    assertEquals(FlowchartKind.INPUT_OUTPUT, FlowchartDfdUtils.parseFlowchartKind("io"));
+    assertEquals(
+        FlowchartKind.PREDEFINED_PROCESS, FlowchartDfdUtils.parseFlowchartKind("subprocess"));
+    assertEquals(FlowchartKind.DATABASE, FlowchartDfdUtils.parseFlowchartKind("db"));
+    assertEquals(
+        FlowchartKind.CONNECTOR, FlowchartDfdUtils.parseFlowchartKind("on-page connector"));
+  }
+
+  @Test
+  public void testParseFlowchartKindRejectsUnknown() {
+    assertNull("Unknown kind", FlowchartDfdUtils.parseFlowchartKind("swimlane"));
+    assertNull("Empty kind", FlowchartDfdUtils.parseFlowchartKind(""));
+    assertNull("Null kind", FlowchartDfdUtils.parseFlowchartKind(null));
+  }
+
+  @Test
+  public void testFlowchartKindNames() {
+    assertEquals(
+        "terminator|process|decision|inputOutput|document|predefinedProcess|database|manualInput"
+            + "|connector",
+        FlowchartDfdUtils.flowchartKindNames());
+  }
+
+  @Test
+  public void testParseDfdNotation() {
+    assertEquals(DfdNotation.STANDARD, FlowchartDfdUtils.parseDfdNotation(null));
+    assertEquals(DfdNotation.STANDARD, FlowchartDfdUtils.parseDfdNotation("  "));
+    assertEquals(DfdNotation.STANDARD, FlowchartDfdUtils.parseDfdNotation("Standard"));
+    assertEquals(DfdNotation.GANE_SARSON, FlowchartDfdUtils.parseDfdNotation("Gane-Sarson"));
+    assertEquals(DfdNotation.GANE_SARSON, FlowchartDfdUtils.parseDfdNotation("ganeSarson"));
+    assertEquals(
+        DfdNotation.YOURDON_DEMARCO, FlowchartDfdUtils.parseDfdNotation("Yourdon DeMarco"));
+    assertEquals(DfdNotation.YOURDON_COAD, FlowchartDfdUtils.parseDfdNotation("Yourdon & Coad"));
+    assertEquals(DfdNotation.YOURDON_COAD, FlowchartDfdUtils.parseDfdNotation("yourdonCoad"));
+    assertNull("Unknown notation", FlowchartDfdUtils.parseDfdNotation("SSADM"));
+  }
+
+  @Test
+  public void testDfdNotationDiagramTypesMatchVisualParadigm() {
+    assertEquals(
+        IDiagramTypeConstants.DIAGRAM_TYPE_DATA_FLOW_DIAGRAM, DfdNotation.STANDARD.diagramType());
+    assertEquals(
+        IDiagramTypeConstants.DIAGRAM_TYPE_GANE_SARSON_DFDUI_MODEL,
+        DfdNotation.GANE_SARSON.diagramType());
+    assertEquals(
+        IDiagramTypeConstants.DIAGRAM_TYPE_YOURDON_DE_MARCO_DFDUI_MODEL,
+        DfdNotation.YOURDON_DEMARCO.diagramType());
+    assertEquals(
+        IDiagramTypeConstants.DIAGRAM_TYPE_YOURDON_AND_COAD_DFDUI_MODEL,
+        DfdNotation.YOURDON_COAD.diagramType());
+  }
+
+  @Test
+  public void testNotationOfDiagramType() {
+    for (DfdNotation notation : DfdNotation.values()) {
+      assertEquals(
+          "Round trip " + notation,
+          notation,
+          FlowchartDfdUtils.notationOfDiagramType(notation.diagramType()));
+    }
+    assertNull(
+        "Flowchart is not a DFD",
+        FlowchartDfdUtils.notationOfDiagramType(IDiagramTypeConstants.DIAGRAM_TYPE_FLOWCHART));
+    assertNull("Null type", FlowchartDfdUtils.notationOfDiagramType(null));
+  }
+
+  @Test
+  public void testDfdFlowViolationAllowsFlowsThroughProcess() {
+    assertNull(FlowchartDfdUtils.dfdFlowViolation(DfdRole.EXTERNAL_ENTITY, DfdRole.PROCESS, false));
+    assertNull(FlowchartDfdUtils.dfdFlowViolation(DfdRole.PROCESS, DfdRole.DATA_STORE, false));
+    assertNull(FlowchartDfdUtils.dfdFlowViolation(DfdRole.DATA_STORE, DfdRole.PROCESS, false));
+    assertNull(FlowchartDfdUtils.dfdFlowViolation(DfdRole.PROCESS, DfdRole.PROCESS, false));
+  }
+
+  @Test
+  public void testDfdFlowViolationRejectsFlowsBypassingProcesses() {
+    String entityToStore =
+        FlowchartDfdUtils.dfdFlowViolation(DfdRole.EXTERNAL_ENTITY, DfdRole.DATA_STORE, false);
+    assertTrue(
+        "Names both roles: " + entityToStore,
+        entityToStore.contains("external entity -> data store"));
+    assertTrue(
+        FlowchartDfdUtils.dfdFlowViolation(DfdRole.DATA_STORE, DfdRole.DATA_STORE, false) != null);
+    assertTrue(
+        FlowchartDfdUtils.dfdFlowViolation(DfdRole.EXTERNAL_ENTITY, DfdRole.EXTERNAL_ENTITY, false)
+            != null);
+  }
+
+  @Test
+  public void testDfdFlowViolationRejectsSelfFlowsAndUnknownEnds() {
+    assertEquals(
+        "A data flow needs two different elements",
+        FlowchartDfdUtils.dfdFlowViolation(DfdRole.PROCESS, DfdRole.PROCESS, true));
+    assertTrue(FlowchartDfdUtils.dfdFlowViolation(null, DfdRole.PROCESS, false) != null);
+    assertTrue(FlowchartDfdUtils.dfdFlowViolation(DfdRole.PROCESS, null, false) != null);
+  }
+
+  @Test
+  public void testNextDfdIdStartsNumbering() {
+    assertEquals("1", FlowchartDfdUtils.nextDfdId(Collections.<String>emptyList(), ""));
+    assertEquals("1", FlowchartDfdUtils.nextDfdId(null, null));
+    assertEquals("D1", FlowchartDfdUtils.nextDfdId(Collections.<String>emptyList(), "D"));
+    assertEquals(
+        "IDs without a trailing number are ignored",
+        "D1",
+        FlowchartDfdUtils.nextDfdId(Arrays.asList("Archive", null), "D"));
+  }
+
+  @Test
+  public void testNextDfdIdContinuesNumbering() {
+    assertEquals("3", FlowchartDfdUtils.nextDfdId(Arrays.asList("1", "2"), ""));
+    assertEquals("4", FlowchartDfdUtils.nextDfdId(Arrays.asList("1", "3", "2"), ""));
+    assertEquals("1.3", FlowchartDfdUtils.nextDfdId(Arrays.asList("1.1", "1.2"), ""));
+    assertEquals("D3", FlowchartDfdUtils.nextDfdId(Arrays.asList("D1", "D2"), "D"));
+    assertEquals("D11", FlowchartDfdUtils.nextDfdId(Arrays.asList("D2", " D10 "), "D"));
+  }
+
+  @Test
+  public void testIsValidName() {
+    assertTrue(FlowchartDfdUtils.isValidName("Check stock"));
+    assertFalse(FlowchartDfdUtils.isValidName(null));
+    assertFalse(FlowchartDfdUtils.isValidName(""));
+    assertFalse(FlowchartDfdUtils.isValidName("   "));
+  }
+
+  @Test
+  public void testNormalizeLabelAndSuffix() {
+    assertEquals("Yes", FlowchartDfdUtils.normalizeLabel("  Yes "));
+    assertNull(FlowchartDfdUtils.normalizeLabel(null));
+    assertNull(FlowchartDfdUtils.normalizeLabel("   "));
+    assertEquals(" [No]", FlowchartDfdUtils.labelSuffix("No"));
+    assertEquals("", FlowchartDfdUtils.labelSuffix(null));
+  }
+
+  @Test
+  public void testGridFillsColumnsTopToBottom() {
+    Grid grid = new Grid(200, 60, 280, 110, 3);
+    assertEquals(new Point(200, 60), grid.cellCenter(0));
+    assertEquals(new Point(200, 280), grid.cellCenter(2));
+    assertEquals("Wraps to the next column", new Point(480, 60), grid.cellCenter(3));
+    assertEquals(
+        "Cell area is inset by the margin",
+        new Rectangle(
+            200 - 140 + FlowchartDfdUtils.MIN_MARGIN,
+            60 - 55 + FlowchartDfdUtils.MIN_MARGIN,
+            280 - 2 * FlowchartDfdUtils.MIN_MARGIN,
+            110 - 2 * FlowchartDfdUtils.MIN_MARGIN),
+        grid.cellArea(0));
+  }
+
+  @Test
+  public void testFreeCellCenterSkipsOccupiedCells() {
+    Grid grid = new Grid(200, 60, 280, 110, 3);
+    assertEquals(new Point(200, 60), FlowchartDfdUtils.freeCellCenter(grid, null));
+    List<Rectangle> occupied =
+        Arrays.asList(new Rectangle(150, 40, 100, 40), new Rectangle(160, 150, 80, 40));
+    assertEquals(
+        "First two cells are taken",
+        new Point(200, 280),
+        FlowchartDfdUtils.freeCellCenter(grid, occupied));
+  }
+
+  @Test
+  public void testFreeCellCenterIgnoresShapesTouchingOnlyTheMargin() {
+    Grid grid = new Grid(200, 60, 280, 110, 3);
+    // Occupies cell 0 and reaches into the margin band below it, but not cell 1 (from y = 125).
+    List<Rectangle> occupied = Collections.singletonList(new Rectangle(150, 40, 100, 72));
+    assertEquals(new Point(200, 170), FlowchartDfdUtils.freeCellCenter(grid, occupied));
+  }
+
+  @Test
+  public void testPlaceShapeCentersOnAutoPoint() {
+    assertEquals(
+        new Point(150, 40), FlowchartDfdUtils.placeShape(0, 0, new Point(200, 60), 100, 40));
+  }
+
+  @Test
+  public void testPlaceShapeHonoursExplicitCoordinates() {
+    assertEquals(
+        new Point(500, 300), FlowchartDfdUtils.placeShape(500, 300, new Point(200, 60), 100, 40));
+    assertEquals(
+        "Only x explicit",
+        new Point(500, 40),
+        FlowchartDfdUtils.placeShape(500, 0, new Point(200, 60), 100, 40));
+  }
+
+  @Test
+  public void testPlaceShapeKeepsMarginForWideShapes() {
+    assertEquals(
+        new Point(FlowchartDfdUtils.MIN_MARGIN, FlowchartDfdUtils.MIN_MARGIN),
+        FlowchartDfdUtils.placeShape(-1, -1, new Point(100, 20), 400, 80));
+  }
+}

@@ -13,7 +13,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (60 tools total)
+### MCP Tool Services (107 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
@@ -24,6 +24,13 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 | ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
 | State machine | createStateDiagram, addState, addInitialState, addFinalState, addTransition | 5 |
+| Activity | createActivityDiagram, addActivityPartition, addActivityAction, addActivityControlNode, addActivityObjectNode, addActivityFlow | 6 |
+| Component | createComponentDiagram, addComponent, addComponentInterface, addProvidedInterface, addRequiredInterface, addComponentDependency, addPort | 7 |
+| Deployment | createDeploymentDiagram, addDeploymentNode, addDeploymentArtifact, addDeploymentComponent, addCommunicationPath, addDeployDependency | 6 |
+| Package / Object | createPackageDiagram, addPackageElement, addPackageDependency, addClassInPackage, createObjectDiagram, addObject, addObjectLink | 7 |
+| Communication | createCommunicationDiagram, addCommunicationLifeline, addCommunicationLink, addCommunicationMessage | 4 |
+| Flowchart / DFD | createFlowchart, addFlowchartShape, addFlowchartFlow, createDataFlowDiagram, addDfdProcess, addDfdExternalEntity, addDfdDataStore, addDfdDataFlow | 8 |
+| BPMN | createBpmnDiagram, addBpmnPool, addBpmnLane, addBpmnTask, addBpmnEvent, addBpmnGateway, addBpmnDataObject, addBpmnSequenceFlow, addBpmnMessageFlow | 9 |
 
 ### Reference-style rendering (matches the course's Visual Paradigm samples)
 
@@ -35,6 +42,41 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   labeled system rectangle (the module box). Call it AFTER `autoLayoutDiagram` so the box encloses
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
+
+### More diagram families (server version 1.32.0-diagrams.4)
+
+Activity, component, deployment, package/object, communication, flowchart/DFD and BPMN tools, one
+class per family (`tools/<Family>McpTools.java`) with pure helpers in `util/<Family>Utils.java`
+covered by JUnit tests. All of them build on the same rules: `resetCaption()` on every new shape and
+connector, connectors created with explicit center points, shapes fitted with `fitShape()` (control
+symbols such as initial/final nodes, events and gateways keep fixed UML sizes), containers (lanes,
+pools, packages, nodes) sized to enclose their children, diagram-scoped name lookups, and every
+tool returns a readable string instead of throwing. Smoke-tested live in VP: every family creates a
+diagram, adds shapes and connectors, and exports a readable PNG.
+
+Quirks learned while integrating:
+
+- **Activity swimlanes**: `IActivitySwimlane2NewUIModel.getVerticalPartitionIds()` and
+  `getCompartmentIds()` return null for a frame built through the API (the setters do not round
+  trip). Lanes are therefore read from the frame's children: each vertical
+  `IActivityPartitionHeaderUIModel` plus the `IActivitySwimlane2CompartmentUIModel` whose
+  `getVerticalPartitionId()` is that header's id. Nodes added to a compartment with `addChild` use
+  absolute diagram coordinates.
+- **Diagram auto-fit vs containers**: `setAutoFitShapesSize(true)` makes VP fit containers too. On an
+  activity diagram it shrank the swimlane frame to 100x100 and each lane compartment to its nodes,
+  so lanes no longer lined up with their headers. Creating the swimlane frame turns the diagram's
+  auto-fit off; action and object boxes are still fitted one by one with `fitShape()`. There is no
+  per-shape auto-fit switch in the API.
+- **Detached captions do not follow `setBounds`**: flowchart shapes, decision nodes, communication
+  actors and message arrows keep their label where it was laid out at creation (the diagram origin).
+  Call `resetCaption()` again after the final `setBounds` (and after any later move).
+- **Deployment**: an `IDeployment` from an artifact to a node is rejected with "Invalid connection.
+  Node is not allowed with Deployment"; `addDeployDependency` falls back to an `IDependency` with
+  the `<<deploy>>` stereotype.
+- **Open issues for the audit loop**: communication message arrows are not visible (only their
+  labels); a component port's label is drawn away from the port and the interface ball is barely
+  visible; an activity object node does not show its `[state]` line; guards of flows that cross an
+  action box overlap it.
 
 ### State machine diagrams (server version 1.28.4)
 
@@ -134,6 +176,14 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 | `tools/ClassDiagramMcpTools.java` | 22 class diagram tools + 5 project tools |
 | `tools/ErdMcpTools.java` | 7 ERD tools |
 | `tools/SequenceDiagramMcpTools.java` | 7 sequence diagram tools |
+| `tools/StateMachineDiagramMcpTools.java` | 5 state machine diagram tools |
+| `tools/ActivityDiagramMcpTools.java` | 6 activity diagram tools (vertical swimlanes) |
+| `tools/ComponentDiagramMcpTools.java` | 7 component diagram tools |
+| `tools/DeploymentDiagramMcpTools.java` | 6 deployment diagram tools |
+| `tools/PackageObjectDiagramMcpTools.java` | 4 package diagram + 3 object diagram tools |
+| `tools/CommunicationDiagramMcpTools.java` | 4 communication diagram tools |
+| `tools/FlowchartDfdMcpTools.java` | 3 flowchart + 5 data flow diagram tools |
+| `tools/BpmnDiagramMcpTools.java` | 9 BPMN business process diagram tools |
 | `util/DiagramUtils.java` | Shared VP API helpers (diagram/element lookup) |
 | `util/DiagramLayoutEngine.java` | Zone-aware positioning + parameterized VP LayoutOption construction |
 
@@ -165,7 +215,7 @@ Docker uses multi-stage build with VP API stub JAR for compilation.
 - [x] Custom MCP server compiles and runs on Java 11
 - [x] SSE transport works (endpoint event, keep-alive, session management)
 - [x] MCP protocol: initialize, tools/list, tools/call
-- [x] 35 tools registered and invocable via JSON-RPC
+- [x] 107 tools registered and invocable via JSON-RPC
 - [x] Docker build succeeds with Java 11
 - [x] VP plugin loads successfully (verified in VP log)
 - [x] Current plugin build installed and reloaded in Visual Paradigm; Claude Code user-scope MCP

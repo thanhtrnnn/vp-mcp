@@ -1,0 +1,844 @@
+package com.brunnen.vp.mcp.tools;
+
+import com.brunnen.vp.mcp.tool.Tool;
+import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.PackageObjectDiagramUtils;
+import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.IConnectorUIModel;
+import com.vp.plugin.diagram.IDiagramElement;
+import com.vp.plugin.diagram.IDiagramTypeConstants;
+import com.vp.plugin.diagram.IDiagramUIModel;
+import com.vp.plugin.diagram.IObjectDiagramUIModel;
+import com.vp.plugin.diagram.IShapeUIModel;
+import com.vp.plugin.diagram.shape.IClassUIModel;
+import com.vp.plugin.diagram.shape.IInstanceSpecificationUIModel;
+import com.vp.plugin.diagram.shape.IPackageUIModel;
+import com.vp.plugin.model.IAttribute;
+import com.vp.plugin.model.IClass;
+import com.vp.plugin.model.ICompositeValueSpecification;
+import com.vp.plugin.model.IGeneralization;
+import com.vp.plugin.model.IInstanceSpecification;
+import com.vp.plugin.model.ILink;
+import com.vp.plugin.model.IModelElement;
+import com.vp.plugin.model.IPackage;
+import com.vp.plugin.model.IRelationship;
+import com.vp.plugin.model.ISimpleRelationship;
+import com.vp.plugin.model.ISlot;
+import java.awt.Point;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * MCP tools for Visual Paradigm UML package diagrams and object diagrams.
+ *
+ * <p>Package diagrams use real UML model elements: {@link IPackage} frames (nested in the model and
+ * on the diagram when a parent package is given), {@link IClass} boxes owned by their package, and
+ * stereotyped dependencies between packages — an {@code IUsage} for {@code <<use>>} and an {@code
+ * IDependency} carrying the {@code <<import>>}, {@code <<access>>} or {@code <<merge>>} stereotype.
+ *
+ * <p>Object diagrams show {@link IInstanceSpecification} boxes classified by an {@link IClass}, so
+ * Visual Paradigm renders the underlined {@code objectName : ClassName} caption itself; slot values
+ * are {@link ISlot}s whose defining feature is the class attribute. Objects are joined by {@link
+ * ILink} connectors.
+ *
+ * <p>Leaf shapes (class boxes, objects) are fitted to their content with Visual Paradigm's fit-size
+ * API; package frames are containers and grow to enclose their children instead. Connectors are
+ * anchored at shape centers, because Visual Paradigm otherwise pins both ends to the top-left
+ * corners. All name lookups are scoped to the given diagram.
+ */
+public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
+
+  /** Minimum size of a package frame; larger when the fitted label needs more room. */
+  private static final int PACKAGE_MIN_WIDTH = 160;
+
+  private static final int PACKAGE_MIN_HEIGHT = 100;
+
+  /** Margin of the first auto-placed top-level shape from the diagram origin. */
+  private static final int MARGIN = 40;
+
+  /** Shapes per row and gaps of the top-level auto-placement grid. */
+  private static final int TOP_PER_ROW = 3;
+
+  private static final int PACKAGE_GAP = 60;
+
+  /** Objects sit further apart so link labels stay readable. */
+  private static final int OBJECT_GAP = 80;
+
+  /** Inner padding of a package frame and offset of its body below the tab and name. */
+  private static final int INNER_PAD = 20;
+
+  private static final int INNER_HEADER = 40;
+
+  private static final int INNER_PER_ROW = 3;
+
+  /** Nesting depth limit when walking package parents or class generalizations. */
+  private static final int MAX_DEPTH = 32;
+
+  // --- Package diagram ---
+
+  @Tool(
+      name = "createPackageDiagram",
+      description = "Create a new UML package diagram in Visual Paradigm")
+  public String createPackageDiagram(String diagramName) {
+    try {
+      return runOnEdt(
+          () -> {
+            requireProject();
+            if (!PackageObjectDiagramUtils.isValidName(diagramName)) {
+              return "Diagram name must not be empty";
+            }
+            DiagramManager dm = getDiagramManager();
+            IDiagramUIModel diagram =
+                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM);
+            diagram.setName(diagramName.trim());
+            diagram.setAutoFitShapesSize(true);
+            dm.openDiagram(diagram);
+            return "Created package diagram: " + diagramName.trim();
+          });
+    } catch (Exception e) {
+      return "Error creating package diagram: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addPackageElement",
+      description =
+          "Add a package frame to a package diagram. parentPackage (a package already on the "
+              + "diagram, \"\" for none) nests it in that package, in the model and on the "
+              + "diagram; the parent grows to enclose it. x/y (>0, diagram coordinates) place it "
+              + "explicitly, otherwise it is auto-placed (top level: rows of 3; nested: inside the "
+              + "parent body). width/height (>0) set the size, otherwise the frame is at least "
+              + "160x100 and wide enough for its name. Add a package's children before the next "
+              + "top-level package so auto-placed frames do not overlap")
+  public String addPackageElement(
+      String diagramName,
+      String packageName,
+      String parentPackage,
+      int x,
+      int y,
+      int width,
+      int height) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram =
+                findDiagramOfType(diagramName, IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM);
+            if (diagram == null) {
+              return diagramNotFound(diagramName, "package");
+            }
+            if (!PackageObjectDiagramUtils.isValidName(packageName)) {
+              return "Package name must not be empty";
+            }
+            String name = packageName.trim();
+            if (findShape(diagram, name, IPackage.class) != null) {
+              return "Package already on diagram: " + name;
+            }
+            IShapeUIModel parentShape = null;
+            if (PackageObjectDiagramUtils.isValidName(parentPackage)) {
+              parentShape = findShape(diagram, parentPackage.trim(), IPackage.class);
+              if (parentShape == null) {
+                return "Parent package not on diagram: " + parentPackage.trim();
+              }
+            }
+
+            IPackage pkg = getModelElementFactory().createPackage();
+            pkg.setName(name);
+            if (parentShape != null) {
+              parentShape.getModelElement().addChild(pkg);
+            }
+            IDiagramElement de = getDiagramManager().createDiagramElement(diagram, pkg);
+            if (!(de instanceof IShapeUIModel)) {
+              pkg.delete();
+              return "Visual Paradigm did not create a package shape for: " + name;
+            }
+            IShapeUIModel shape = (IShapeUIModel) de;
+            resetCaption(shape);
+            if (parentShape != null && shape instanceof IPackageUIModel) {
+              // The frame already sits inside its owner, so "(from Parent)" would be noise.
+              ((IPackageUIModel) shape).setShowOwnerOption(IPackageUIModel.SHOW_OWNER_NONE);
+            }
+
+            // A frame is a container: fitSize() only measures the label, the frame itself is
+            // kept at least the minimum size and later grows around its children.
+            fitShape(shape);
+            int w = width > 0 ? width : Math.max(PACKAGE_MIN_WIDTH, shape.getWidth());
+            int h = height > 0 ? height : Math.max(PACKAGE_MIN_HEIGHT, shape.getHeight());
+            int[] pos = placeShape(diagram, parentShape, shape, x, y, PACKAGE_GAP);
+            shape.setBounds(pos[0], pos[1], w, h);
+            if (parentShape != null) {
+              nestInto(parentShape, shape, pos[0], pos[1], w, h);
+            }
+
+            return "Added package '"
+                + name
+                + "'"
+                + (parentShape != null ? " in '" + parentPackage.trim() + "'" : "")
+                + " at "
+                + shape.getX()
+                + ","
+                + shape.getY()
+                + " "
+                + shape.getWidth()
+                + "x"
+                + shape.getHeight();
+          });
+    } catch (Exception e) {
+      return "Error adding package: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addPackageDependency",
+      description =
+          "Add a stereotyped dependency (dashed open arrow) from one package to another on a "
+              + "package diagram. kind is use|import|access|merge (\"\" = use): use draws a "
+              + "<<use>> usage, the others a dependency stereotyped <<import>>, <<access>> or "
+              + "<<merge>>. A class box shown in a package may also be used as an end")
+  public String addPackageDependency(
+      String diagramName, String fromPackage, String toPackage, String kind) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram =
+                findDiagramOfType(diagramName, IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM);
+            if (diagram == null) {
+              return diagramNotFound(diagramName, "package");
+            }
+            String stereotype = PackageObjectDiagramUtils.parseDependencyKind(kind);
+            if (stereotype == null) {
+              return "Unknown dependency kind '"
+                  + kind
+                  + "' (use one of use, import, access, merge)";
+            }
+            IShapeUIModel from = findPackageOrClassShape(diagram, fromPackage);
+            if (from == null) {
+              return "Package not on diagram: " + fromPackage;
+            }
+            IShapeUIModel to = findPackageOrClassShape(diagram, toPackage);
+            if (to == null) {
+              return "Package not on diagram: " + toPackage;
+            }
+            if (sameShape(from, to)) {
+              return "A package cannot depend on itself: " + fromPackage;
+            }
+
+            IRelationship dependency =
+                PackageObjectDiagramUtils.KIND_USE.equals(stereotype)
+                    ? getModelElementFactory().createUsage()
+                    : getModelElementFactory().createDependency();
+            dependency.setFrom(from.getModelElement());
+            dependency.setTo(to.getModelElement());
+            // Without the stereotype Visual Paradigm draws a bare dashed arrow.
+            dependency.addStereotype(stereotype);
+            IDiagramElement connector = connectCentered(diagram, dependency, from, to);
+            if (connector == null) {
+              dependency.delete();
+              return "Visual Paradigm did not create the dependency connector";
+            }
+
+            return "Added "
+                + PackageObjectDiagramUtils.stereotypeLabel(stereotype)
+                + " dependency from '"
+                + fromPackage.trim()
+                + "' to '"
+                + toPackage.trim()
+                + "'";
+          });
+    } catch (Exception e) {
+      return "Error adding package dependency: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addClassInPackage",
+      description =
+          "Show a small class box (name only, members hidden) inside a package frame of a "
+              + "package diagram. The class is owned by that package in the model: an existing "
+              + "class the package already owns is reused, otherwise a new class is created in "
+              + "the package. The box is fitted to its name, auto-placed in the package body "
+              + "(rows of 3) and the package grows to enclose it")
+  public String addClassInPackage(String diagramName, String packageName, String className) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram =
+                findDiagramOfType(diagramName, IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM);
+            if (diagram == null) {
+              return diagramNotFound(diagramName, "package");
+            }
+            IShapeUIModel pkgShape = findShape(diagram, packageName, IPackage.class);
+            if (pkgShape == null) {
+              return "Package not on diagram: " + packageName;
+            }
+            if (!PackageObjectDiagramUtils.isValidName(className)) {
+              return "Class name must not be empty";
+            }
+            String name = className.trim();
+            String pkgName = packageName.trim();
+            for (IShapeUIModel child : childShapes(pkgShape)) {
+              IModelElement m = child.getModelElement();
+              if (m instanceof IClass && name.equals(m.getName())) {
+                return "Class '" + name + "' is already shown in package '" + pkgName + "'";
+              }
+            }
+
+            IPackage pkg = (IPackage) pkgShape.getModelElement();
+            IClass cls = findOwnedClass(pkg, name);
+            boolean created = cls == null;
+            if (created) {
+              cls = getModelElementFactory().createClass();
+              cls.setName(name);
+              pkg.addChild(cls);
+            }
+            IDiagramElement de = getDiagramManager().createDiagramElement(diagram, cls);
+            if (!(de instanceof IShapeUIModel)) {
+              if (created) {
+                cls.delete();
+              }
+              return "Visual Paradigm did not create a class shape on package diagram '"
+                  + diagram.getName()
+                  + "'";
+            }
+            IShapeUIModel shape = (IShapeUIModel) de;
+            resetCaption(shape);
+            if (shape instanceof IClassUIModel) {
+              IClassUIModel classShape = (IClassUIModel) shape;
+              // A package diagram only names the classes: hide the members of a reused class.
+              classShape.setHiddenAttributeModels(cls.toAttributeArray());
+              classShape.setHiddenOperationModels(cls.toOperationArray());
+              classShape.setShowOwnerOption(IClassUIModel.SHOW_OWNER_NONE);
+            }
+            fitShape(shape);
+            int w = shape.getWidth();
+            int h = shape.getHeight();
+            int[] pos = placeShape(diagram, pkgShape, shape, 0, 0, PACKAGE_GAP);
+            shape.setBounds(pos[0], pos[1], w, h);
+            nestInto(pkgShape, shape, pos[0], pos[1], w, h);
+
+            return "Added class '"
+                + name
+                + "' in package '"
+                + pkgName
+                + "'"
+                + (created ? "" : " (existing class of the package)")
+                + " at "
+                + shape.getX()
+                + ","
+                + shape.getY()
+                + " "
+                + shape.getWidth()
+                + "x"
+                + shape.getHeight();
+          });
+    } catch (Exception e) {
+      return "Error adding class in package: " + e.getMessage();
+    }
+  }
+
+  // --- Object diagram ---
+
+  @Tool(
+      name = "createObjectDiagram",
+      description = "Create a new UML object diagram in Visual Paradigm (slots are shown)")
+  public String createObjectDiagram(String diagramName) {
+    try {
+      return runOnEdt(
+          () -> {
+            requireProject();
+            if (!PackageObjectDiagramUtils.isValidName(diagramName)) {
+              return "Diagram name must not be empty";
+            }
+            DiagramManager dm = getDiagramManager();
+            IDiagramUIModel diagram =
+                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM);
+            diagram.setName(diagramName.trim());
+            diagram.setAutoFitShapesSize(true);
+            if (diagram instanceof IObjectDiagramUIModel) {
+              ((IObjectDiagramUIModel) diagram).setShowInstanceSpecificationSlots(true);
+            }
+            dm.openDiagram(diagram);
+            return "Created object diagram: " + diagramName.trim();
+          });
+    } catch (Exception e) {
+      return "Error creating object diagram: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addObject",
+      description =
+          "Add an object (instance specification) to an object diagram, rendered underlined as "
+              + "'objectName : ClassName' with one compartment line per slot. className is "
+              + "looked up on this diagram, then in the project; if no class has that name a new "
+              + "class is created (\"\" = untyped object, no slots allowed). slots is "
+              + "'attr=value;attr2=value2' (\"\" for none); each attr must be an attribute of the "
+              + "class or one of its superclasses (missing ones are added only to a class this "
+              + "call created). objectName is the handle used by addObjectLink. x/y (>0) place "
+              + "it explicitly, otherwise it is auto-placed in rows of 3. The box is fitted to "
+              + "its content")
+  public String addObject(
+      String diagramName, String objectName, String className, String slots, int x, int y) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram =
+                findDiagramOfType(diagramName, IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM);
+            if (diagram == null) {
+              return diagramNotFound(diagramName, "object");
+            }
+            if (!PackageObjectDiagramUtils.isValidName(objectName)) {
+              return "Object name must not be empty";
+            }
+            String name = objectName.trim();
+            if (findShape(diagram, name, IInstanceSpecification.class) != null) {
+              return "Object already on diagram: " + name;
+            }
+            Map<String, String> slotValues;
+            try {
+              slotValues = PackageObjectDiagramUtils.parseSlots(slots);
+            } catch (IllegalArgumentException e) {
+              return "Invalid slots: " + e.getMessage();
+            }
+            boolean typed = PackageObjectDiagramUtils.isValidName(className);
+            if (!typed && !slotValues.isEmpty()) {
+              return "className is required when slots are given (each slot needs a class "
+                  + "attribute)";
+            }
+
+            // Resolve the classifier and every slot's attribute before creating anything.
+            IClass cls = null;
+            boolean createdClass = false;
+            List<IAttribute> features = new ArrayList<>();
+            List<String> addedAttributes = new ArrayList<>();
+            if (typed) {
+              String clsName = className.trim();
+              cls = findClassForObject(diagram, clsName);
+              if (cls == null) {
+                cls = getModelElementFactory().createClass();
+                cls.setName(clsName);
+                createdClass = true;
+              }
+              List<String> missing = new ArrayList<>();
+              for (String attrName : slotValues.keySet()) {
+                IAttribute attr = findAttribute(cls, attrName);
+                if (attr == null && createdClass) {
+                  attr = getModelElementFactory().createAttribute();
+                  attr.setName(attrName);
+                  cls.addAttribute(attr);
+                  addedAttributes.add(attrName);
+                }
+                if (attr == null) {
+                  missing.add(attrName);
+                } else {
+                  features.add(attr);
+                }
+              }
+              if (!missing.isEmpty()) {
+                return "Class '"
+                    + clsName
+                    + "' has no attribute(s) "
+                    + String.join(", ", missing)
+                    + " (attributes: "
+                    + attributeNames(cls)
+                    + "); add them to the class first";
+              }
+            }
+
+            IInstanceSpecification instance =
+                getModelElementFactory().createInstanceSpecification();
+            instance.setName(name);
+            if (cls != null) {
+              instance.addClassifier(cls);
+            }
+            int index = 0;
+            for (String value : slotValues.values()) {
+              ISlot slot = getModelElementFactory().createSlot();
+              instance.addSlot(slot);
+              slot.setFeature(features.get(index++));
+              ICompositeValueSpecification spec =
+                  getModelElementFactory().createCompositeValueSpecification();
+              spec.setValue(value);
+              slot.addValue(spec);
+            }
+
+            IDiagramElement de = getDiagramManager().createDiagramElement(diagram, instance);
+            if (!(de instanceof IShapeUIModel)) {
+              instance.delete();
+              if (createdClass) {
+                cls.delete();
+              }
+              return "Visual Paradigm did not create an object shape for: " + name;
+            }
+            IShapeUIModel shape = (IShapeUIModel) de;
+            resetCaption(shape);
+            if (shape instanceof IInstanceSpecificationUIModel) {
+              ((IInstanceSpecificationUIModel) shape)
+                  .setShowSlotsMode(IInstanceSpecificationUIModel.SHOW_SLOTS_MODE_SHOW_ALL);
+            }
+            fitShape(shape);
+            int w = shape.getWidth();
+            int h = shape.getHeight();
+            int[] pos = placeShape(diagram, null, shape, x, y, OBJECT_GAP);
+            shape.setBounds(pos[0], pos[1], w, h);
+
+            StringBuilder result = new StringBuilder();
+            result
+                .append("Added object '")
+                .append(
+                    PackageObjectDiagramUtils.formatObjectLabel(
+                        name, typed ? className.trim() : null))
+                .append("' to diagram '")
+                .append(diagram.getName())
+                .append("'");
+            if (!slotValues.isEmpty()) {
+              List<String> lines = new ArrayList<>();
+              for (Map.Entry<String, String> e : slotValues.entrySet()) {
+                lines.add(PackageObjectDiagramUtils.formatSlot(e.getKey(), e.getValue()));
+              }
+              result.append(" with slots [").append(String.join("; ", lines)).append("]");
+            }
+            if (createdClass) {
+              result.append("; created class '").append(cls.getName()).append("'");
+              if (!addedAttributes.isEmpty()) {
+                result.append(" with attribute(s) ").append(String.join(", ", addedAttributes));
+              }
+            }
+            return result.toString();
+          });
+    } catch (Exception e) {
+      return "Error adding object: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addObjectLink",
+      description =
+          "Add a link (solid line) between two objects of an object diagram. label is shown on "
+              + "the line (\"\" for none). fromObject/toObject are object names on this diagram")
+  public String addObjectLink(
+      String diagramName, String fromObject, String toObject, String label) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram =
+                findDiagramOfType(diagramName, IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM);
+            if (diagram == null) {
+              return diagramNotFound(diagramName, "object");
+            }
+            IShapeUIModel from = findShape(diagram, fromObject, IInstanceSpecification.class);
+            if (from == null) {
+              return "Object not on diagram: " + fromObject;
+            }
+            IShapeUIModel to = findShape(diagram, toObject, IInstanceSpecification.class);
+            if (to == null) {
+              return "Object not on diagram: " + toObject;
+            }
+            if (sameShape(from, to)) {
+              return "A link needs two different objects: " + fromObject;
+            }
+
+            ILink link = getModelElementFactory().createLink();
+            link.setFrom(from.getModelElement());
+            link.setTo(to.getModelElement());
+            String caption = PackageObjectDiagramUtils.isValidName(label) ? label.trim() : null;
+            if (caption != null) {
+              link.setName(caption);
+            }
+            IDiagramElement connector = connectCentered(diagram, link, from, to);
+            if (connector == null) {
+              link.delete();
+              return "Visual Paradigm did not create the link connector";
+            }
+
+            return "Added link '"
+                + fromObject.trim()
+                + "' -- '"
+                + toObject.trim()
+                + "'"
+                + (caption != null ? " [" + caption + "]" : "");
+          });
+    } catch (Exception e) {
+      return "Error adding object link: " + e.getMessage();
+    }
+  }
+
+  // --- Diagram lookup ---
+
+  /**
+   * The most recently created diagram with this name and Visual Paradigm diagram type. The type
+   * string is compared instead of a UI-model interface so no cast can fail.
+   */
+  private IDiagramUIModel findDiagramOfType(String diagramName, String diagramType) {
+    if (diagramName == null) {
+      return null;
+    }
+    String wanted = diagramName.trim();
+    IDiagramUIModel result = null;
+    for (IDiagramUIModel d : DiagramUtils.findAllDiagrams(IDiagramUIModel.class)) {
+      if (wanted.equals(d.getName()) && diagramType.equals(d.getType())) {
+        result = d;
+      }
+    }
+    return result;
+  }
+
+  private String diagramNotFound(String diagramName, String kind) {
+    IDiagramUIModel other =
+        diagramName == null ? null : DiagramUtils.findDiagramByName(diagramName.trim());
+    if (other != null) {
+      return "Diagram '"
+          + diagramName
+          + "' is a "
+          + other.getType()
+          + ", not a "
+          + kind
+          + " diagram";
+    }
+    return "Diagram not found: " + diagramName;
+  }
+
+  // --- Shape lookup (diagram-scoped, includes shapes nested in packages) ---
+
+  private IShapeUIModel findShape(
+      IDiagramUIModel diagram, String name, Class<? extends IModelElement> type) {
+    if (name == null || name.trim().isEmpty()) {
+      return null;
+    }
+    String wanted = name.trim();
+    for (IShapeUIModel shape : allShapes(diagram)) {
+      IModelElement model = shape.getModelElement();
+      if (type.isInstance(model) && wanted.equals(model.getName())) {
+        return shape;
+      }
+    }
+    return null;
+  }
+
+  private IShapeUIModel findPackageOrClassShape(IDiagramUIModel diagram, String name) {
+    IShapeUIModel pkg = findShape(diagram, name, IPackage.class);
+    return pkg != null ? pkg : findShape(diagram, name, IClass.class);
+  }
+
+  /** Every shape of the diagram, including shapes nested in containers, each once. */
+  private List<IShapeUIModel> allShapes(IDiagramUIModel diagram) {
+    List<IShapeUIModel> result = new ArrayList<>();
+    Set<String> seen = new HashSet<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IShapeUIModel) {
+        collectShapes((IShapeUIModel) de, result, seen, 0);
+      }
+    }
+    return result;
+  }
+
+  private void collectShapes(
+      IShapeUIModel shape, List<IShapeUIModel> out, Set<String> seen, int depth) {
+    if (depth > MAX_DEPTH || !seen.add(shape.getId())) {
+      return;
+    }
+    out.add(shape);
+    for (IShapeUIModel child : childShapes(shape)) {
+      collectShapes(child, out, seen, depth + 1);
+    }
+  }
+
+  private static List<IShapeUIModel> childShapes(IShapeUIModel shape) {
+    List<IShapeUIModel> result = new ArrayList<>();
+    IShapeUIModel[] children = shape.toChildArray();
+    if (children != null) {
+      for (IShapeUIModel child : children) {
+        if (child != null) {
+          result.add(child);
+        }
+      }
+    }
+    return result;
+  }
+
+  /** Shape wrappers are not canonical objects, so compare them by id. */
+  private static boolean sameShape(IDiagramElement a, IDiagramElement b) {
+    return a != null && b != null && a.getId().equals(b.getId());
+  }
+
+  // --- Model lookup ---
+
+  private static IClass findOwnedClass(IPackage pkg, String name) {
+    Iterator<?> iter = pkg.childIterator();
+    while (iter.hasNext()) {
+      Object child = iter.next();
+      if (child instanceof IClass && name.equals(((IClass) child).getName())) {
+        return (IClass) child;
+      }
+    }
+    return null;
+  }
+
+  /** The class an object is typed by: a class shown on this diagram first, then project-wide. */
+  private IClass findClassForObject(IDiagramUIModel diagram, String className) {
+    IShapeUIModel shown = findShape(diagram, className, IClass.class);
+    if (shown != null) {
+      return (IClass) shown.getModelElement();
+    }
+    return DiagramUtils.findModelElementByName(className, IClass.class);
+  }
+
+  /** An attribute of the class or of one of its superclasses (VP: generalization from = parent). */
+  private static IAttribute findAttribute(IClass cls, String name) {
+    Set<String> visited = new HashSet<>();
+    IClass current = cls;
+    List<IClass> pending = new ArrayList<>();
+    int steps = 0;
+    while (current != null && steps++ < MAX_DEPTH) {
+      if (visited.add(current.getId())) {
+        IAttribute attr = current.getAttributeByName(name);
+        if (attr != null) {
+          return attr;
+        }
+        ISimpleRelationship[] incoming = current.toToRelationshipArray();
+        if (incoming != null) {
+          for (ISimpleRelationship rel : incoming) {
+            if (rel instanceof IGeneralization && rel.getFrom() instanceof IClass) {
+              pending.add((IClass) rel.getFrom());
+            }
+          }
+        }
+      }
+      current = pending.isEmpty() ? null : pending.remove(0);
+    }
+    return null;
+  }
+
+  private static String attributeNames(IClass cls) {
+    List<String> names = new ArrayList<>();
+    IAttribute[] attrs = cls.toAttributeArray();
+    if (attrs != null) {
+      for (IAttribute a : attrs) {
+        names.add(a.getName());
+      }
+    }
+    return names.isEmpty() ? "none" : String.join(", ", names);
+  }
+
+  // --- Placement ---
+
+  /**
+   * Position of a new shape. x/y (>0) win; otherwise the shape flows after its siblings: the
+   * top-level shapes of the diagram, or the children of {@code parent} inside its body. A nested
+   * position is always kept inside the parent body.
+   */
+  private int[] placeShape(
+      IDiagramUIModel diagram, IShapeUIModel parent, IShapeUIModel self, int x, int y, int gap) {
+    List<int[]> siblings = new ArrayList<>();
+    int[] auto;
+    if (parent == null) {
+      for (IDiagramElement de : getDiagramElementsList(diagram)) {
+        if (de instanceof IShapeUIModel
+            && !sameShape(de, self)
+            && ((IShapeUIModel) de).getParent() == null) {
+          siblings.add(bounds(de));
+        }
+      }
+      auto = PackageObjectDiagramUtils.flowPlace(siblings, MARGIN, MARGIN, TOP_PER_ROW, gap, gap);
+    } else {
+      for (IShapeUIModel child : childShapes(parent)) {
+        if (!sameShape(child, self)) {
+          siblings.add(bounds(child));
+        }
+      }
+      auto =
+          PackageObjectDiagramUtils.flowPlace(
+              siblings,
+              parent.getX() + INNER_PAD,
+              parent.getY() + INNER_HEADER,
+              INNER_PER_ROW,
+              INNER_PAD,
+              INNER_PAD);
+    }
+    int targetX = x > 0 ? x : auto[0];
+    int targetY = y > 0 ? y : auto[1];
+    if (parent != null) {
+      return PackageObjectDiagramUtils.clampIntoBody(
+          targetX, targetY, bounds(parent), INNER_PAD, INNER_HEADER);
+    }
+    return new int[] {targetX, targetY};
+  }
+
+  /**
+   * Make {@code child} a diagram child of {@code parent}, keep its absolute bounds, and grow the
+   * parent (and its own parents) so they enclose it.
+   */
+  private void nestInto(IShapeUIModel parent, IShapeUIModel child, int x, int y, int w, int h) {
+    parent.addChild(child);
+    child.setBounds(x, y, w, h); // addChild may re-base the child; restore its bounds
+    child.bringToFront();
+    growToEnclose(parent);
+  }
+
+  /** Grow a package frame and every enclosing frame so each one encloses its children. */
+  private void growToEnclose(IShapeUIModel container) {
+    IShapeUIModel current = container;
+    int depth = 0;
+    while (current != null && depth++ < MAX_DEPTH) {
+      List<int[]> children = new ArrayList<>();
+      for (IShapeUIModel child : childShapes(current)) {
+        children.add(bounds(child));
+      }
+      int[] old = bounds(current);
+      int[] grown = PackageObjectDiagramUtils.encloseChildren(old, children, INNER_PAD);
+      if (grown[2] != old[2] || grown[3] != old[3]) {
+        current.setBounds(grown[0], grown[1], grown[2], grown[3]);
+      }
+      IDiagramElement parent = current.getParent();
+      current =
+          parent instanceof IShapeUIModel && parent.getModelElement() instanceof IPackage
+              ? (IShapeUIModel) parent
+              : null;
+    }
+  }
+
+  private static int[] bounds(IDiagramElement de) {
+    return new int[] {de.getX(), de.getY(), de.getWidth(), de.getHeight()};
+  }
+
+  // --- Connectors and captions ---
+
+  /**
+   * Create a connector anchored at the two shape centers. With null points Visual Paradigm pins
+   * both ends to the shapes' top-left corners, so the arrowheads hit the corners.
+   */
+  private IDiagramElement connectCentered(
+      IDiagramUIModel diagram, IModelElement model, IShapeUIModel from, IShapeUIModel to) {
+    Point[] points = {center(from), center(to)};
+    IDiagramElement connector =
+        getDiagramManager().createConnector(diagram, model, from, to, points);
+    if (connector instanceof IConnectorUIModel) {
+      IConnectorUIModel c = (IConnectorUIModel) connector;
+      c.clearPoints();
+      c.addPoint(center(from));
+      c.addPoint(center(to));
+      c.setUseFromShapeCenter(true);
+      c.setUseToShapeCenter(true);
+      c.setRequestRebuild(true);
+    }
+    resetCaption(connector);
+    return connector;
+  }
+
+  private static Point center(IDiagramElement shape) {
+    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
+  }
+
+  /**
+   * Force Visual Paradigm to render the caption of a freshly created shape or connector; without
+   * this new shapes and connectors come out blank.
+   */
+  private static void resetCaption(IDiagramElement de) {
+    if (de != null) {
+      de.resetCaption();
+    }
+  }
+}
