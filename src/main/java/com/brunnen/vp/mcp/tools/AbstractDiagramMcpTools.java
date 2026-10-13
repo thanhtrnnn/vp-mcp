@@ -2757,17 +2757,21 @@ public abstract class AbstractDiagramMcpTools {
       name = "autoLayoutDiagram",
       description =
           "Apply structured layout to a diagram. MUST be called AFTER adding all elements. "
-              + "Class and use case diagrams (and every diagram type that has a layout profile):"
-              + " layered, orthogonal layout of shapes, lines and labels: every line horizontal"
-              + " or vertical, no shape overlap, no line through a shape, no two lines on top of"
-              + " each other, labels beside their lines; shapes placed with x/y are not pinned"
-              + " any more. Class: generalizations decide the layers; UC: actors left, use cases"
-              + " inside the system boundary. ERD: compact organic."
-              + " Communication: actor row, boundaries, entities. Component, package, object:"
-              + " Visual Paradigm's orthogonal layout. State: top-to-bottom flow. DFD: entities"
-              + " left, processes in the middle, data stores right. Activity, sequence,"
-              + " flowchart, BPMN and deployment diagrams are laid out as you add elements:"
-              + " nothing is moved (use setElementBounds and rerouteConnectors)")
+              + "Class, use case, state, activity, flowchart and communication diagrams (and every"
+              + " diagram type that has a layout profile): layered, orthogonal layout of shapes,"
+              + " lines and labels: every line horizontal or vertical, no shape overlap, no line"
+              + " through a shape, no two lines on top of each other, labels beside their lines;"
+              + " shapes placed with x/y are not pinned any more. Class: generalizations decide the"
+              + " layers; UC: actors left, use cases inside the system boundary; state: initial at"
+              + " the top, final at the bottom, loops and opposite transitions side by side;"
+              + " activity: rows by the flow, nodes in the column of their lane, bars spanning"
+              + " their branches, page frames around their nodes; flowchart: top to bottom, a"
+              + " vertex of the decision per branch; communication: actor row, boundaries,"
+              + " controls, entities, message arrows beside their links. ERD: compact organic. DFD:"
+              + " entities left, processes in the middle, data stores right. Component, package,"
+              + " object: Visual Paradigm's orthogonal layout. Sequence, BPMN and deployment"
+              + " diagrams are laid out as you add elements: nothing is moved (use"
+              + " setElementBounds and rerouteConnectors)")
   public String autoLayoutDiagram(String diagramName) {
     try {
       return runOnEdt(

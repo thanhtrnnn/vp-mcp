@@ -138,7 +138,7 @@ public final class ActivityLayoutProfile extends LayoutProfile {
    */
   public ActivityLayoutProfile(Lanes lanes, Map<String, Set<String>> frames) {
     this.lanes = lanes != null && lanes.size() > 0 ? lanes : null;
-    this.frames = frames;
+    this.frames = frames == null ? new LinkedHashMap<>() : frames;
   }
 
   @Override
@@ -216,18 +216,22 @@ public final class ActivityLayoutProfile extends LayoutProfile {
       case ActivityDiagramUtils.KIND_INITIAL:
         spec.layer = ElkLayout.FIRST_LAYER;
         spec.outline = ShapeOutline.Kind.ELLIPSE;
+        spec.size = sizeForEnds(shape, shape.getWidth(), shape.getHeight(), 3);
         break;
       case ActivityDiagramUtils.KIND_FINAL:
         spec.layer = ElkLayout.LAST_LAYER;
         spec.outline = ShapeOutline.Kind.ELLIPSE;
+        spec.size = sizeForEnds(shape, shape.getWidth(), shape.getHeight(), 3);
         break;
       case ActivityDiagramUtils.KIND_FLOW_FINAL:
         spec.outline = ShapeOutline.Kind.ELLIPSE;
+        spec.size = sizeForEnds(shape, shape.getWidth(), shape.getHeight(), 3);
         break;
       case ActivityDiagramUtils.KIND_DECISION:
       case ActivityDiagramUtils.KIND_MERGE:
         spec.outline = ShapeOutline.Kind.DIAMOND;
         spec.ownSides = true;
+        spec.size = sizeForEnds(shape, shape.getWidth(), shape.getHeight(), 4);
         break;
       case ActivityDiagramUtils.KIND_FORK:
       case ActivityDiagramUtils.KIND_JOIN:
@@ -248,23 +252,38 @@ public final class ActivityLayoutProfile extends LayoutProfile {
 
   @Override
   public IShapeUIModel container(IShapeUIModel shape) {
-    if (frames == null || shape.getModelElement() instanceof IActivity) {
+    if (shape.getModelElement() instanceof IActivity) {
       return null;
     }
     IDiagramUIModel diagram = shape.getDiagramUIModel();
     if (diagram == null) {
       return null;
     }
+    IShapeUIModel[] all = diagram.toShapeUIModelArray();
     for (Map.Entry<String, Set<String>> frame : frames.entrySet()) {
       if (frame.getValue().contains(shape.getId())) {
-        for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+        for (IShapeUIModel s : all) {
           if (s.getId().equals(frame.getKey())) {
             return s;
           }
         }
       }
     }
-    return null;
+    // a frame the tools did not make (a diagram opened from a file) holds what lies inside it
+    IShapeUIModel smallest = null;
+    for (IShapeUIModel s : all) {
+      if (s.getModelElement() instanceof IActivity
+          && !frames.containsKey(s.getId())
+          && s.getX() <= shape.getX()
+          && s.getY() <= shape.getY()
+          && s.getX() + s.getWidth() >= shape.getX() + shape.getWidth()
+          && s.getY() + s.getHeight() >= shape.getY() + shape.getHeight()
+          && (smallest == null
+              || s.getWidth() * s.getHeight() < smallest.getWidth() * smallest.getHeight())) {
+        smallest = s;
+      }
+    }
+    return smallest;
   }
 
   @Override
@@ -490,14 +509,5 @@ public final class ActivityLayoutProfile extends LayoutProfile {
             Math.max(lanes.minBodyHeight(), laneGrowth == null ? 0 : laneGrowth[0]),
             bottom + LANE_BOTTOM - lanes.top() - lanes.headerHeight());
     lanes.apply(lanes.xs(), lanes.widths(), body);
-  }
-
-  /**
-   * The frames of a diagram by shape id with their members, for a family that keeps them.
-   *
-   * @return a new empty map
-   */
-  public static Map<String, Set<String>> newFrames() {
-    return new LinkedHashMap<>();
   }
 }

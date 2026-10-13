@@ -379,4 +379,45 @@ public class LayoutProfilesTest {
     }
     assertTrue("a row of two nodes widens its lane: " + widths, lanes.widths[1] >= 80 + 100 + 40);
   }
+
+  @Test
+  public void aFinalStateWithManyTransitionsGrowsSoEachHasAPort() {
+    StateLayoutProfile profile = new StateLayoutProfile();
+    IShapeUIModel end = shape(model(IFinalState2.class, "End"), 100, 400, 30, 30);
+    List<IConnectorUIModel> incoming = new ArrayList<>();
+    for (int i = 0; i < 6; i++) {
+      IShapeUIModel from = shape(model(IState2.class, "S" + i), 0, i * 50, 100, 30);
+      incoming.add(connector(model(ITransition2.class, ""), from, end));
+    }
+    when(end.toToConnectorArray()).thenReturn(incoming.toArray(new IConnectorUIModel[0]));
+    LayoutProfile.NodeSpec grown = profile.node(end);
+    assertNotNull(grown.size);
+    assertTrue("room for two ports on a side: " + grown.size[0], grown.size[0] >= 56);
+    IShapeUIModel quiet = shape(model(IFinalState2.class, "End2"), 100, 400, 30, 30);
+    assertNull("a few transitions fit the notation size", profile.node(quiet).size);
+  }
+
+  @Test
+  public void aFrameHoldsWhatLiesInsideItWhenTheToolsDidNotMakeIt() {
+    ActivityLayoutProfile profile = new ActivityLayoutProfile(null, new HashMap<>());
+    IShapeUIModel frame =
+        shape(model(com.vp.plugin.model.IActivity.class, "Xử lí tại gdX"), 0, 0, 300, 300);
+    IShapeUIModel inside = shape(model(IActivityAction.class, "in"), 50, 50, 100, 40);
+    IShapeUIModel outside = shape(model(IActivityAction.class, "out"), 400, 50, 100, 40);
+    IDiagramUIModel diagram = mock(IDiagramUIModel.class);
+    when(diagram.toShapeUIModelArray()).thenReturn(new IShapeUIModel[] {frame, inside, outside});
+    when(frame.getDiagramUIModel()).thenReturn(diagram);
+    when(inside.getDiagramUIModel()).thenReturn(diagram);
+    when(outside.getDiagramUIModel()).thenReturn(diagram);
+    assertEquals(frame.getId(), profile.container(inside).getId());
+    assertNull(profile.container(outside));
+    assertNull("a frame is not inside itself", profile.container(frame));
+    // a frame the tools made keeps the nodes it was made for, whatever lies inside it
+    Map<String, java.util.Set<String>> made = new HashMap<>();
+    made.put(
+        frame.getId(), new java.util.HashSet<>(java.util.Collections.singleton(outside.getId())));
+    ActivityLayoutProfile known = new ActivityLayoutProfile(null, made);
+    assertEquals(frame.getId(), known.container(outside).getId());
+    assertNull(known.container(inside));
+  }
 }

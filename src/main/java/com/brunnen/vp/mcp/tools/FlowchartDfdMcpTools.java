@@ -54,9 +54,11 @@ import java.util.List;
  * diagram, number processes and data stores automatically when no ID is given, and reject data
  * flows that do not touch a process.
  *
- * <p>Every shape is fitted to its text with VP's fit-size API and auto-placed on a readable grid
- * unless x/y are given; flows are anchored at the shape centers. Shape names are the handles used
- * by the flow tools, so they must be unique per diagram.
+ * <p>Every shape is fitted to its text with VP's fit-size API. A flowchart is laid out by the
+ * shared layered layout ({@code FlowchartLayoutProfile}): top to bottom, every flow horizontal or
+ * vertical, a vertex of a decision per branch. DFD shapes are auto-placed on a readable grid unless
+ * x/y are given; their flows are anchored at the shape centers. Shape names are the handles used by
+ * the flow tools, so they must be unique per diagram.
  */
 public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
@@ -120,7 +122,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
               + "database, manualInput, connector (on-page circle). shapeName is the text shown "
               + "AND the handle used by addFlowchartFlow, so it must be unique on the diagram. "
               + "The shape is fitted to its text; x/y (>0) set its top-left corner, otherwise it "
-              + "is auto-placed in one top-to-bottom column, 50 px below the shape above")
+              + "is placed by the layout: top to bottom, the branches of a decision side by side")
   public String addFlowchartShape(String diagramName, String shapeName, String kind, int x, int y) {
     try {
       return runOnEdt(

@@ -45,8 +45,9 @@ import java.util.Set;
  * number, which Visual Paradigm renders in front of the text itself.
  *
  * <p>Participants are looked up by name on the given diagram only. Every shape is fitted to its
- * text after creation, participants are auto-placed on a grid unless x/y are given, and message
- * arrows are stacked beside their link (one side per direction) so labels do not overlap.
+ * text after creation, participants are placed by the layout (rows by role, links routed with
+ * horizontal and vertical lines) unless x/y are given, and message arrows stand beside their link
+ * (one side per direction) so labels do not overlap.
  */
 public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
 
@@ -383,10 +384,9 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "moveCommunicationLifeline",
       description =
           "Move a participant (object, anonymous ':Classifier' object or actor) of a"
-              + " communication diagram to x/y (top-left corner). Its links are re-anchored and"
-              + " the message arrows on them are laid out beside the links again, so the book"
-              + " layout (actor top centre, boundary row, entities below) can be reached after"
-              + " the participants were auto-placed")
+              + " communication diagram to x/y (top-left corner). The participant stays there"
+              + " (autoLayoutDiagram releases it): its links are routed again with horizontal and"
+              + " vertical lines and the message arrows are laid out beside them")
   public String moveCommunicationLifeline(String diagramName, String lifelineName, int x, int y) {
     try {
       return runOnEdt(

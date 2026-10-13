@@ -171,6 +171,37 @@ public class LayoutProfile {
   }
 
   /**
+   * The size a small shape (a circle, a diamond) needs so that every connector that ends on it has
+   * a port of its own: a side takes ports {@link OrthogonalRouter#PORT_GAP} apart inside the middle
+   * half of its length.
+   *
+   * @param shape the shape
+   * @param width its notation width
+   * @param height its notation height
+   * @param sides the sides connectors may use (a name hanging beside the shape blocks one)
+   * @return {width, height}, or null when the notation size is enough
+   */
+  protected static int[] sizeForEnds(IShapeUIModel shape, int width, int height, int sides) {
+    int ends = 0;
+    for (IConnectorUIModel[] list :
+        new IConnectorUIModel[][] {shape.toFromConnectorArray(), shape.toToConnectorArray()}) {
+      for (IConnectorUIModel c : list == null ? new IConnectorUIModel[0] : list) {
+        if (c.getFromShape() != null
+            && c.getToShape() != null
+            && !c.getFromShape().getId().equals(c.getToShape().getId())) {
+          ends++;
+        }
+      }
+    }
+    int perSide = (ends + sides - 1) / sides;
+    if (perSide <= 1) {
+      return null;
+    }
+    int side = 32 + 2 * OrthogonalRouter.PORT_GAP * (perSide - 1);
+    return new int[] {Math.max(width, side), Math.max(height, side)};
+  }
+
+  /**
    * Whether every connector is drawn by the router instead of taking the route of the layered
    * layout: the layout only decides where the shapes go. A family with ends that need their own
    * sides (diamonds, bars) and with loops answers true.

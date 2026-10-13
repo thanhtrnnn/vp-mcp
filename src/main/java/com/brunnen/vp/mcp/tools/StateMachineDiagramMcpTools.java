@@ -77,9 +77,9 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add a named state to a state machine diagram. entryAction/doActivity/exitAction are "
               + "optional behaviours shown in the state's compartment as 'entry / ...', "
               + "'do / ...', 'exit / ...' (pass \"\" to omit). The box is fitted to its text. "
-              + "x/y (>0) place the state explicitly, otherwise it goes to the next free cell of "
-              + "a 3-column grid; its first incoming transition then moves it below the source"
-              + " (the book's top-to-bottom screen flow), or beside it when below is taken")
+              + "x/y (>0) place the state explicitly (the transitions are routed around it), "
+              + "otherwise the layout puts it on the row its transitions lead to (the book's "
+              + "top-to-bottom screen flow, branches side by side)")
   public String addState(
       String diagramName,
       String stateName,

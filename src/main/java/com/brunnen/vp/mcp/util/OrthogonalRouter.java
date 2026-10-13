@@ -215,6 +215,7 @@ public final class OrthogonalRouter {
     final List<int[]> segments = new ArrayList<>(); // {x1, y1, x2, y2}
     final List<Object[]> ports = new ArrayList<>(); // {shapeId, side, position}
     final int lane;
+    boolean sharePorts;
 
     Context(List<Shape> list, int laneGap) {
       this.lane = laneGap;
@@ -290,6 +291,15 @@ public final class OrthogonalRouter {
       }
       if (r == null) {
         r = search(c, s, t, false, 3);
+      }
+      if (r == null) {
+        // every port of a small shape is in use: a shared end beats a line through a shape
+        sharePorts = true;
+        r = search(c, s, t, false, STUB - 2);
+        if (r == null) {
+          r = search(c, s, t, false, 3);
+        }
+        sharePorts = false;
       }
       return r != null ? r : direct(s, t);
     }
@@ -397,6 +407,9 @@ public final class OrthogonalRouter {
     }
 
     boolean taken(String shapeId, int side, int position) {
+      if (sharePorts) {
+        return false;
+      }
       for (Object[] p : ports) {
         if (p[0].equals(shapeId)
             && (Integer) p[1] == side

@@ -1317,8 +1317,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               + " messages and activation bar along; control nodes, pseudo-states and"
               + " BPMN/flowchart/DFD symbols keep their notation sizes. The labels of the"
               + " connectors of a moved shape are routed again and their labels put beside the"
-              + " lines. A shape placed this way is pinned: the layered layout of class and use"
-              + " case diagrams leaves it where it is (autoLayoutDiagram releases it)")
+              + " lines. A shape placed this way is pinned: the layered layout (class, use case,"
+              + " state, activity, flowchart, communication diagrams) leaves it where it is and"
+              + " routes the lines around it; a node of an activity swimlane stays in its lane"
+              + " (autoLayoutDiagram releases every pin)")
   public String setElementBounds(
       String diagramName, String elementName, int x, int y, int width, int height) {
     try {

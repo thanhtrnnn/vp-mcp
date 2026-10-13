@@ -101,6 +101,7 @@ public final class VpGraphLayout {
     if (graph.shapes.isEmpty()) {
       return summary;
     }
+    graph.growSmallShapes();
     for (IShapeUIModel s : graph.shapes.values()) {
       profile.placed(s); // detached names follow the shapes where they stand now
     }
@@ -117,6 +118,7 @@ public final class VpGraphLayout {
     }
     Map<String, List<int[]>> routes =
         OrthogonalRouter.route(shapes, conns, new ArrayList<>(), profile.laneGap());
+    graph.removeJogs(profile, new LinkedHashMap<>(), routes);
     for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
       IConnectorUIModel c = graph.connectors.get(e.getKey());
       List<int[]> r = e.getValue();
@@ -528,6 +530,7 @@ public final class VpGraphLayout {
       }
       Map<String, List<int[]>> extra =
           OrthogonalRouter.route(routerShapes(profile), pending, drawn, profile.laneGap());
+      removeJogs(profile, routes, extra);
       for (Map.Entry<String, List<int[]>> e : extra.entrySet()) {
         IConnectorUIModel c = connectors.get(e.getKey());
         List<int[]> r = e.getValue();
@@ -543,6 +546,26 @@ public final class VpGraphLayout {
             r.get(n - 1),
             r.get(n - 2));
         routes.put(e.getKey(), r);
+      }
+    }
+
+    /**
+     * A circle or diamond that stands where it is but now has more connectors than it has ports
+     * grows around its center (the layered layout does the same through its node sizes).
+     */
+    void growSmallShapes() {
+      for (Map.Entry<String, IShapeUIModel> e : shapes.entrySet()) {
+        LayoutProfile.NodeSpec spec = nodeSpecs.get(e.getKey());
+        IShapeUIModel s = e.getValue();
+        if (spec.size == null
+            || spec.outline == ShapeOutline.Kind.RECT
+            || (spec.size[0] <= s.getWidth() && spec.size[1] <= s.getHeight())) {
+          continue;
+        }
+        int w = Math.max(spec.size[0], s.getWidth());
+        int h = Math.max(spec.size[1], s.getHeight());
+        s.setBounds(
+            s.getX() + s.getWidth() / 2 - w / 2, s.getY() + s.getHeight() / 2 - h / 2, w, h);
       }
     }
 
@@ -650,6 +673,80 @@ public final class VpGraphLayout {
           }
         }
       }
+    }
+
+    /**
+     * Slide the ends of the new routes along their shapes' sides where that removes a small jog
+     * (the router rounds ports to its grid): a route that would then run through a shape or on top
+     * of another route stays as it was.
+     */
+    private void removeJogs(
+        LayoutProfile profile, Map<String, List<int[]>> others, Map<String, List<int[]>> fresh) {
+      Map<String, int[]> rects = new HashMap<>();
+      for (IShapeUIModel s : shapes.values()) {
+        rects.put(s.getId(), rect(s));
+      }
+      Map<String, List<int[]>> before = new LinkedHashMap<>();
+      List<RouteTidy.Item> items = new ArrayList<>();
+      for (Map.Entry<String, List<int[]>> e : fresh.entrySet()) {
+        IConnectorUIModel c = connectors.get(e.getKey());
+        before.put(e.getKey(), RouteTidy.copy(e.getValue()));
+        items.add(
+            new RouteTidy.Item(c.getFromShape().getId(), c.getToShape().getId(), e.getValue()));
+      }
+      for (Map.Entry<String, List<int[]>> e : others.entrySet()) {
+        if (!fresh.containsKey(e.getKey())) {
+          IConnectorUIModel c = connectors.get(e.getKey());
+          items.add(
+              new RouteTidy.Item(
+                  c.getFromShape().getId(),
+                  c.getToShape().getId(),
+                  RouteTidy.copy(e.getValue()))); // a copy: the drawn routes stay as they are
+        }
+      }
+      RouteTidy.straighten(items, rects, PORT_GAP, 28);
+      for (Map.Entry<String, List<int[]>> e : fresh.entrySet()) {
+        if (sameRoute(before.get(e.getKey()), e.getValue())) {
+          continue;
+        }
+        IConnectorUIModel c = connectors.get(e.getKey());
+        boolean bad = false;
+        for (IShapeUIModel s : shapes.values()) {
+          if (!hasChildren(s.getId())
+              && !related(c.getFromShape().getId(), s.getId())
+              && !related(c.getToShape().getId(), s.getId())
+              && RouteChecks.through(e.getValue(), rect(s), 2)) {
+            bad = true;
+            break;
+          }
+        }
+        for (Map.Entry<String, List<int[]>> o : others.entrySet()) {
+          bad |=
+              !o.getKey().equals(e.getKey())
+                  && RouteChecks.shares(e.getValue(), o.getValue(), profile.laneGap());
+        }
+        for (Map.Entry<String, List<int[]>> o : fresh.entrySet()) {
+          bad |=
+              !o.getKey().equals(e.getKey())
+                  && RouteChecks.shares(e.getValue(), o.getValue(), profile.laneGap());
+        }
+        if (bad) {
+          e.getValue().clear();
+          e.getValue().addAll(before.get(e.getKey()));
+        }
+      }
+    }
+
+    private static boolean sameRoute(List<int[]> a, List<int[]> b) {
+      if (a.size() != b.size()) {
+        return false;
+      }
+      for (int i = 0; i < a.size(); i++) {
+        if (a.get(i)[0] != b.get(i)[0] || a.get(i)[1] != b.get(i)[1]) {
+          return false;
+        }
+      }
+      return true;
     }
 
     int[] rect(IShapeUIModel s) {

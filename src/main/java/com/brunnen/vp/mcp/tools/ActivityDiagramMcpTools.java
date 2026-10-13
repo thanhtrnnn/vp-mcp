@@ -401,8 +401,9 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add an action (rounded box, fitted to its text) to an activity diagram. actionName is"
               + " also the handle used by addActivityFlow, so it must be unique on the diagram."
               + " partitionName puts it in that swimlane lane (\"\" = no lane). x/y (>0) place its"
-              + " top-left corner explicitly (kept inside the lane); otherwise it goes one row"
-              + " below the lowest node, centered in its lane or on the main column")
+              + " top-left corner explicitly (kept inside the lane, the layout routes the flows"
+              + " around it); otherwise the layout puts it in the row its flows lead to, in the"
+              + " column of its lane")
   public String addActivityAction(
       String diagramName, String actionName, String partitionName, int x, int y) {
     try {
@@ -471,7 +472,8 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
               + " (\"End #2\") is only part of the handle, so a second final node or a second"
               + " decision with the same text is added as \"End #2\" and shows \"End\". partitionName"
               + " puts it in that swimlane lane (\"\" = no lane). x/y (>0) place its top-left"
-              + " corner explicitly; otherwise it goes one row below the lowest node, centered")
+              + " corner explicitly; otherwise the layout puts it in the row its flows lead to, in"
+              + " the column of its lane (a fork/join bar is as wide as the nodes it joins)")
   public String addActivityControlNode(
       String diagramName, String kind, String nodeName, String partitionName, int x, int y) {
     try {
@@ -580,8 +582,7 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
               + " addActivityFlow and must be unique on the diagram; flows to/from it are object"
               + " flows. partitionName puts it in that swimlane lane (\"\" = no lane, or the lane"
               + " under an explicit x/y). x/y (>0) place its top-left corner explicitly; otherwise"
-              + " it goes one row below the lowest node and moves next to the node of its first"
-              + " incoming flow")
+              + " the layout puts it in the row its flows lead to, in the column of its lane")
   public String addActivityObjectNode(
       String diagramName, String objectName, String state, String partitionName, int x, int y) {
     try {

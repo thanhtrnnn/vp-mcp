@@ -39,13 +39,23 @@ text, attachedTo, x, y)` (a comment box at the first free spot beside the shape 
 bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
 and matches the exact diagram type.
 
-Class and use case diagrams are laid out by a layered, orthogonal layout (the Eclipse Layout Kernel that
-Visual Paradigm bundles in `lib02.jar`): after every `add*` call the shapes, lines and labels are placed
-again, so every line is horizontal or vertical (right-angle elbows), shapes never overlap, no line runs
-through a shape or on top of another line, and labels sit beside their lines. A shape placed with x/y
-(or moved with `setElementBounds`) is pinned: lines are routed around it. `autoLayoutDiagram` lays the whole
-diagram out again; `rerouteConnectors` routes the lines around the shapes where they stand. Deployment
-nodes, devices and execution environments are flat rectangles with their keyword and name.
+Class, use case, state, activity, flowchart and communication diagrams are laid out by a layered,
+orthogonal layout (the Eclipse Layout Kernel that Visual Paradigm bundles in `lib02.jar` decides where
+the shapes go, an obstacle-aware router draws the lines): after every `add*` call the shapes, lines and
+labels are placed again, so every line is horizontal or vertical (right-angle elbows, rectangular
+loops), shapes never overlap, no line runs through a shape or on top of another line, and labels sit
+beside their lines. A shape placed with x/y (or moved with `setElementBounds`) is pinned: lines are
+routed around it. `autoLayoutDiagram` lays the whole diagram out again; `rerouteConnectors` routes the
+lines around the shapes where they stand. Deployment nodes, devices and execution environments are flat
+rectangles with their keyword and name.
+
+In an activity diagram the rows follow the flow and every node stands in the column of its lane (the lanes
+grow to hold their nodes); the branches of a decision leave from different vertices of its diamond, a merge
+takes its inputs on different sides, fork/join bars span their branches, and the nodes of an
+`addActivityFrame` stay together inside it. A state diagram runs from the initial state at the top to
+the final state at the bottom; a transition from a state to itself is a rectangular loop and two opposite
+transitions run side by side. A communication diagram puts the actor on top, then boundaries, controls and
+entities in rows; every message is an arrow beside its link, turned along the leg it stands next to.
 
 ##### Use Case Diagram (5 tools)
 - **createUseCaseDiagram(diagramName)**: Create new use case diagrams
@@ -94,7 +104,7 @@ nodes, devices and execution environments are flat rectangles with their keyword
 - **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text
 - **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes (a trailing ` #2` is only part of the handle: a second "End #2" shows "End")
 - **addActivityObjectNode(diagramName, objectName, state, partitionName, x, y)**: Add an object node with optional [state], optionally in a lane
-- **addActivityFlow(diagramName, fromNode, toNode, guard, twoWay)**: Add a control or object flow with optional [guard]; twoWay draws a double-headed exchange (action <-> "XxxDAO: method()")
+- **addActivityFlow(diagramName, fromNode, toNode, guard, twoWay)**: Add a control or object flow with optional [guard]; twoWay also draws the flow back as a second arrow beside the first (action <-> "XxxDAO: method()")
 - **addActivityFrame(diagramName, title, nodeNames, x, y, width, height)**: Add a rounded titled frame around nodes ("Xử lí tại gdXxx.jsp")
 
 ##### Component Diagram (8 tools)

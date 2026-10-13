@@ -214,4 +214,27 @@ public class OrthogonalRouterTest {
       }
     }
   }
+
+  @Test
+  public void manyConnectorsOnASmallShapeNeverRunThroughAShape() {
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(
+        new OrthogonalRouter.Shape(
+            "end", new int[] {300, 400, 30, 30}, null, ShapeOutline.Kind.ELLIPSE));
+    int[][] at = {{40, 40}, {240, 40}, {440, 40}, {40, 220}, {440, 220}, {240, 220}};
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    for (int i = 0; i < at.length; i++) {
+      shapes.add(shape("s" + i, at[i][0], at[i][1], 100, 40));
+      conns.add(new OrthogonalRouter.Conn("c" + i, "s" + i, "end"));
+    }
+    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
+    assertEquals(conns.size(), routes.size());
+    for (OrthogonalRouter.Conn c : conns) {
+      for (OrthogonalRouter.Shape s : shapes) {
+        if (!s.id.equals(c.src) && !s.id.equals(c.tgt)) {
+          assertFalse(c.id + " through " + s.id, RouteChecks.through(routes.get(c.id), s.rect, 2));
+        }
+      }
+    }
+  }
 }

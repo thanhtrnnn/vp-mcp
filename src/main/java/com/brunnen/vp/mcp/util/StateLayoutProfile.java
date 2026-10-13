@@ -15,7 +15,8 @@ import com.vp.plugin.model.ITransition2;
  * final state at the bottom (last layer); transitions carry their {@code event [guard] / effect}
  * text beside them, a transition from a state to itself is a rectangular loop on a free side, two
  * opposite transitions between a pair of states run side by side. The name of an initial or final
- * state hangs on the right of its circle.
+ * state hangs on the right of its circle (below and right for the final one, so transitions can
+ * arrive on every side).
  */
 public final class StateLayoutProfile extends LayoutProfile {
 
@@ -54,6 +55,8 @@ public final class StateLayoutProfile extends LayoutProfile {
       spec.growable = false;
       spec.labelSide = ElkLayout.Side.RIGHT;
       spec.outsideLabel = nameBox(shape);
+      // a circle takes one connector per side; more of them make it larger
+      spec.size = sizeForEnds(shape, shape.getWidth(), shape.getHeight(), 4);
     } else {
       int[] loop = loopLabelBox(shape);
       if (loop != null) {
@@ -114,6 +117,12 @@ public final class StateLayoutProfile extends LayoutProfile {
       return null;
     }
     int[] name = nameBox(shape);
+    if (model instanceof IFinalState2) {
+      // below and right of the circle: transitions arrive on all four sides
+      return new int[] {
+        shape.getX() + shape.getWidth() + 2, shape.getY() + shape.getHeight() + 2, name[0], name[1]
+      };
+    }
     return new int[] {
       shape.getX() + shape.getWidth() + NAME_GAP,
       shape.getY() + shape.getHeight() / 2 - name[1] / 2,
