@@ -28,3 +28,6 @@ target/
 /.direnv/
 stub-libs/
 vp-lib/
+
+### macOS ###
+.DS_Store
