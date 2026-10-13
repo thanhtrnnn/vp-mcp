@@ -39,8 +39,12 @@ import com.vp.plugin.model.factory.IModelElementFactory;
 import java.awt.Point;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import javax.swing.SwingUtilities;
 
@@ -2318,9 +2322,25 @@ public abstract class AbstractDiagramMcpTools {
                 .append("' (")
                 .append(diagram.getType())
                 .append("):\n");
+            // shapes that stand inside a frame without being nested in it in Visual Paradigm (the
+            // nodes of an activity page frame) are listed under that frame
+            LayoutProfile profile = profileOf(diagram);
+            Map<String, List<IShapeUIModel>> inside = new LinkedHashMap<>();
+            Set<String> listedInside = new HashSet<>();
+            if (profile != null) {
+              for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+                IShapeUIModel frame = s.getParent() == null ? profile.container(s) : null;
+                if (frame != null
+                    && frame.getParent() == null
+                    && !frame.getId().equals(s.getId())) {
+                  inside.computeIfAbsent(frame.getId(), k -> new ArrayList<>()).add(s);
+                  listedInside.add(s.getId());
+                }
+              }
+            }
             for (IShapeUIModel top : diagram.toShapeUIModelArray()) {
-              if (top.getParent() == null) {
-                describeShape(sb, top, 1);
+              if (top.getParent() == null && !listedInside.contains(top.getId())) {
+                describeShape(sb, top, 1, inside);
               }
             }
             for (IDiagramElement de : getDiagramElementsList(diagram)) {
@@ -2335,7 +2355,8 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
-  private static void describeShape(StringBuilder sb, IShapeUIModel shape, int depth) {
+  private static void describeShape(
+      StringBuilder sb, IShapeUIModel shape, int depth, Map<String, List<IShapeUIModel>> inside) {
     if (isHiddenStub(shape)) {
       return;
     }
@@ -2369,9 +2390,12 @@ public abstract class AbstractDiagramMcpTools {
     if (children != null) {
       for (IShapeUIModel child : children) {
         if (child != null) {
-          describeShape(sb, child, depth + 1);
+          describeShape(sb, child, depth + 1, inside);
         }
       }
+    }
+    for (IShapeUIModel member : inside.getOrDefault(shape.getId(), new ArrayList<>())) {
+      describeShape(sb, member, depth + 1, inside);
     }
   }
 
