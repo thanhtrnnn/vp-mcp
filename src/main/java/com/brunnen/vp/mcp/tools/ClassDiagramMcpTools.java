@@ -12,6 +12,7 @@ import com.vp.plugin.ExportDiagramAsImageOption;
 import com.vp.plugin.ExportDiagramAsImageWatermark;
 import com.vp.plugin.diagram.ICaptionUIModel;
 import com.vp.plugin.diagram.IClassDiagramUIModel;
+import com.vp.plugin.diagram.ICommunicationDiagramUIModel;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
@@ -48,8 +49,8 @@ import java.util.Set;
 /** MCP tools for Visual Paradigm Class diagram operations. */
 public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
-  /** Auto-placed classes wrap to a new row past this x. */
-  private static final int AUTO_ROW_RIGHT = 1400;
+  /** Auto-placed classes wrap to a new row past this x (about three classes, report-shaped). */
+  private static final int AUTO_ROW_RIGHT = 950;
 
   /** Free space between classes, room for association names and multiplicities. */
   private static final int CLASS_GAP = 80;
@@ -59,14 +60,12 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            requireProject();
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM, diagramName);
             diagram.setAutoFitShapesSize(true);
             dm.openDiagram(diagram);
-            return "Created class diagram: " + diagramName;
+            return "Created class diagram: " + diagram.getName();
           });
     } catch (Exception e) {
       return "Error creating class diagram: " + e.getMessage();
@@ -76,9 +75,12 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addClass",
       description =
-          "Add a class to a class diagram. x/y (>0) place the shape explicitly; modelPackage puts"
-              + " the class inside a model package (no package shape drawn) so it cannot collide"
-              + " with same-named classes elsewhere in the project")
+          "Add a class to a class diagram. x/y (>0) place the shape explicitly, otherwise it goes"
+              + " to the first free spot of its layer row (rows wrap after about three classes)."
+              + " modelPackage puts the class inside a model package (no package shape drawn) so"
+              + " it cannot collide with same-named classes elsewhere in the project. A class of"
+              + " that name already in the project (root, or in modelPackage) is reused: a new"
+              + " view of it is drawn")
   public String addClass(
       String diagramName,
       String className,
@@ -101,15 +103,32 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return diagramNotFound(diagramName);
             }
 
+            if (className == null || className.trim().isEmpty()) {
+              return "Class name must not be empty";
+            }
             if (findClassOnDiagram(diagram, className) != null) {
               return "Class already on diagram: " + className;
             }
-            IClass cls = getModelElementFactory().createClass();
-            cls.setName(className);
+            // Visual Paradigm keeps names unique per owner: a class of that name in the same
+            // owner is the same class, so it is reused (a new view) instead of being created again
+            // and silently renamed "Class2".
+            IPackage owner =
+                isSet(modelPackage) ? findOrCreateModelPackage(modelPackage.trim()) : null;
+            IClass cls =
+                owner != null
+                    ? ownedClass(owner, className)
+                    : findRootElement(className, IClass.class);
+            boolean reused = cls != null;
+            if (cls == null) {
+              cls = getModelElementFactory().createClass();
+              nameInOwner(cls, owner, className);
+            }
             if (isAbstract) {
               cls.setAbstract(true);
             }
-            if (stereotype != null && !stereotype.trim().isEmpty()) {
+            if (stereotype != null
+                && !stereotype.trim().isEmpty()
+                && !cls.hasStereotype(stereotype.trim())) {
               cls.addStereotype(stereotype.trim());
             }
 
@@ -118,11 +137,11 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               findOrCreatePackage(diagram, packageName.trim(), packageColor);
             }
 
-            if (modelPackage != null && !modelPackage.trim().isEmpty()) {
-              findOrCreateModelPackage(modelPackage.trim()).addChild(cls);
-            }
-
             IDiagramElement classDe = addToDiagram(diagram, cls, className);
+            if (reused && classDe instanceof IClassUIModel && !isSet(stereotype)) {
+              // a class stereotyped elsewhere (e.g. <<entity>>) stays a class box here
+              ((IClassUIModel) classDe).setDisplayAsRobustnessAnalysisIcon(false);
+            }
             fitShape(classDe);
             if (x > 0 || y > 0) {
               classDe.setBounds(x, y, classDe.getWidth(), classDe.getHeight());
@@ -197,12 +216,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 .append("' to diagram '")
                 .append(diagramName)
                 .append("'");
-            if (!className.equals(cls.getName())) {
-              result
-                  .append(" (WARNING: Visual Paradigm renamed it from '")
-                  .append(className)
-                  .append("' because a model element with that name already exists in the same")
-                  .append(" owner; pass modelPackage to keep same-named classes apart)");
+            if (reused) {
+              result.append(" (existing class of the project, drawn again)");
             }
             if (stereotype != null && !stereotype.trim().isEmpty()) {
               result.append(" with stereotype <<").append(stereotype.trim()).append(">>");
@@ -274,13 +289,22 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
+            String attrVisibility = null;
+            if (visibility != null && !visibility.trim().isEmpty()) {
+              attrVisibility = visibilityKeyword(visibility);
+              if (attrVisibility == null) {
+                return "Unknown visibility '"
+                    + visibility
+                    + "': use public, private, protected or package";
+              }
+            }
             IAttribute attr = getModelElementFactory().createAttribute();
             attr.setName(attributeName);
             if (attributeType != null && !attributeType.trim().isEmpty()) {
               attr.setType(attributeType.trim());
             }
-            if (visibility != null && !visibility.trim().isEmpty()) {
-              attr.setVisibility(visibility.trim());
+            if (attrVisibility != null) {
+              attr.setVisibility(attrVisibility);
             }
             cls.addAttribute(attr);
             refitClass(cls);
@@ -341,6 +365,15 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
+            String opVisibility = null;
+            if (isSet(visibility)) {
+              opVisibility = visibilityKeyword(visibility);
+              if (opVisibility == null) {
+                return "Unknown visibility '"
+                    + visibility
+                    + "': use public, private, protected or package";
+              }
+            }
             IOperation op = getModelElementFactory().createOperation();
             op.setName(operationName);
             if (returnType != null && !returnType.trim().isEmpty()) {
@@ -362,8 +395,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 }
               }
             }
-            if (isSet(visibility)) {
-              op.setVisibility(visibility.trim());
+            if (opVisibility != null) {
+              op.setVisibility(opVisibility);
             }
             if (isAbstract) {
               op.setAbstract(true);
@@ -422,6 +455,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               toEnd.setMultiplicity(toMultiplicity.trim());
             }
+            makeRoomForLabels(fromElement, toElement, assoc);
             connectCentered(diagram, assoc, fromElement, toElement);
             layoutAssociationLabels(diagram, false);
 
@@ -458,6 +492,16 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Class not on diagram: " + (fromElement == null ? fromClass : toClass);
             }
 
+            if (source.getId().equals(target.getId())) {
+              return "A class cannot generalize itself: " + fromClass;
+            }
+            if (isDescendant(target, source)) {
+              return "Generalization cycle: '"
+                  + toClass
+                  + "' already inherits from '"
+                  + fromClass
+                  + "'";
+            }
             // VP stores a generalization as from = general (parent), to = specific (child)
             IGeneralization gen = getModelElementFactory().createGeneralization();
             gen.setFrom(target);
@@ -511,6 +555,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               ((IAssociationEnd) assoc.getToEnd()).setMultiplicity(toMultiplicity.trim());
             }
+            makeRoomForLabels(fromElement, toElement, assoc);
             connectCentered(diagram, assoc, fromElement, toElement);
             layoutAssociationLabels(diagram, false);
 
@@ -561,6 +606,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               ((IAssociationEnd) assoc.getToEnd()).setMultiplicity(toMultiplicity.trim());
             }
+            makeRoomForLabels(fromElement, toElement, assoc);
             connectCentered(diagram, assoc, fromElement, toElement);
             layoutAssociationLabels(diagram, false);
 
@@ -1098,6 +1144,24 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
+            if (diagram instanceof ICommunicationDiagramUIModel) {
+              // a participant's links and message arrows have to follow it
+              ICommunicationDiagramUIModel comm = (ICommunicationDiagramUIModel) diagram;
+              IShapeUIModel participant = communication.findParticipant(comm, elementName);
+              if (participant != null) {
+                if (width <= 0 || height <= 0) {
+                  fitShape(participant);
+                }
+                communication.moveParticipant(
+                    comm,
+                    participant,
+                    x,
+                    y,
+                    width > 0 && height > 0 ? width : participant.getWidth(),
+                    width > 0 && height > 0 ? height : participant.getHeight());
+                return boundsResult(elementName, participant);
+              }
+            }
             IDiagramElement de = findDiagramElementByName(diagram, elementName);
             if (de == null) {
               return "Element not on diagram: " + elementName;
@@ -1114,20 +1178,27 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             // VP does not reroute connectors when bounds change through the API
             recenterConnectorsOf(de);
-            return "Bounds of '"
-                + elementName
-                + "': "
-                + de.getX()
-                + ","
-                + de.getY()
-                + " "
-                + de.getWidth()
-                + "x"
-                + de.getHeight();
+            return boundsResult(elementName, de);
           });
     } catch (Exception e) {
       return "Error setting bounds: " + e.getMessage();
     }
+  }
+
+  /** The communication tools, which re-lay a moved participant's message arrows out. */
+  private final CommunicationDiagramMcpTools communication = new CommunicationDiagramMcpTools();
+
+  private static String boundsResult(String elementName, IDiagramElement de) {
+    return "Bounds of '"
+        + elementName
+        + "': "
+        + de.getX()
+        + ","
+        + de.getY()
+        + " "
+        + de.getWidth()
+        + "x"
+        + de.getHeight();
   }
 
   @Tool(
@@ -1765,13 +1836,38 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
         double sx = fx + dx * exitFrom;
         double sy = fy + dy * exitFrom;
         double span = len - exitFrom - exitTo;
-        double mx = sx + dx * span * t - nx * 12;
-        double my = sy + dy * span * t - ny * 12;
         int w = Math.max(cap.getWidth(), textWidth(name));
         int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
+        // keep the name off this association's multiplicities and off every class box: try the
+        // usual spot, then the other side of the line, then further along it
+        List<int[]> avoid = new ArrayList<>();
+        avoid.add(rectOf(conn.getMultiplicityARectangle(), multA, ox, oy));
+        avoid.add(rectOf(conn.getMultiplicityBRectangle(), multB, ox, oy));
+        for (IShapeUIModel shape : diagram.toShapeUIModelArray()) {
+          if (shape.getModelElement() instanceof IClass) {
+            avoid.add(rect(shape));
+          }
+        }
+        double clearance = h / 2.0 + 8;
+        double[][] tries = {
+          {t, -1}, {t, 1}, {0.35, -1}, {0.65, -1}, {0.35, 1}, {0.65, 1}, {0.5, -2}, {0.5, 2}
+        };
+        int[] chosen = null;
+        for (double[] option : tries) {
+          double side = option[1];
+          double mx = sx + dx * span * option[0] + nx * clearance * side;
+          double my = sy + dy * span * option[0] + ny * clearance * side;
+          int[] r = {(int) Math.round(mx - w / 2.0), (int) Math.round(my - h / 2.0), w, h};
+          if (chosen == null) {
+            chosen = r;
+          }
+          if (!overlapsAny(r, avoid)) {
+            chosen = r;
+            break;
+          }
+        }
         cap.setVisible(true);
-        cap.setBounds(
-            (int) Math.round(mx - w / 2.0) - ox, (int) Math.round(my - h / 2.0) - oy, w, h);
+        cap.setBounds(chosen[0] - ox, chosen[1] - oy, w, h);
       }
       count++;
     }
@@ -1795,6 +1891,59 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
         layoutAssociationLabels(view.getDiagramUIModel(), false);
       }
     }
+  }
+
+  /** A multiplicity label's rectangle in diagram coordinates, or an empty one when unset. */
+  private static int[] rectOf(java.awt.Rectangle r, String text, int ox, int oy) {
+    if (r == null || text == null || text.isEmpty() || "Unspecified".equalsIgnoreCase(text)) {
+      return new int[] {0, 0, 0, 0};
+    }
+    return new int[] {r.x + ox, r.y + oy, r.width, r.height};
+  }
+
+  private static boolean overlapsAny(int[] r, List<int[]> others) {
+    for (int[] o : others) {
+      if (o[2] > 0
+          && o[0] < r[0] + r[2] + 2
+          && r[0] < o[0] + o[2] + 2
+          && o[1] < r[1] + r[3] + 2
+          && r[1] < o[1] + o[3] + 2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Before an association with a name or multiplicities is drawn between two classes side by side
+   * (or one above the other), widen the gap between them to fit its labels: the right (lower) class
+   * moves away, with the classes beyond it.
+   */
+  private void makeRoomForLabels(IDiagramElement a, IDiagramElement b, IAssociation assoc) {
+    if (!(a instanceof IShapeUIModel)
+        || !(b instanceof IShapeUIModel)
+        || a.getId().equals(b.getId())) {
+      return;
+    }
+    String name = assoc.getName();
+    String multA = ((IAssociationEnd) assoc.getFromEnd()).getMultiplicity();
+    String multB = ((IAssociationEnd) assoc.getToEnd()).getMultiplicity();
+    int nameWidth = name == null || name.isEmpty() ? 0 : textWidth(name);
+    int multWidth = labelWidth(multA) + labelWidth(multB);
+    if (nameWidth == 0 && multWidth == 0) {
+      return;
+    }
+    int labels =
+        (labelWidth(multA) > 0 ? 1 : 0) + (labelWidth(multB) > 0 ? 1 : 0) + (nameWidth > 0 ? 1 : 0);
+    makeRoomBetween(a, b, Math.max(nameWidth, multWidth) + 40, 30 + 18 * labels);
+  }
+
+  private static int labelWidth(String multiplicity) {
+    return multiplicity == null
+            || multiplicity.isEmpty()
+            || "Unspecified".equalsIgnoreCase(multiplicity)
+        ? 0
+        : textWidth(multiplicity);
   }
 
   /** Distance from a shape's center to its border along the unit direction (dx, dy). */
@@ -1982,6 +2131,62 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
           && de.getModelElement() instanceof IPackage
           && packageName.equals(de.getModelElement().getName())) {
         return (IShapeUIModel) de;
+      }
+    }
+    return null;
+  }
+
+  /** Whether {@code candidate} inherits (directly or not) from {@code ancestor}. */
+  private static boolean isDescendant(IModelElement candidate, IModelElement ancestor) {
+    java.util.Deque<IModelElement> pending = new java.util.ArrayDeque<>();
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    pending.add(ancestor);
+    while (!pending.isEmpty()) {
+      IModelElement node = pending.poll();
+      if (!seen.add(node.getId())) {
+        continue;
+      }
+      // VP stores a generalization from the general class to the specific one
+      for (com.vp.plugin.model.ISimpleRelationship rel : node.toFromRelationshipArray()) {
+        if (rel instanceof IGeneralization && rel.getTo() != null) {
+          if (rel.getTo().getId().equals(candidate.getId())) {
+            return true;
+          }
+          pending.add(rel.getTo());
+        }
+      }
+    }
+    return false;
+  }
+
+  /** VP's visibility keyword for public/private/protected/package (or + - # ~), else null. */
+  private static String visibilityKeyword(String visibility) {
+    switch (visibility.trim().toLowerCase(Locale.ROOT)) {
+      case "public":
+      case "+":
+        return "public";
+      case "private":
+      case "-":
+        return "private";
+      case "protected":
+      case "#":
+        return "protected";
+      case "package":
+      case "~":
+        return "package";
+      default:
+        return null;
+    }
+  }
+
+  /** The class called {@code name} directly owned by {@code owner}, or null. */
+  private static IClass ownedClass(IPackage owner, String name) {
+    IModelElement[] children = owner.toChildArray();
+    if (children != null) {
+      for (IModelElement child : children) {
+        if (child instanceof IClass && name.equals(child.getName())) {
+          return (IClass) child;
+        }
       }
     }
     return null;
