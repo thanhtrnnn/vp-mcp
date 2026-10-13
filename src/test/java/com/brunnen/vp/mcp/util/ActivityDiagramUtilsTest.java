@@ -132,17 +132,6 @@ public class ActivityDiagramUtilsTest {
   }
 
   @Test
-  public void testRowPositionsCenterSiblings() {
-    int[] xs = ActivityDiagramUtils.rowPositions(new int[] {100, 60}, 300, 40);
-    assertEquals(200, xs[0]);
-    assertEquals(340, xs[1]);
-    assertEquals(
-        "single shape centered",
-        250,
-        ActivityDiagramUtils.rowPositions(new int[] {100}, 300, 40)[0]);
-  }
-
-  @Test
   public void testValidateFlow() {
     assertNull(
         "Action to action is fine",
@@ -213,97 +202,6 @@ public class ActivityDiagramUtilsTest {
   }
 
   @Test
-  public void testRequiredLaneWidth() {
-    assertEquals("Lane never shrinks", 300, ActivityDiagramUtils.requiredLaneWidth(300, 50));
-    assertEquals(
-        "Lane grows to the widest child plus padding",
-        400 + 2 * ActivityDiagramUtils.LANE_PADDING,
-        ActivityDiagramUtils.requiredLaneWidth(240, 400));
-    assertEquals(
-        "Explicit narrow lane is kept while empty",
-        90,
-        ActivityDiagramUtils.requiredLaneWidth(90, 0));
-  }
-
-  @Test
-  public void testRequiredContentHeight() {
-    assertEquals(
-        "Empty lanes keep their height",
-        480,
-        ActivityDiagramUtils.requiredContentHeight(480, 64, -1));
-    assertEquals(
-        "Lanes keep their height when nodes fit",
-        480,
-        ActivityDiagramUtils.requiredContentHeight(480, 64, 300));
-    assertEquals(
-        "Lanes grow below the lowest node",
-        900 + ActivityDiagramUtils.LANE_PADDING - 64,
-        ActivityDiagramUtils.requiredContentHeight(480, 64, 900));
-  }
-
-  @Test
-  public void testCenteredX() {
-    assertEquals("Centered on the line", 200, ActivityDiagramUtils.centeredX(260, 120));
-  }
-
-  @Test
-  public void testNextRowY() {
-    assertEquals("Empty area starts at the top", 64, ActivityDiagramUtils.nextRowY(-1, 64));
-    assertEquals(
-        "Next row is one gap below",
-        200 + ActivityDiagramUtils.ROW_GAP,
-        ActivityDiagramUtils.nextRowY(200, 64));
-    assertEquals("Never above the area top", 300, ActivityDiagramUtils.nextRowY(10, 300));
-  }
-
-  @Test
-  public void testClampIntoLane() {
-    int pad = ActivityDiagramUtils.LANE_PADDING;
-    assertEquals("Inside stays put", 150, ActivityDiagramUtils.clampIntoLane(150, 80, 100, 240));
-    assertEquals(
-        "Too far left is pushed in",
-        100 + pad,
-        ActivityDiagramUtils.clampIntoLane(0, 80, 100, 240));
-    assertEquals(
-        "Too far right is pulled in",
-        100 + 240 - pad - 80,
-        ActivityDiagramUtils.clampIntoLane(900, 80, 100, 240));
-    assertEquals(
-        "Wider than the lane is centered",
-        ActivityDiagramUtils.centeredX(100 + 120, 300),
-        ActivityDiagramUtils.clampIntoLane(150, 300, 100, 240));
-  }
-
-  @Test
-  public void testRelocateRow() {
-    // a centered node follows the lane center (260) when the lane widens from 240 to 320
-    assertArrayEquals(
-        new int[] {260 - 40},
-        ActivityDiagramUtils.relocateRow(new int[] {180}, new int[] {80}, 100, 240, 100, 320));
-    // a row moves as a whole with the lane
-    assertArrayEquals(
-        new int[] {180, 260},
-        ActivityDiagramUtils.relocateRow(
-            new int[] {130, 210}, new int[] {60, 60}, 100, 240, 150, 240));
-    // a producer (centered) and its object node beside it, sticking out of the lane: the lane
-    // grew to fit them; both keep their 40 px gap and end up inside the lane
-    int[] xs =
-        ActivityDiagramUtils.relocateRow(
-            new int[] {340, 501}, new int[] {121, 108}, 340, 240, 340, 309);
-    assertEquals("gap kept", 501 - 340, xs[1] - xs[0]);
-    int pad = ActivityDiagramUtils.LANE_PADDING;
-    assertTrue("inside on the left", xs[0] >= 340 + pad);
-    assertTrue("inside on the right", xs[1] + 108 <= 340 + 309 - pad);
-  }
-
-  @Test
-  public void testRowsOf() {
-    assertArrayEquals(
-        new int[] {0, 0, 1},
-        ActivityDiagramUtils.rowsOf(new int[] {100, 110, 200}, new int[] {40, 40, 40}));
-  }
-
-  @Test
   public void testFirstClearSpotAndGuardCandidates() {
     java.util.List<int[]> candidates =
         ActivityDiagramUtils.guardCandidates(100, 100, 100, 300, 60, 14);
@@ -337,20 +235,6 @@ public class ActivityDiagramUtilsTest {
   }
 
   @Test
-  public void testBarPortStaysInsetFromTheEnds() {
-    int[] bar = {580, 852, 120, 10};
-    // a branch far left of the bar leaves the bottom side 12 px in from the left end
-    assertArrayEquals(new int[] {592, 862}, ActivityDiagramUtils.barPort(bar, 400, 900));
-    // a branch right under the bar leaves straight down
-    assertArrayEquals(new int[] {640, 862}, ActivityDiagramUtils.barPort(bar, 640, 950));
-    // a source above the bar enters the top side, inset from the right end
-    assertArrayEquals(new int[] {688, 852}, ActivityDiagramUtils.barPort(bar, 900, 700));
-    // a vertical bar uses its left/right side
-    assertArrayEquals(
-        new int[] {110, 112}, ActivityDiagramUtils.barPort(new int[] {100, 100, 10, 120}, 300, 0));
-  }
-
-  @Test
   public void testOnCanvasDropsSpotsLeftOrAboveTheCanvas() {
     java.util.List<int[]> spots = new java.util.ArrayList<>();
     spots.add(new int[] {-20, 50});
@@ -366,10 +250,20 @@ public class ActivityDiagramUtilsTest {
   }
 
   @Test
-  public void testFrameBordersCoverTitleAndEdges() {
-    java.util.List<int[]> boxes = ActivityDiagramUtils.frameBorders(100, 50, 200, 150, 24);
-    assertEquals(4, boxes.size());
-    assertArrayEquals(new int[] {100, 50, 200, 24}, boxes.get(0));
-    assertArrayEquals(new int[] {100, 199, 200, 2}, boxes.get(1));
+  public void testClampIntoLane() {
+    int pad = ActivityDiagramUtils.LANE_PADDING;
+    assertEquals("Inside stays put", 150, ActivityDiagramUtils.clampIntoLane(150, 80, 100, 240));
+    assertEquals(
+        "Too far left is pushed in",
+        100 + pad,
+        ActivityDiagramUtils.clampIntoLane(0, 80, 100, 240));
+    assertEquals(
+        "Too far right is pulled in",
+        100 + 240 - pad - 80,
+        ActivityDiagramUtils.clampIntoLane(900, 80, 100, 240));
+    assertEquals(
+        "Wider than the lane is centered",
+        100 + 120 - 150,
+        ActivityDiagramUtils.clampIntoLane(150, 300, 100, 240));
   }
 }

@@ -470,31 +470,6 @@ public final class FlowchartDfdUtils {
   }
 
   /**
-   * Top of the next shape of a single top-to-bottom column: {@code gap} below the lowest shape that
-   * overlaps the column horizontally, or {@code top} when the column is empty.
-   *
-   * @param occupied the shapes on the diagram
-   * @param centerX the column's center line
-   * @param width width of the new shape
-   * @param top top of the column
-   * @param gap free space between two shapes of the column
-   * @return the y of the new shape's top edge
-   */
-  public static int columnTop(List<Rectangle> occupied, int centerX, int width, int top, int gap) {
-    int left = centerX - width / 2;
-    int right = left + width;
-    int y = top;
-    if (occupied != null) {
-      for (Rectangle r : occupied) {
-        if (r != null && r.x < right && left < r.x + r.width) {
-          y = Math.max(y, r.y + r.height + gap);
-        }
-      }
-    }
-    return y;
-  }
-
-  /**
    * Top-left corner of a shape: explicit x/y win when positive, otherwise the shape is centered on
    * the auto-placement point (never closer than {@link #MIN_MARGIN} to the diagram edge).
    *

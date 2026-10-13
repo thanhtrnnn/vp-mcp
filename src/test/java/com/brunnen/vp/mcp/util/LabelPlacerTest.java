@@ -1,5 +1,6 @@
 package com.brunnen.vp.mcp.util;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -71,5 +72,47 @@ public class LabelPlacerTest {
     specs.add(new LabelPlacer.Spec("b", 0, 60, 14, LabelPlacer.Slot.CENTER));
     Map<String, Map<Integer, int[]>> placed = LabelPlacer.place(shapes, routes, specs);
     assertFalse(LabelPlacer.intersects(placed.get("a").get(0), placed.get("b").get(0)));
+  }
+
+  @Test
+  public void labelBesideAVerticalLegUsesTheVerticalSizeAndPreferredSide() {
+    Map<String, List<int[]>> routes = new LinkedHashMap<>();
+    routes.put("c", route(200, 0, 200, 300));
+    List<LabelPlacer.Spec> specs = new ArrayList<>();
+    // 100 x 40 above a horizontal leg, 130 x 24 beside a vertical one
+    specs.add(
+        new LabelPlacer.Spec("c", 0, 100, 40, LabelPlacer.Slot.CENTER)
+            .verticalSize(130, 24)
+            .preferSide(1));
+    int[] r = LabelPlacer.place(new ArrayList<int[]>(), routes, specs).get("c").get(0);
+    assertEquals(130, r[2]);
+    assertEquals(24, r[3]);
+    assertTrue("right of the line", r[0] >= 200);
+  }
+
+  @Test
+  public void labelsStayOnTheCanvas() {
+    Map<String, List<int[]>> routes = new LinkedHashMap<>();
+    routes.put("c", route(30, 40, 30, 200));
+    List<LabelPlacer.Spec> specs = new ArrayList<>();
+    specs.add(new LabelPlacer.Spec("c", 0, 120, 14, LabelPlacer.Slot.CENTER));
+    int[] r = LabelPlacer.place(new ArrayList<int[]>(), routes, specs).get("c").get(0);
+    assertTrue("not left of the canvas: " + r[0], r[0] >= 2);
+  }
+
+  @Test
+  public void labelsGoOutsideABundleOfParallelLines() {
+    Map<String, List<int[]>> routes = new LinkedHashMap<>();
+    routes.put("left", route(100, 0, 100, 300));
+    routes.put("right", route(114, 300, 114, 0));
+    List<LabelPlacer.Spec> specs = new ArrayList<>();
+    specs.add(new LabelPlacer.Spec("left", 0, 80, 14, LabelPlacer.Slot.CENTER));
+    specs.add(new LabelPlacer.Spec("right", 0, 80, 14, LabelPlacer.Slot.CENTER));
+    Map<String, Map<Integer, int[]>> placed =
+        LabelPlacer.place(new ArrayList<int[]>(), routes, specs);
+    int[] l = placed.get("left").get(0);
+    int[] r = placed.get("right").get(0);
+    assertTrue("left label left of its line", l[0] + l[2] <= 100);
+    assertTrue("right label right of its line", r[0] >= 114);
   }
 }

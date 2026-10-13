@@ -128,4 +128,66 @@ public class ElkLayoutTest {
     assertEquals(4, r.routes().get("aa").size());
     assertTrue(problems(nodes, edges, r).toString(), problems(nodes, edges, r).isEmpty());
   }
+
+  @Test
+  public void rowsPutRolesInOneLayerEach() {
+    List<ElkLayout.Node> nodes = new ArrayList<>();
+    nodes.add(new ElkLayout.Node("actor", 40, 60).row(0));
+    nodes.add(new ElkLayout.Node("b1", 60, 40).row(1));
+    nodes.add(new ElkLayout.Node("b2", 60, 40).row(1));
+    nodes.add(new ElkLayout.Node("e1", 60, 40).row(2));
+    nodes.add(new ElkLayout.Node("e2", 60, 40).row(2));
+    List<ElkLayout.Edge> edges = new ArrayList<>();
+    edges.add(new ElkLayout.Edge("a1", "actor", "b1"));
+    edges.add(new ElkLayout.Edge("a2", "actor", "b2"));
+    edges.add(new ElkLayout.Edge("x1", "b1", "e1"));
+    edges.add(new ElkLayout.Edge("x2", "b2", "e2"));
+    ElkLayout.Result r =
+        ElkLayout.layout(nodes, edges, new ElkLayout.Options().direction(ElkLayout.Dir.DOWN));
+    assertEquals(r.nodes().get("b1")[1], r.nodes().get("b2")[1]);
+    assertEquals(r.nodes().get("e1")[1], r.nodes().get("e2")[1]);
+    assertTrue(r.nodes().get("actor")[1] < r.nodes().get("b1")[1]);
+    assertTrue(r.nodes().get("b1")[1] < r.nodes().get("e1")[1]);
+  }
+
+  @Test
+  public void outsideLabelOnTheRightKeepsNeighboursAway() {
+    List<ElkLayout.Node> nodes = new ArrayList<>();
+    nodes.add(new ElkLayout.Node("x", 30, 30).outsideLabel(120, 16, ElkLayout.Side.RIGHT));
+    nodes.add(new ElkLayout.Node("y", 100, 40));
+    nodes.add(new ElkLayout.Node("z", 100, 40));
+    List<ElkLayout.Edge> edges = new ArrayList<>();
+    edges.add(new ElkLayout.Edge("xz", "x", "z"));
+    edges.add(new ElkLayout.Edge("yz", "y", "z"));
+    ElkLayout.Result r =
+        ElkLayout.layout(
+            nodes, edges, new ElkLayout.Options().direction(ElkLayout.Dir.DOWN).flowOrder());
+    int[] x = r.nodes().get("x");
+    int[] y = r.nodes().get("y");
+    assertTrue("one layer", Math.abs(x[1] + x[3] / 2 - (y[1] + y[3] / 2)) <= 12);
+    int gap = x[0] < y[0] ? y[0] - (x[0] + x[2]) : x[0] - (y[0] + y[2]);
+    if (x[0] < y[0]) {
+      assertTrue("room for the name right of x: " + gap, gap >= 120);
+    }
+  }
+
+  @Test
+  public void flowOrderBreaksTheCycleAtTheSource() {
+    List<ElkLayout.Node> nodes = new ArrayList<>();
+    nodes.add(new ElkLayout.Node("start", 30, 30).layer(ElkLayout.FIRST_LAYER));
+    nodes.add(new ElkLayout.Node("a", 100, 40));
+    nodes.add(new ElkLayout.Node("b", 100, 40));
+    nodes.add(new ElkLayout.Node("c", 100, 40));
+    List<ElkLayout.Edge> edges = new ArrayList<>();
+    edges.add(new ElkLayout.Edge("s", "start", "a"));
+    edges.add(new ElkLayout.Edge("ab", "a", "b"));
+    edges.add(new ElkLayout.Edge("bc", "b", "c"));
+    edges.add(new ElkLayout.Edge("ca", "c", "a")); // the way back
+    ElkLayout.Result r =
+        ElkLayout.layout(
+            nodes, edges, new ElkLayout.Options().direction(ElkLayout.Dir.DOWN).flowOrder());
+    assertTrue(r.nodes().get("start")[1] < r.nodes().get("a")[1]);
+    assertTrue(r.nodes().get("a")[1] < r.nodes().get("b")[1]);
+    assertTrue(r.nodes().get("b")[1] < r.nodes().get("c")[1]);
+  }
 }

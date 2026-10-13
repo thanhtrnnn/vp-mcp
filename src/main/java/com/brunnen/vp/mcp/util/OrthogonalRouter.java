@@ -170,7 +170,22 @@ public final class OrthogonalRouter {
    */
   public static Map<String, List<int[]>> route(
       List<Shape> shapes, List<Conn> conns, List<Drawn> drawn) {
-    Context ctx = new Context(shapes);
+    return route(shapes, conns, drawn, LANE_GAP);
+  }
+
+  /**
+   * Route connectors around shapes and around routes that are already drawn, keeping parallel
+   * routes at least {@code laneGap} apart.
+   *
+   * @param shapes the shapes
+   * @param conns the connectors to route, shortest first
+   * @param drawn routes that stay as they are
+   * @param laneGap least distance between two parallel routes that overlap
+   * @return the new routes by connector id, points from the source to the target
+   */
+  public static Map<String, List<int[]>> route(
+      List<Shape> shapes, List<Conn> conns, List<Drawn> drawn, int laneGap) {
+    Context ctx = new Context(shapes, laneGap);
     for (Drawn d : drawn) {
       ctx.add(d.conn, d.route);
     }
@@ -199,8 +214,10 @@ public final class OrthogonalRouter {
     final Map<String, List<String>> children = new HashMap<>();
     final List<int[]> segments = new ArrayList<>(); // {x1, y1, x2, y2}
     final List<Object[]> ports = new ArrayList<>(); // {shapeId, side, position}
+    final int lane;
 
-    Context(List<Shape> list) {
+    Context(List<Shape> list, int laneGap) {
+      this.lane = laneGap;
       for (Shape s : list) {
         shapes.put(s.id, s);
       }
@@ -483,7 +500,7 @@ public final class OrthogonalRouter {
             || Math.min(seg[1], seg[3]) > window[1] + window[3]) {
           continue;
         }
-        for (int d : new int[] {-LANE_GAP, LANE_GAP}) {
+        for (int d : new int[] {-lane, lane}) {
           xs.add(seg[0] + d);
           xs.add(seg[2] + d);
           ys.add(seg[1] + d);
@@ -692,7 +709,7 @@ public final class OrthogonalRouter {
         boolean segHorizontal = seg[1] == seg[3];
         if (horizontal == segHorizontal) {
           int off = horizontal ? Math.abs(y1 - seg[1]) : Math.abs(x1 - seg[0]);
-          if (off < LANE_GAP) {
+          if (off < lane) {
             int lo = horizontal ? Math.min(x1, x2) : Math.min(y1, y2);
             int hi = horizontal ? Math.max(x1, x2) : Math.max(y1, y2);
             int slo = horizontal ? Math.min(seg[0], seg[2]) : Math.min(seg[1], seg[3]);

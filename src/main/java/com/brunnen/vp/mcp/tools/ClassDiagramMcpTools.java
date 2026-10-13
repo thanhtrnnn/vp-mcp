@@ -1923,6 +1923,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (profile != null) {
               activate(diagram);
               VpGraphLayout.Summary summary = VpGraphLayout.route(diagram, profile);
+              settleReopen(diagram, profile);
               return "Rerouted " + summary.connectors + " connector(s) on '" + diagramName + "'";
             }
             int count = 0;
@@ -1959,6 +1960,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             activate(diagram);
             VpGraphLayout.Summary summary = VpGraphLayout.route(diagram, profile);
+            settleReopen(diagram, profile);
             return "Laid out " + summary.labels + " label(s) on '" + diagramName + "'";
           });
     } catch (Exception e) {

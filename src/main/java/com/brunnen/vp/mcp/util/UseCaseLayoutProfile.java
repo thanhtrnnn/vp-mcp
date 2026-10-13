@@ -45,7 +45,7 @@ public final class UseCaseLayoutProfile extends LayoutProfile {
     if (model instanceof IActor) {
       // a specialization of an actor follows its general actor instead of standing at the left
       spec.layer = ElkLayout.FIRST_LAYER;
-      spec.bottomLabel = nameBox(shape);
+      spec.outsideLabel = nameBox(shape);
       spec.growable = false;
     } else if (model instanceof IUseCase) {
       spec.outline = ShapeOutline.Kind.ELLIPSE;

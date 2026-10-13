@@ -7,6 +7,7 @@ import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What the shared graph layout ({@link VpGraphLayout}) needs to know about one diagram type: which
@@ -27,8 +28,32 @@ public class LayoutProfile {
     /** Outline of the shape, for where connectors end on it. */
     public ShapeOutline.Kind outline = ShapeOutline.Kind.RECT;
 
-    /** Width and height of a text hanging below the shape (an actor's name), 0 for none. */
-    public int[] bottomLabel;
+    /** Width and height of a text hanging outside the shape (an actor's name), null for none. */
+    public int[] outsideLabel;
+
+    /**
+     * Size {w, h} the layout gives the shape instead of the one it has (a bar starts at its
+     * notation size, however wide an earlier layout made it), null to keep its size.
+     */
+    public int[] size;
+
+    /** Layer (row) the shape belongs to, -1 for any: shapes of one role stand in one row. */
+    public int row = -1;
+
+    /** The side of the shape that text hangs on. */
+    public ElkLayout.Side labelSide = ElkLayout.Side.BELOW;
+
+    /**
+     * A bar (fork, join): as wide as the span of the shapes it joins, so every branch meets it at
+     * its own place.
+     */
+    public boolean bar;
+
+    /**
+     * A shape with a vertex per side (a decision or merge diamond): every connector end gets a side
+     * of its own where the shape has enough sides.
+     */
+    public boolean ownSides;
 
     /** Whether the layout may enlarge the shape when a side carries more connectors than fit. */
     public boolean growable = true;
@@ -51,6 +76,15 @@ public class LayoutProfile {
     /** Near the from-shape, near the to-shape or beside the middle. */
     public final ElkLayout.Slot slot;
 
+    /** Width beside a vertical leg (the same as {@link #w} unless set). */
+    public int verticalW;
+
+    /** Height beside a vertical leg (the same as {@link #h} unless set). */
+    public int verticalH;
+
+    /** Preferred side of the line: -1 above/left, 1 below/right, 0 none. */
+    public int side;
+
     /**
      * A label.
      *
@@ -64,6 +98,32 @@ public class LayoutProfile {
       this.w = w;
       this.h = h;
       this.slot = slot;
+      this.verticalW = w;
+      this.verticalH = h;
+    }
+
+    /**
+     * Another size beside a vertical leg of the connector.
+     *
+     * @param vw width
+     * @param vh height
+     * @return this
+     */
+    public LabelSpec vertical(int vw, int vh) {
+      this.verticalW = vw;
+      this.verticalH = vh;
+      return this;
+    }
+
+    /**
+     * Prefer a side of the line.
+     *
+     * @param value -1 above a horizontal leg or left of a vertical one, 1 below or right
+     * @return this
+     */
+    public LabelSpec prefer(int value) {
+      this.side = value;
+      return this;
     }
   }
 
@@ -108,6 +168,38 @@ public class LayoutProfile {
    */
   public boolean placesShapes() {
     return true;
+  }
+
+  /**
+   * Whether every connector is drawn by the router instead of taking the route of the layered
+   * layout: the layout only decides where the shapes go. A family with ends that need their own
+   * sides (diamonds, bars) and with loops answers true.
+   *
+   * @return true when the router draws all connectors
+   */
+  public boolean routesAll() {
+    return false;
+  }
+
+  /**
+   * Whether Visual Paradigm draws things only when the diagram is opened again (the arrows of a
+   * communication diagram turn along their link when it lays the diagram out from scratch): the
+   * diagram is then closed, opened and its connectors drawn once more after a layout.
+   *
+   * @return true when the diagram has to be reopened after a layout
+   */
+  public boolean reopensDiagram() {
+    return false;
+  }
+
+  /**
+   * Least distance between two parallel connectors that run side by side: the room a label needs
+   * between them.
+   *
+   * @return the distance in pixels
+   */
+  public int laneGap() {
+    return OrthogonalRouter.LANE_GAP;
   }
 
   /**
@@ -175,6 +267,28 @@ public class LayoutProfile {
       caption.setVisible(true);
       caption.setBounds(rect[0], rect[1], rect[2], rect[3]);
     }
+  }
+
+  /**
+   * Change the places the layered layout chose, before any shape is moved: a family with columns of
+   * its own (swimlanes) puts every node in its column here and sizes the columns.
+   *
+   * @param shapes the shapes of the layout by id
+   * @param rects their rectangles {x, y, w, h}, changed in place
+   */
+  public void arrange(Map<String, IShapeUIModel> shapes, Map<String, int[]> rects) {
+    // nothing by default
+  }
+
+  /**
+   * The horizontal range {minX, maxX} a bar (fork, join) may span, null for none: a bar in a lane
+   * stays inside it.
+   *
+   * @param bar the bar shape
+   * @return the range, or null
+   */
+  public int[] barRange(IShapeUIModel bar) {
+    return null;
   }
 
   /**

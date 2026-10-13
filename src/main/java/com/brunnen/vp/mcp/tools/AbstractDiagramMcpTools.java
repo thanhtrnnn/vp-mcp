@@ -153,6 +153,7 @@ public abstract class AbstractDiagramMcpTools {
         && (pinned == null || pinned.isEmpty())) {
       try {
         VpGraphLayout.layout(diagram, profile);
+        settleReopen(diagram, profile);
         return;
       } catch (RuntimeException e) {
         // the layered layout could not handle this graph: the shapes stay, the lines are routed
@@ -160,6 +161,23 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     VpGraphLayout.route(diagram, profile);
+    settleReopen(diagram, profile);
+  }
+
+  /**
+   * After a layout of a diagram type that Visual Paradigm only finishes when it opens the diagram
+   * (message arrows turn along their link then): close it, open it again and draw the connectors
+   * once more, as the opening replaces some of them (a loop).
+   *
+   * @param diagram the diagram that was just laid out
+   * @param profile its profile
+   */
+  protected void settleReopen(IDiagramUIModel diagram, LayoutProfile profile) {
+    if (profile.reopensDiagram()) {
+      diagram.realCloseDiagram();
+      getDiagramManager().openDiagram(diagram);
+      VpGraphLayout.route(diagram, profile);
+    }
   }
 
   /** The size of every shape of the diagram, to notice that Visual Paradigm fitted one later. */
@@ -1011,7 +1029,8 @@ public abstract class AbstractDiagramMcpTools {
     IModelElement m = shape.getModelElement();
     return m instanceof com.vp.plugin.model.IPackage
         || m instanceof com.vp.plugin.model.ISystem
-        || m instanceof com.vp.plugin.model.INode;
+        || m instanceof com.vp.plugin.model.INode
+        || m instanceof com.vp.plugin.model.IActivity;
   }
 
   /**
@@ -1031,18 +1050,27 @@ public abstract class AbstractDiagramMcpTools {
       pin(de);
       return;
     }
-    java.util.Set<String> pinned = PINNED.get(diagram.getId());
-    LayoutProfile profile = profileOf(diagram);
-    boolean free =
-        profile != null
-            && profile.placesShapes()
-            && MANAGED.contains(diagram.getId())
-            && (pinned == null || pinned.isEmpty());
-    if (free) {
+    if (layoutOwnsShapes(diagram)) {
       return; // the layered layout finds the place
     }
     int[] spot = freeSpot(diagram, de, 40, 40, 1100, 60);
     de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
+  }
+
+  /**
+   * Whether the layered layout places the shapes of the diagram: the tools created it and no shape
+   * was placed explicitly.
+   *
+   * @param diagram the diagram
+   * @return true when new shapes are placed by the next {@link #relayout}
+   */
+  protected boolean layoutOwnsShapes(IDiagramUIModel diagram) {
+    java.util.Set<String> pinned = PINNED.get(diagram.getId());
+    LayoutProfile profile = profileOf(diagram);
+    return profile != null
+        && profile.placesShapes()
+        && MANAGED.contains(diagram.getId())
+        && (pinned == null || pinned.isEmpty());
   }
 
   /** Relationships whose keyword label (<<Include>>, <<use>>...) is put beside a bent line. */
@@ -1622,31 +1650,6 @@ public abstract class AbstractDiagramMcpTools {
   /** Ids of connectors drawn on top of each other (a two-way exchange), never spread apart. */
   private static final java.util.Set<String> OVERLAID =
       java.util.Collections.synchronizedSet(new java.util.HashSet<>());
-
-  /**
-   * Mark a connector as routed by hand: it is not counted among the parallel connectors of its two
-   * shapes, so the others between them are not bent away from a line that is not there.
-   *
-   * @param connector the connector with its own route
-   */
-  protected static void keepRoute(IConnectorUIModel connector) {
-    OVERLAID.add(connector.getId());
-  }
-
-  /**
-   * Re-anchor the connectors between two shapes except one.
-   *
-   * @param a one shape
-   * @param b the other shape
-   * @param exceptId id of the connector to leave alone
-   */
-  protected static void recenterPair(IShapeUIModel a, IShapeUIModel b, String exceptId) {
-    for (IConnectorUIModel c : pairConnectors(a, b)) {
-      if (!c.getId().equals(exceptId)) {
-        centerConnector(c);
-      }
-    }
-  }
 
   /**
    * Draw two opposite connectors between the same shapes on one line, so they read as a single
@@ -2785,6 +2788,7 @@ public abstract class AbstractDiagramMcpTools {
               PINNED.remove(diagram.getId());
               MANAGED.add(diagram.getId());
               VpGraphLayout.Summary summary = VpGraphLayout.layout(diagram, profile);
+              settleReopen(diagram, profile);
               return "Auto-layout (layered, orthogonal) applied to diagram: "
                   + diagramName
                   + " ("

@@ -186,4 +186,32 @@ public class OrthogonalRouterTest {
     assertFalse(
         RouteChecks.shares(first.get("first"), second.get("second"), OrthogonalRouter.LANE_GAP));
   }
+
+  @Test
+  public void aWiderLaneGapKeepsRunsAwayFromDrawnRoutes() {
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(shape("a", 50, 60, 100, 60));
+    shapes.add(shape("b", 400, 60, 100, 60));
+    shapes.add(shape("p", 160, 300, 10, 10));
+    shapes.add(shape("q", 380, 300, 10, 10));
+    OrthogonalRouter.Conn drawnConn = new OrthogonalRouter.Conn("d", "p", "q");
+    List<int[]> drawnRoute = new ArrayList<>();
+    drawnRoute.add(new int[] {170, 100});
+    drawnRoute.add(new int[] {380, 100});
+    List<OrthogonalRouter.Drawn> drawn = new ArrayList<>();
+    drawn.add(new OrthogonalRouter.Drawn(drawnConn, drawnRoute));
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    conns.add(new OrthogonalRouter.Conn("ab", "a", "b"));
+    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns, drawn, 36);
+    List<int[]> route = routes.get("ab");
+    for (int i = 0; i + 1 < route.size(); i++) {
+      int[] p = route.get(i);
+      int[] q = route.get(i + 1);
+      boolean horizontal = p[1] == q[1];
+      int overlap = Math.min(Math.max(p[0], q[0]), 380) - Math.max(Math.min(p[0], q[0]), 170);
+      if (horizontal && overlap > 3) {
+        assertTrue("run at y=" + p[1] + " keeps the lane gap", Math.abs(p[1] - 100) >= 36);
+      }
+    }
+  }
 }

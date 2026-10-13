@@ -59,25 +59,10 @@ public final class ActivityDiagramUtils {
 
   public static final int SWIMLANE_Y = 40;
 
-  /** Center line of auto-placed nodes on a diagram without swimlanes. */
-  public static final int FREE_CENTER_X = 260;
-
-  /** Top of the first auto-placed node outside swimlanes. */
-  public static final int FREE_TOP_Y = 60;
-
-  /** Distance between the right edge of the swimlane frame and the free-node center line. */
-  public static final int FREE_COLUMN_OFFSET = 200;
-
-  /** Smallest x used for auto-placed nodes, so wide boxes never leave the canvas. */
-  public static final int MIN_X = 20;
-
   /** Horizontal fork/join bar size. */
   private static final int BAR_WIDTH = 120;
 
   private static final int BAR_HEIGHT = 10;
-
-  /** Horizontal gap between sibling branches placed side by side. */
-  public static final int BRANCH_GAP = 40;
 
   /** Rough width of one character of the default diagram font. */
   private static final int CHAR_WIDTH = 8;
@@ -275,58 +260,6 @@ public final class ActivityDiagramUtils {
   }
 
   /**
-   * Width a lane needs to enclose its nodes. Lanes only grow, so the width chosen when the lane was
-   * created (explicit, or widened to its title by {@link #laneWidth}) is kept while the nodes fit.
-   *
-   * @param currentWidth the lane's current width
-   * @param widestChild width of the widest node in the lane, 0 when empty
-   * @return the required lane width
-   */
-  public static int requiredLaneWidth(int currentWidth, int widestChild) {
-    int forChildren = widestChild > 0 ? widestChild + 2 * LANE_PADDING : 0;
-    return Math.max(currentWidth, forChildren);
-  }
-
-  /**
-   * Height the lane bodies need to enclose their children. Lanes only grow.
-   *
-   * @param currentHeight the current lane body height
-   * @param contentTop y of the top of the lane bodies
-   * @param lowestChildBottom lowest bottom edge of any node in the lanes, or -1 when empty
-   * @return the required lane body height
-   */
-  public static int requiredContentHeight(
-      int currentHeight, int contentTop, int lowestChildBottom) {
-    if (lowestChildBottom < 0) {
-      return currentHeight;
-    }
-    return Math.max(currentHeight, lowestChildBottom + LANE_PADDING - contentTop);
-  }
-
-  /**
-   * Left x that centers a shape of the given width on a vertical center line.
-   *
-   * @param centerX the center line
-   * @param width the shape width
-   * @return the left x
-   */
-  public static int centeredX(int centerX, int width) {
-    return centerX - width / 2;
-  }
-
-  /**
-   * Top y of the next auto-placed node: one gap below the lowest node, or the top of the area when
-   * nothing has been placed yet.
-   *
-   * @param lowestBottom lowest bottom edge so far, or -1 when the area is empty
-   * @param topY top of the area
-   * @return the y for the next node
-   */
-  public static int nextRowY(int lowestBottom, int topY) {
-    return lowestBottom < 0 ? topY : Math.max(topY, lowestBottom + ROW_GAP);
-  }
-
-  /**
    * Clamp a shape's x so it lies inside a lane, keeping the lane padding. A shape wider than the
    * lane is centered.
    *
@@ -340,88 +273,9 @@ public final class ActivityDiagramUtils {
     int min = laneX + LANE_PADDING;
     int max = laneX + laneWidth - LANE_PADDING - width;
     if (max < min) {
-      return centeredX(laneX + laneWidth / 2, width);
+      return laneX + laneWidth / 2 - width / 2;
     }
     return Math.max(min, Math.min(max, x));
-  }
-
-  /**
-   * New x of the nodes of one row of a lane after the lane moved or was resized. The row moves as a
-   * whole with the lane center (a centered node stays centered, side-by-side nodes keep their
-   * distances, so a producer and its object node never slide over each other); a row that would
-   * then stick out of the lane is shifted back inside, and one wider than the lane is centered.
-   *
-   * @param xs left x of each node of the row before the change
-   * @param widths width of each node
-   * @param oldLaneX the lane's left x before the change
-   * @param oldLaneWidth the lane width before the change
-   * @param newLaneX the lane's new left x
-   * @param newLaneWidth the new lane width
-   * @return the new left x of each node
-   */
-  public static int[] relocateRow(
-      int[] xs, int[] widths, int oldLaneX, int oldLaneWidth, int newLaneX, int newLaneWidth) {
-    int delta = (newLaneX + newLaneWidth / 2) - (oldLaneX + oldLaneWidth / 2);
-    int left = Integer.MAX_VALUE;
-    int right = Integer.MIN_VALUE;
-    for (int i = 0; i < xs.length; i++) {
-      left = Math.min(left, xs[i] + delta);
-      right = Math.max(right, xs[i] + widths[i] + delta);
-    }
-    int min = newLaneX + LANE_PADDING;
-    int max = newLaneX + newLaneWidth - LANE_PADDING;
-    int shift = 0;
-    if (right - left > max - min) {
-      shift = (newLaneX + newLaneWidth / 2) - (left + right) / 2;
-    } else if (left < min) {
-      shift = min - left;
-    } else if (right > max) {
-      shift = max - right;
-    }
-    int[] result = new int[xs.length];
-    for (int i = 0; i < xs.length; i++) {
-      result[i] = xs[i] + delta + shift;
-    }
-    return result;
-  }
-
-  /**
-   * Group shapes into rows: shapes whose vertical extents overlap share a row.
-   *
-   * @param ys top of each shape
-   * @param heights height of each shape
-   * @return the row index of each shape
-   */
-  public static int[] rowsOf(int[] ys, int[] heights) {
-    int n = ys.length;
-    int[] row = new int[n];
-    java.util.Arrays.fill(row, -1);
-    int next = 0;
-    for (int i = 0; i < n; i++) {
-      if (row[i] >= 0) {
-        continue;
-      }
-      row[i] = next;
-      // flood: everything overlapping a member of this row joins it
-      boolean grew = true;
-      while (grew) {
-        grew = false;
-        for (int j = 0; j < n; j++) {
-          if (row[j] >= 0) {
-            continue;
-          }
-          for (int k = 0; k < n; k++) {
-            if (row[k] == next && ys[j] < ys[k] + heights[k] && ys[k] < ys[j] + heights[j]) {
-              row[j] = next;
-              grew = true;
-              break;
-            }
-          }
-        }
-      }
-      next++;
-    }
-    return row;
   }
 
   /**
@@ -450,19 +304,6 @@ public final class ActivityDiagramUtils {
       }
     }
     return best;
-  }
-
-  /**
-   * Whether a w x h label at {@code spot} keeps 2 px from every obstacle.
-   *
-   * @param spot top-left corner {x, y}
-   * @param w label width
-   * @param h label height
-   * @param obstacles boxes {x, y, w, h}
-   * @return true when the label touches no obstacle
-   */
-  public static boolean isClear(int[] spot, int w, int h, java.util.List<int[]> obstacles) {
-    return hits(spot, w, h, obstacles) == 0;
   }
 
   private static int hits(int[] c, int w, int h, java.util.List<int[]> obstacles) {
@@ -525,33 +366,6 @@ public final class ActivityDiagramUtils {
     return result;
   }
 
-  /** Minimum distance between a flow's end on a fork/join bar and either end of the bar. */
-  public static final int BAR_INSET = 12;
-
-  /**
-   * Where a flow towards (tx, ty) leaves or enters a fork/join bar: on the long side facing the
-   * point, at the coordinate along the bar nearest the point but at least {@link #BAR_INSET} in
-   * from either end.
-   *
-   * @param bar bar bounds {x, y, w, h}
-   * @param tx x of the other end
-   * @param ty y of the other end
-   * @return the port {x, y} on the bar's border
-   */
-  public static int[] barPort(int[] bar, int tx, int ty) {
-    boolean horizontal = bar[2] >= bar[3];
-    if (horizontal) {
-      int inset = Math.min(BAR_INSET, bar[2] / 2);
-      int x = Math.max(bar[0] + inset, Math.min(tx, bar[0] + bar[2] - inset));
-      int y = ty >= bar[1] + bar[3] / 2 ? bar[1] + bar[3] : bar[1];
-      return new int[] {x, y};
-    }
-    int inset = Math.min(BAR_INSET, bar[3] / 2);
-    int y = Math.max(bar[1] + inset, Math.min(ty, bar[1] + bar[3] - inset));
-    int x = tx >= bar[0] + bar[2] / 2 ? bar[0] + bar[2] : bar[0];
-    return new int[] {x, y};
-  }
-
   /** Smallest coordinate a label may have: the export crops at 0, VP drops negative positions. */
   private static final int MIN_LABEL_COORD = 5;
 
@@ -573,25 +387,6 @@ public final class ActivityDiagramUtils {
   }
 
   /**
-   * A frame's four borders as thin boxes, plus its title band, so labels keep off them.
-   *
-   * @param x frame left
-   * @param y frame top
-   * @param w frame width
-   * @param h frame height
-   * @param titleHeight height of the title band at the top
-   * @return boxes {x, y, w, h}
-   */
-  public static java.util.List<int[]> frameBorders(int x, int y, int w, int h, int titleHeight) {
-    java.util.List<int[]> boxes = new java.util.ArrayList<>();
-    boxes.add(new int[] {x, y, w, Math.max(2, titleHeight)});
-    boxes.add(new int[] {x, y + h - 1, w, 2});
-    boxes.add(new int[] {x - 1, y, 2, h});
-    boxes.add(new int[] {x + w - 1, y, 2, h});
-    return boxes;
-  }
-
-  /**
    * Index of the lane whose horizontal extent contains {@code px}.
    *
    * @param px the x to test
@@ -606,28 +401,5 @@ public final class ActivityDiagramUtils {
       }
     }
     return -1;
-  }
-
-  /**
-   * Left edges of shapes laid side by side in one row, centered on {@code centerX}.
-   *
-   * @param widths the widths of the shapes, in row order
-   * @param centerX the row's center
-   * @param gap the gap between neighbours
-   * @return the x of each shape
-   */
-  public static int[] rowPositions(int[] widths, int centerX, int gap) {
-    int total = 0;
-    for (int w : widths) {
-      total += w;
-    }
-    total += gap * Math.max(0, widths.length - 1);
-    int[] xs = new int[widths.length];
-    int x = centerX - total / 2;
-    for (int i = 0; i < widths.length; i++) {
-      xs[i] = x;
-      x += widths[i] + gap;
-    }
-    return xs;
   }
 }

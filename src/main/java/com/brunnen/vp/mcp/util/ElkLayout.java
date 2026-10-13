@@ -61,6 +61,14 @@ public final class ElkLayout {
     UP
   }
 
+  /** Side of a node a text hangs on. */
+  public enum Side {
+    BELOW,
+    ABOVE,
+    LEFT,
+    RIGHT
+  }
+
   /** Where along its edge a label sits. */
   public enum Slot {
     TAIL,
@@ -75,10 +83,12 @@ public final class ElkLayout {
     final int h;
     String parent;
     int layer = ANY_LAYER;
+    int row = -1;
     int minW;
     int minH;
     int labelW;
     int labelH;
+    Side labelSide = Side.BELOW;
 
     /**
      * A node of a fixed size (a container's size only seeds its minimum).
@@ -116,16 +126,30 @@ public final class ElkLayout {
     }
 
     /**
-     * Reserve room for a text hanging below the node (the name of an actor): neighbours keep clear
-     * of it.
+     * Put the node in layer number {@code index} (0 is the first): participants of one role stand
+     * in one row.
+     *
+     * @param index the layer, or -1 for none
+     * @return this
+     */
+    public Node row(int index) {
+      this.row = index;
+      return this;
+    }
+
+    /**
+     * Reserve room for a text hanging outside the node (the name of an actor below its figure, the
+     * name of a pseudo state beside it): neighbours keep clear of it.
      *
      * @param width text width
      * @param height text height
+     * @param side the side of the node the text hangs on
      * @return this
      */
-    public Node bottomLabel(int width, int height) {
+    public Node outsideLabel(int width, int height, Side side) {
       this.labelW = width;
       this.labelH = height;
+      this.labelSide = side;
       return this;
     }
 
@@ -221,6 +245,8 @@ public final class ElkLayout {
     int originX = 30;
     int originY = 30;
     boolean brandesKoepf = true;
+    int labelAllowance = 96;
+    boolean flowOrder;
 
     /**
      * Flow direction.
@@ -258,6 +284,40 @@ public final class ElkLayout {
     }
 
     /**
+     * Lay the diagram out as a flow that starts at its sources: cycles are broken by walking from
+     * the sources (a transition back to an earlier state is the one that turns round), and the
+     * branches of a node keep the order they were created in (the first branch on the left).
+     *
+     * @return this
+     */
+    public Options flowOrder() {
+      this.flowOrder = true;
+      return this;
+    }
+
+    /**
+     * Room a connector label needs besides its own extent between two layers (stubs at both shapes,
+     * the lane of an elbow): 96 for labels on horizontal legs, less for labels beside the vertical
+     * legs of a top-to-bottom flow.
+     *
+     * @param value the allowance in pixels
+     * @return this
+     */
+    public Options labelAllowance(int value) {
+      this.labelAllowance = value;
+      return this;
+    }
+
+    /**
+     * The room a connector label needs besides its own extent.
+     *
+     * @return the allowance
+     */
+    public int labelAllowance() {
+      return labelAllowance;
+    }
+
+    /**
      * Make sure layers are at least this far apart.
      *
      * @param gap least gap between two layers
@@ -265,6 +325,18 @@ public final class ElkLayout {
      */
     public Options minLayerGap(int gap) {
       this.layerGap = Math.max(layerGap, gap);
+      return this;
+    }
+
+    /**
+     * Least distance between a connector that runs past a shape (a link across a layer) and the
+     * shape.
+     *
+     * @param gap the distance in pixels
+     * @return this
+     */
+    public Options edgeNodeGap(int gap) {
+      this.edgeNodeGap = gap;
       return this;
     }
 
@@ -488,6 +560,14 @@ public final class ElkLayout {
         options.brandesKoepf
             ? NodePlacementStrategy.BRANDES_KOEPF
             : NodePlacementStrategy.NETWORK_SIMPLEX);
+    if (options.flowOrder) {
+      node.setProperty(
+          LayeredOptions.CYCLE_BREAKING_STRATEGY,
+          org.eclipse.elk.alg.layered.options.CycleBreakingStrategy.DEPTH_FIRST);
+      node.setProperty(
+          LayeredOptions.CONSIDER_MODEL_ORDER_STRATEGY,
+          org.eclipse.elk.alg.layered.options.OrderingStrategy.NODES_AND_EDGES);
+    }
     node.setProperty(LayeredOptions.THOROUGHNESS, 30);
     node.setProperty(LayeredOptions.NODE_PLACEMENT_FAVOR_STRAIGHT_EDGES, true);
     node.setProperty(
@@ -534,12 +614,10 @@ public final class ElkLayout {
       ElkLabel text = ElkGraphUtil.createLabel("name", en);
       text.setWidth(n.labelW);
       text.setHeight(n.labelH);
-      en.setProperty(
-          CoreOptions.NODE_LABELS_PLACEMENT,
-          java.util.EnumSet.of(
-              org.eclipse.elk.core.options.NodeLabelPlacement.H_CENTER,
-              org.eclipse.elk.core.options.NodeLabelPlacement.V_BOTTOM,
-              org.eclipse.elk.core.options.NodeLabelPlacement.OUTSIDE));
+      en.setProperty(CoreOptions.NODE_LABELS_PLACEMENT, labelPlacement(n.labelSide));
+    }
+    if (n.row >= 0) {
+      en.setProperty(LayeredOptions.LAYERING_LAYER_CHOICE_CONSTRAINT, n.row);
     }
     if (n.layer == FIRST_LAYER) {
       en.setProperty(LayeredOptions.LAYERING_LAYER_CONSTRAINT, LayerConstraint.FIRST);
@@ -548,6 +626,31 @@ public final class ElkLayout {
     }
     elkNodes.put(n.id, en);
     return en;
+  }
+
+  private static java.util.EnumSet<org.eclipse.elk.core.options.NodeLabelPlacement> labelPlacement(
+      Side side) {
+    org.eclipse.elk.core.options.NodeLabelPlacement h;
+    org.eclipse.elk.core.options.NodeLabelPlacement v;
+    switch (side) {
+      case ABOVE:
+        h = org.eclipse.elk.core.options.NodeLabelPlacement.H_CENTER;
+        v = org.eclipse.elk.core.options.NodeLabelPlacement.V_TOP;
+        break;
+      case LEFT:
+        h = org.eclipse.elk.core.options.NodeLabelPlacement.H_LEFT;
+        v = org.eclipse.elk.core.options.NodeLabelPlacement.V_CENTER;
+        break;
+      case RIGHT:
+        h = org.eclipse.elk.core.options.NodeLabelPlacement.H_RIGHT;
+        v = org.eclipse.elk.core.options.NodeLabelPlacement.V_CENTER;
+        break;
+      default:
+        h = org.eclipse.elk.core.options.NodeLabelPlacement.H_CENTER;
+        v = org.eclipse.elk.core.options.NodeLabelPlacement.V_BOTTOM;
+        break;
+    }
+    return java.util.EnumSet.of(h, v, org.eclipse.elk.core.options.NodeLabelPlacement.OUTSIDE);
   }
 
   /** Absolute top-left corner of a node (its x/y are relative to the parent). */

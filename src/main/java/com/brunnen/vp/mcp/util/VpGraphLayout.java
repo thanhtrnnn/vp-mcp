@@ -28,6 +28,9 @@ public final class VpGraphLayout {
   /** Distance from a corner a connector end keeps. */
   private static final int CORNER = 10;
 
+  /** How far a bar reaches past the outermost shape it joins. */
+  private static final int BAR_MARGIN = 24;
+
   private VpGraphLayout() {}
 
   /** What a layout run did, for the tool's answer. */
@@ -63,11 +66,21 @@ public final class VpGraphLayout {
       return summary;
     }
     ElkLayout.Result result = graph.solve(profile.options(diagram));
-    graph.finish(result);
-    graph.place(profile, result, summary);
-    Map<String, List<int[]>> routes = graph.vpRoutes(result);
-    graph.routeDeferred(profile, routes);
-    graph.repair(profile, routes);
+    profile.arrange(graph.shapes, result.nodes());
+    graph.spanBars(profile, result);
+    Map<String, List<int[]>> routes;
+    if (profile.routesAll()) {
+      // the layered layout only decides where the shapes go; the router draws every connector
+      graph.place(profile, result, summary);
+      routes = new LinkedHashMap<>();
+      graph.reroute(profile, routes, new ArrayList<>(graph.edgeOrder));
+    } else {
+      graph.finish(result);
+      graph.place(profile, result, summary);
+      routes = graph.vpRoutes(result);
+      graph.routeDeferred(profile, routes);
+      graph.repair(profile, routes);
+    }
     graph.draw(profile, routes, summary);
     profile.afterLayout(diagram);
     return summary;
@@ -88,6 +101,10 @@ public final class VpGraphLayout {
     if (graph.shapes.isEmpty()) {
       return summary;
     }
+    for (IShapeUIModel s : graph.shapes.values()) {
+      profile.placed(s); // detached names follow the shapes where they stand now
+    }
+    graph.assignSides();
     List<OrthogonalRouter.Shape> shapes = graph.routerShapes(profile);
     List<OrthogonalRouter.Conn> conns = new ArrayList<>();
     for (String id : graph.edgeOrder) {
@@ -98,7 +115,8 @@ public final class VpGraphLayout {
               .sides(spec.fromSide, spec.toSide)
               .prefer(spec.preferFromSide, spec.preferToSide));
     }
-    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
+    Map<String, List<int[]>> routes =
+        OrthogonalRouter.route(shapes, conns, new ArrayList<>(), profile.laneGap());
     for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
       IConnectorUIModel c = graph.connectors.get(e.getKey());
       List<int[]> r = e.getValue();
@@ -139,7 +157,11 @@ public final class VpGraphLayout {
         }
         g.shapes.put(s.getId(), s);
         g.nodeSpecs.put(s.getId(), spec);
-        g.size.put(s.getId(), new int[] {Math.max(s.getWidth(), 10), Math.max(s.getHeight(), 10)});
+        g.size.put(
+            s.getId(),
+            spec.size != null
+                ? spec.size.clone()
+                : new int[] {Math.max(s.getWidth(), 10), Math.max(s.getHeight(), 10)});
       }
       for (IShapeUIModel s : new ArrayList<>(g.shapes.values())) {
         IShapeUIModel parent = profile.container(s);
@@ -180,7 +202,7 @@ public final class VpGraphLayout {
         }
       }
       if (widest > 0) {
-        options.minLayerGap(widest + 96);
+        options.minLayerGap(widest + options.labelAllowance());
       }
       ElkLayout.Result result = null;
       for (int pass = 0; pass < 3; pass++) {
@@ -198,12 +220,12 @@ public final class VpGraphLayout {
         String id = e.getKey();
         int[] sz = size.get(id);
         LayoutProfile.NodeSpec spec = nodeSpecs.get(id);
-        ElkLayout.Node node = new ElkLayout.Node(id, sz[0], sz[1]).layer(spec.layer);
+        ElkLayout.Node node = new ElkLayout.Node(id, sz[0], sz[1]).layer(spec.layer).row(spec.row);
         if (parents.containsKey(id)) {
           node.in(parents.get(id));
         }
-        if (spec.bottomLabel != null) {
-          node.bottomLabel(spec.bottomLabel[0], spec.bottomLabel[1]);
+        if (spec.outsideLabel != null) {
+          node.outsideLabel(spec.outsideLabel[0], spec.outsideLabel[1], spec.labelSide);
         }
         if (spec.minSize != null) {
           node.minSize(spec.minSize[0], spec.minSize[1]);
@@ -359,7 +381,10 @@ public final class VpGraphLayout {
       for (String id : routes.keySet()) {
         int index = 0;
         for (LayoutProfile.LabelSpec l : edgeSpecs.get(id).labels) {
-          specs.add(new LabelPlacer.Spec(id, index, l.w, l.h, slotOf(l.slot)));
+          specs.add(
+              new LabelPlacer.Spec(id, index, l.w, l.h, slotOf(l.slot))
+                  .verticalSize(l.verticalW, l.verticalH)
+                  .preferSide(l.side));
           keys.computeIfAbsent(id, k -> new ArrayList<>()).add(l.key);
           index++;
         }
@@ -479,6 +504,7 @@ public final class VpGraphLayout {
       if (ids.isEmpty()) {
         return;
       }
+      assignSides();
       List<OrthogonalRouter.Conn> pending = new ArrayList<>();
       for (String id : ids) {
         LayoutProfile.EdgeSpec spec = edgeSpecs.get(id);
@@ -501,7 +527,7 @@ public final class VpGraphLayout {
                 e.getValue()));
       }
       Map<String, List<int[]>> extra =
-          OrthogonalRouter.route(routerShapes(profile), pending, drawn);
+          OrthogonalRouter.route(routerShapes(profile), pending, drawn, profile.laneGap());
       for (Map.Entry<String, List<int[]>> e : extra.entrySet()) {
         IConnectorUIModel c = connectors.get(e.getKey());
         List<int[]> r = e.getValue();
@@ -517,6 +543,112 @@ public final class VpGraphLayout {
             r.get(n - 1),
             r.get(n - 2));
         routes.put(e.getKey(), r);
+      }
+    }
+
+    /**
+     * Widen every bar (fork, join) to the span of the shapes it joins: each branch then meets the
+     * bar at a place of its own, straight above or below the shape at the other end.
+     */
+    void spanBars(LayoutProfile profile, ElkLayout.Result result) {
+      for (Map.Entry<String, LayoutProfile.NodeSpec> e : nodeSpecs.entrySet()) {
+        if (!e.getValue().bar) {
+          continue;
+        }
+        int[] r = result.nodes().get(e.getKey());
+        if (r == null || r[2] < r[3]) {
+          continue; // a vertical bar is reached sideways
+        }
+        int lo = r[0];
+        int hi = r[0] + r[2];
+        for (String id : edgeOrder) {
+          IConnectorUIModel c = connectors.get(id);
+          String other = otherEnd(c, e.getKey());
+          int[] o = other == null ? null : result.nodes().get(other);
+          if (o != null) {
+            lo = Math.min(lo, o[0] + o[2] / 2 - BAR_MARGIN);
+            hi = Math.max(hi, o[0] + o[2] / 2 + BAR_MARGIN);
+          }
+        }
+        int[] range = profile.barRange(shapes.get(e.getKey()));
+        if (range != null) {
+          lo = Math.max(lo, range[0]);
+          hi = Math.min(hi, range[1]);
+        }
+        result.nodes().put(e.getKey(), new int[] {lo, r[1], hi - lo, r[3]});
+      }
+    }
+
+    /** The id of the shape at the other end of a connector, null when it is a loop or not at id. */
+    private String otherEnd(IConnectorUIModel c, String id) {
+      String from = c.getFromShape().getId();
+      String to = c.getToShape().getId();
+      if (from.equals(to)) {
+        return null;
+      }
+      return from.equals(id) ? to : to.equals(id) ? from : null;
+    }
+
+    /**
+     * Give every connector end at a shape with {@code ownSides} (a diamond) a side of its own, by
+     * where the shape at the other end stands: an end straight above/below takes the top/bottom
+     * vertex, the others the left or right one, the next free side when that is taken. The sides
+     * are only preferences: the router may take another when it is much shorter.
+     */
+    void assignSides() {
+      for (Map.Entry<String, LayoutProfile.NodeSpec> e : nodeSpecs.entrySet()) {
+        if (!e.getValue().ownSides) {
+          continue;
+        }
+        String id = e.getKey();
+        int[] r = rect(shapes.get(id));
+        List<String> ends = new ArrayList<>();
+        for (String edge : edgeOrder) {
+          if (otherEnd(connectors.get(edge), id) != null) {
+            ends.add(edge);
+          }
+        }
+        boolean[] taken = new boolean[4];
+        Map<String, Integer> chosen = new HashMap<>();
+        // straight ends first: they take the vertex facing the other shape
+        for (String edge : ends) {
+          int[] o = rect(shapes.get(otherEnd(connectors.get(edge), id)));
+          int dx = o[0] + o[2] / 2 - (r[0] + r[2] / 2);
+          int dy = o[1] + o[3] / 2 - (r[1] + r[3] / 2);
+          int side = dy < 0 ? 0 : 2;
+          if (Math.abs(dx) <= r[2] / 2 + 8 && !taken[side]) {
+            taken[side] = true;
+            chosen.put(edge, side);
+          }
+        }
+        for (String edge : ends) {
+          if (chosen.containsKey(edge)) {
+            continue;
+          }
+          int[] o = rect(shapes.get(otherEnd(connectors.get(edge), id)));
+          int dx = o[0] + o[2] / 2 - (r[0] + r[2] / 2);
+          int dy = o[1] + o[3] / 2 - (r[1] + r[3] / 2);
+          int[] order =
+              dx < 0
+                  ? new int[] {3, 1, dy < 0 ? 0 : 2, dy < 0 ? 2 : 0}
+                  : new int[] {1, 3, dy < 0 ? 0 : 2, dy < 0 ? 2 : 0};
+          for (int side : order) {
+            if (!taken[side]) {
+              taken[side] = true;
+              chosen.put(edge, side);
+              break;
+            }
+          }
+        }
+        for (Map.Entry<String, Integer> c : chosen.entrySet()) {
+          IConnectorUIModel conn = connectors.get(c.getKey());
+          LayoutProfile.EdgeSpec spec = edgeSpecs.get(c.getKey());
+          if (conn.getFromShape().getId().equals(id)) {
+            spec.preferFromSide = c.getValue();
+          } else {
+            spec.preferToSide = c.getValue();
+          }
+        }
       }
     }
 
