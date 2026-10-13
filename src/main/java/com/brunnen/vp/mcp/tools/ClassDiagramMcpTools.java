@@ -58,6 +58,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             IDiagramUIModel diagram =
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM);
             diagram.setName(diagramName);
+            diagram.setAutoFitShapesSize(true);
             dm.openDiagram(diagram);
             return "Created class diagram: " + diagramName;
           });
@@ -113,6 +114,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IDiagramElement classDe = addToDiagram(diagram, cls, className);
+            fitShape(classDe);
             if (x > 0 || y > 0) {
               classDe.setBounds(x, y, classDe.getWidth(), classDe.getHeight());
             }
@@ -243,6 +245,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               attr.setVisibility(visibility.trim());
             }
             cls.addAttribute(attr);
+            fitShapesOf(cls);
 
             return "Added attribute '" + attributeName + "' to class '" + className + "'";
           });
@@ -328,6 +331,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               op.setAbstract(true);
             }
             cls.addOperation(op);
+            fitShapesOf(cls);
 
             return "Added operation '" + operationName + "' to class '" + className + "'";
           });
@@ -616,7 +620,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
             IClass iface = getModelElementFactory().createClass();
             iface.addStereotype("Interface");
-            addToDiagram(diagram, iface, interfaceName);
+            fitShape(addToDiagram(diagram, iface, interfaceName));
 
             return "Added interface '" + interfaceName + "' to diagram '" + diagramName + "'";
           });
@@ -1138,6 +1142,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               if (!cls.hasStereotype(stereotype.trim())) {
                 cls.addStereotype(stereotype.trim());
               }
+              fitShapesOf(cls);
               applied.add(cls.getName());
             }
             if (isSet(robustnessIcon)) {
@@ -1147,6 +1152,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                     && de.getModelElement() instanceof IClass
                     && seen.contains(de.getModelElement().getName())) {
                   ((IClassUIModel) de).setDisplayAsRobustnessAnalysisIcon(icon);
+                  fitShape(de);
                 }
               }
             }

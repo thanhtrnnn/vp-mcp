@@ -7,6 +7,7 @@ import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramUIModel;
+import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.model.IActor;
 import com.vp.plugin.model.IAssociation;
 import com.vp.plugin.model.IAssociationEnd;
@@ -104,8 +105,8 @@ public abstract class AbstractDiagramMcpTools {
     DiagramManager dm = ApplicationManager.instance().getDiagramManager();
     element.setName(name);
     IDiagramElement diagramElement = dm.createDiagramElement(diagram, element);
-    if (diagramElement instanceof com.vp.plugin.diagram.IShapeUIModel) {
-      ((com.vp.plugin.diagram.IShapeUIModel) diagramElement).setCustomText(name);
+    if (diagramElement instanceof IShapeUIModel) {
+      ((IShapeUIModel) diagramElement).setCustomText(name);
     }
     applyConventionalFill(diagramElement, element);
     String key = diagram.getName();
@@ -148,9 +149,9 @@ public abstract class AbstractDiagramMcpTools {
    * @param de the diagram element to color
    */
   protected void applyBlueFill(IDiagramElement de) {
-    if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
+    if (de instanceof IShapeUIModel) {
       com.vp.plugin.diagram.format.IShapeUIModelFillColor fill =
-          ((com.vp.plugin.diagram.IShapeUIModel) de).getFillColor();
+          ((IShapeUIModel) de).getFillColor();
       if (fill != null) {
         fill.setColor1(VP_FILL_BLUE, true);
       }
@@ -178,8 +179,8 @@ public abstract class AbstractDiagramMcpTools {
         if (model != null && name.equals(model.getName())) {
           return de;
         }
-        if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
-          String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+        if (de instanceof IShapeUIModel) {
+          String caption = ((IShapeUIModel) de).getCustomText();
           if (name.equals(caption)) {
             return de;
           }
@@ -244,8 +245,8 @@ public abstract class AbstractDiagramMcpTools {
           if (name.equals(model.getName())) {
             return type.cast(model);
           }
-          if (de instanceof com.vp.plugin.diagram.IShapeUIModel) {
-            String caption = ((com.vp.plugin.diagram.IShapeUIModel) de).getCustomText();
+          if (de instanceof IShapeUIModel) {
+            String caption = ((IShapeUIModel) de).getCustomText();
             if (name.equals(caption)) {
               return type.cast(model);
             }
@@ -305,6 +306,38 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return elements;
+  }
+
+  /**
+   * Resize a shape to fit its content (name, stereotypes, compartments) via VP's fit-size API.
+   * Shapes otherwise keep their creation size, so members added later overflow the box and short
+   * names leave empty space. No-op for connectors.
+   *
+   * @param de the diagram element to fit
+   */
+  protected void fitShape(IDiagramElement de) {
+    if (de instanceof IShapeUIModel) {
+      ((IShapeUIModel) de).fitSize();
+    }
+  }
+
+  /**
+   * Fit every shape that shows {@code element}, on all diagrams. Call after changing what a shape
+   * displays (adding attributes/operations, stereotypes, renaming).
+   *
+   * @param element the model element whose views are refitted
+   */
+  protected void fitShapesOf(IModelElement element) {
+    if (element == null) {
+      return;
+    }
+    IDiagramElement[] views = element.getDiagramElements();
+    if (views == null) {
+      return;
+    }
+    for (IDiagramElement de : views) {
+      fitShape(de);
+    }
   }
 
   // --- Diagram Management Tools ---
