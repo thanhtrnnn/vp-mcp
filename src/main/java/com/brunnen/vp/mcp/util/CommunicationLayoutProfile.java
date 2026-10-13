@@ -285,7 +285,15 @@ public final class CommunicationLayoutProfile extends LayoutProfile {
     ICaptionUIModel caption = message.getCaptionUIModel();
     int capW = textWidth(message);
     int capH = Math.max(captionHeight(message), TextMetrics.LINE_HEIGHT);
-    int[] leg = nearestLeg(c.getPoints(), rect);
+    // the size of the rectangle says which kind of leg the placer put it beside
+    int hw = Math.max(capW, ARROW);
+    int hh = ARROW + TEXT_GAP + capH;
+    int vw = ARROW + TEXT_GAP + capW;
+    int vh = Math.max(ARROW, capH);
+    boolean horizontalSize = rect[2] == hw && rect[3] == hh;
+    boolean verticalSize = rect[2] == vw && rect[3] == vh;
+    int only = horizontalSize == verticalSize ? -1 : horizontalSize ? 0 : 1;
+    int[] leg = nearestLeg(c.getPoints(), rect, only);
     int cx;
     int cy;
     int textX;
@@ -311,13 +319,14 @@ public final class CommunicationLayoutProfile extends LayoutProfile {
     }
   }
 
-  /** The leg {x1, y1, x2, y2} of a route nearest to the middle of a rectangle, or null. */
-  private static int[] nearestLeg(Point[] points, int[] rect) {
+  /**
+   * The leg {x1, y1, x2, y2} of a route that lies nearest to a rectangle (not to its middle), or
+   * null; {@code only} restricts the legs to horizontal (0) or vertical (1) ones, -1 for any.
+   */
+  private static int[] nearestLeg(Point[] points, int[] rect, int only) {
     if (points == null || points.length < 2) {
       return null;
     }
-    int cx = rect[0] + rect[2] / 2;
-    int cy = rect[1] + rect[3] / 2;
     int[] best = null;
     long bestDistance = Long.MAX_VALUE;
     for (int i = 0; i + 1 < points.length; i++) {
@@ -325,8 +334,13 @@ public final class CommunicationLayoutProfile extends LayoutProfile {
       int y1 = points[i].y;
       int x2 = points[i + 1].x;
       int y2 = points[i + 1].y;
-      long dx = Math.max(Math.max(Math.min(x1, x2) - cx, cx - Math.max(x1, x2)), 0);
-      long dy = Math.max(Math.max(Math.min(y1, y2) - cy, cy - Math.max(y1, y2)), 0);
+      if (only >= 0 && (y1 == y2) != (only == 0)) {
+        continue; // 0: only horizontal legs, 1: only vertical ones
+      }
+      long dx =
+          Math.max(Math.max(Math.min(x1, x2) - (rect[0] + rect[2]), rect[0] - Math.max(x1, x2)), 0);
+      long dy =
+          Math.max(Math.max(Math.min(y1, y2) - (rect[1] + rect[3]), rect[1] - Math.max(y1, y2)), 0);
       long distance = dx * dx + dy * dy;
       if (distance < bestDistance) {
         bestDistance = distance;

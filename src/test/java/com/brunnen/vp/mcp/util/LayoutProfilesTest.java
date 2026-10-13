@@ -239,6 +239,34 @@ public class LayoutProfilesTest {
     assertTrue("text beyond the arrow", textY.getValue() >= 103 + CommunicationLayoutProfile.ARROW);
   }
 
+  @Test
+  public void aMessageBesideAVerticalLegStaysThereEvenWhenAHorizontalLegIsNearerToItsMiddle() {
+    CommunicationLayoutProfile profile = new CommunicationLayoutProfile();
+    IShapeUIModel a = lifeline("A", "boundary", 0, 0);
+    IShapeUIModel b = lifeline("B", "entity", 0, 0);
+    IConnectorUIModel link = connector(mock(IInteractionLifeLineLink.class), a, b);
+    IBaseCommunicationMessageUIModel m = message("kiemTraPhong()", "1.1");
+    when(link.toChildArray()).thenReturn(new IShapeUIModel[] {m});
+    // a long vertical leg at x=291 (330..452), then a horizontal one at y=452
+    when(link.getPoints())
+        .thenReturn(
+            new Point[] {
+              new Point(291, 330), new Point(291, 452), new Point(205, 452), new Point(205, 468)
+            });
+    LayoutProfile.EdgeSpec spec = profile.edge(link);
+    LayoutProfile.LabelSpec label = spec.labels.get(0);
+    // the rectangle the placer gives a label beside the vertical leg: left of the line
+    int[] rect = {291 - 3 - label.verticalW, 379, label.verticalW, label.verticalH};
+    profile.applyLabel(link, "m0", rect);
+    ArgumentCaptor<Integer> x = ArgumentCaptor.forClass(Integer.class);
+    verify(m).setBounds(x.capture(), anyInt(), anyInt(), anyInt());
+    int arrowCenter = x.getValue() + CommunicationLayoutProfile.MESSAGE_BOX / 2;
+    assertEquals(
+        "the arrow stands at the line, not in the middle of the label",
+        291 - 3 - CommunicationLayoutProfile.ARROW / 2,
+        arrowCenter);
+  }
+
   // --- activity
 
   /** Two lanes of 240 starting at x = 40 that remember what was applied to them. */
