@@ -40,14 +40,20 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
   /** Default size of the initial/final pseudo state circles. */
   private static final int PSEUDO_SIZE = 30;
 
-  /** Auto-placement grid: origin, free space for transition labels, and row width (3 states). */
-  private static final int GRID_X0 = 60;
+  /**
+   * Auto-placement grid: origin, free space for transition labels, and row width (3 states). The
+   * flow column starts far enough right for the labels of back transitions bent to the left.
+   */
+  private static final int GRID_X0 = 220;
 
   private static final int GRID_Y0 = 60;
 
   private static final int GRID_GAP = 110;
 
-  private static final int GRID_RIGHT = 820;
+  private static final int GRID_RIGHT = 980;
+
+  /** A state flow placed top to bottom wraps into a new column below this y. */
+  private static final int FLOW_BOTTOM = 900;
 
   /** Ids of states placed automatically; a transition may move them next to their source. */
   private final java.util.Set<String> autoPlaced = new java.util.HashSet<>();
@@ -60,15 +66,13 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            requireProject();
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_STATE_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_STATE_DIAGRAM, diagramName);
             diagram.setAutoFitShapesSize(true);
             useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
-            return "Created state machine diagram: " + diagramName;
+            return "Created state machine diagram: " + diagram.getName();
           });
     } catch (Exception e) {
       return "Error creating state machine diagram: " + e.getMessage();
@@ -82,7 +86,8 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
               + "optional behaviours shown in the state's compartment as 'entry / ...', "
               + "'do / ...', 'exit / ...' (pass \"\" to omit). The box is fitted to its text. "
               + "x/y (>0) place the state explicitly, otherwise it goes to the next free cell of "
-              + "a 3-column grid; its first incoming transition then moves it next to the source")
+              + "a 3-column grid; its first incoming transition then moves it below the source"
+              + " (the book's top-to-bottom screen flow), or beside it when below is taken")
   public String addState(
       String diagramName,
       String stateName,
@@ -191,27 +196,43 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
               return "State has no model element: " + (source == null ? fromState : toState);
             }
 
+            if (target instanceof IInitialPseudoState) {
+              return "An initial state cannot have incoming transitions: " + toState;
+            }
+            if (source instanceof IFinalState2) {
+              return "A final state cannot have outgoing transitions: " + fromState;
+            }
             String caption = StateMachineUtils.normalizeTransitionLabel(label);
             ITransition2 transition = getModelElementFactory().createTransition2();
-            transition.setFrom(source);
-            transition.setTo(target);
-            if (caption != null) {
-              transition.setName(caption);
-            }
-
-            IDiagramElement connector;
-            if (fromElement.getId().equals(toElement.getId())) {
-              connector = connectSelf(diagram, transition, fromElement);
-            } else {
-              placeNextTo(diagram, fromElement, toElement);
-              connector = connectCentered(diagram, transition, fromElement, toElement);
+            IDiagramElement connector = null;
+            try {
+              transition.setFrom(source);
+              transition.setTo(target);
+              if (caption != null) {
+                transition.setName(caption);
+              }
+              if (fromElement.getId().equals(toElement.getId())) {
+                connector = connectSelf(diagram, transition, fromElement);
+              } else {
+                placeNextTo(diagram, fromElement, toElement);
+                connector = connectCentered(diagram, transition, fromElement, toElement);
+              }
+            } finally {
+              if (connector == null) {
+                transition.delete(); // no orphan transition model when VP refuses the arrow
+              }
             }
             if (connector == null) {
-              transition.delete();
               return "Error adding transition: Visual Paradigm refused the connector";
             }
+            if (!fromElement.getId().equals(toElement.getId())) {
+              // the new arrow, and the opposite one it may have bent away, get their labels
+              // beside their own line
+              placeLabels(fromElement);
+              placeLabels(toElement);
+            }
 
-            String suffix = caption == null ? "" : " [" + caption + "]";
+            String suffix = caption == null ? "" : " " + caption;
             return "Added transition '" + fromState + "' -> '" + toState + "'" + suffix;
           });
     } catch (Exception e) {
@@ -248,15 +269,21 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
-   * A self-transition as an explicit loop on the right edge of the state, with its label right of
-   * the loop (VP's own route runs over the top of the box and drops the label inside it).
+   * A self-transition as an explicit loop on the right edge of the state (the left edge when the
+   * loop and its label would hit another shape there), with its label beside the loop (VP's own
+   * route runs over the top of the box and drops the label inside it).
    */
   private IDiagramElement connectSelf(
       IDiagramUIModel diagram, ITransition2 transition, IDiagramElement state) {
     activate(diagram);
-    int[][] loop =
-        StateMachineUtils.selfLoopPoints(
-            state.getX(), state.getY(), state.getWidth(), state.getHeight());
+    int[] box = rect(state);
+    int labelWidth = transition.getName() == null ? 0 : transition.getName().length() * 7 + 10;
+    List<int[]> others = obstacles(diagram, state);
+    boolean left =
+        hitsAny(StateMachineUtils.selfLoopArea(box, labelWidth, false), others)
+            && !hitsAny(StateMachineUtils.selfLoopArea(box, labelWidth, true), others)
+            && box[0] - StateMachineUtils.SELF_LOOP_WIDTH - labelWidth > 0;
+    int[][] loop = StateMachineUtils.selfLoopPoints(box[0], box[1], box[2], box[3], left);
     Point[] points = new Point[loop.length];
     for (int i = 0; i < loop.length; i++) {
       points[i] = new Point(loop[i][0], loop[i][1]);
@@ -275,12 +302,105 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
       }
       ICaptionUIModel cap = c.getCaptionUIModel();
       if (cap != null) {
-        int capX = loop[1][0] + 6;
+        int capX = left ? loop[1][0] - 6 - cap.getWidth() : loop[1][0] + 6;
         int capY = (loop[1][1] + loop[2][1]) / 2 - Math.max(cap.getHeight(), 14) / 2;
         cap.setBounds(capX, capY, cap.getWidth(), cap.getHeight());
       }
     }
     return connector;
+  }
+
+  /** Whether the rectangle comes within 10 px of any of the others. */
+  private static boolean hitsAny(int[] r, List<int[]> others) {
+    for (int[] o : others) {
+      if (o[0] < r[0] + r[2] + 10
+          && r[0] < o[0] + o[2] + 10
+          && o[1] < r[1] + r[3] + 10
+          && r[1] < o[1] + o[3] + 10) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Put the label of every transition between two different states attached to {@code state} beside
+   * its own line (straight: above / right of the middle; bent: outside its bend), instead of VP's
+   * default spot on the line, where the labels of a forward/back pair overlap.
+   */
+  private static void placeLabels(IDiagramElement state) {
+    List<IConnectorUIModel> connectors = new ArrayList<>();
+    if (state.toFromConnectorArray() != null) {
+      connectors.addAll(java.util.Arrays.asList(state.toFromConnectorArray()));
+    }
+    if (state.toToConnectorArray() != null) {
+      connectors.addAll(java.util.Arrays.asList(state.toToConnectorArray()));
+    }
+    for (IConnectorUIModel c : connectors) {
+      IShapeUIModel from = c.getFromShape();
+      IShapeUIModel to = c.getToShape();
+      ICaptionUIModel cap = c.getCaptionUIModel();
+      Point[] points = c.getPoints();
+      if (from == null
+          || to == null
+          || from.getId().equals(to.getId())
+          || cap == null
+          || cap.getWidth() <= 0
+          || points == null
+          || points.length < 2) {
+        continue;
+      }
+      int[][] pts = new int[points.length][];
+      for (int i = 0; i < points.length; i++) {
+        pts[i] = new int[] {points[i].x, points[i].y};
+      }
+      int[] spot = StateMachineUtils.transitionLabelSpot(pts, cap.getWidth(), cap.getHeight());
+      // never left of / above the canvas, where the export would clip it
+      cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), cap.getWidth(), cap.getHeight());
+    }
+  }
+
+  /**
+   * What a new state or loop must keep clear of: every other shape, the loop and label of every
+   * self-transition, and every transition label.
+   */
+  private List<int[]> obstacles(IDiagramUIModel diagram, IDiagramElement exclude) {
+    List<int[]> result = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getModelElement() != null
+          && s.getWidth() > 0
+          && (exclude == null || !s.getId().equals(exclude.getId()))) {
+        result.add(rect(s));
+      }
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (!(de instanceof IConnectorUIModel)) {
+        continue;
+      }
+      IConnectorUIModel c = (IConnectorUIModel) de;
+      ICaptionUIModel cap = c.getCaptionUIModel();
+      if (cap != null && cap.getWidth() > 0 && cap.isVisible()) {
+        result.add(new int[] {cap.getX(), cap.getY(), cap.getWidth(), cap.getHeight()});
+      }
+      IShapeUIModel from = c.getFromShape();
+      if (from != null && c.getToShape() != null && from.getId().equals(c.getToShape().getId())) {
+        Point[] points = c.getPoints();
+        if (points != null && points.length > 0) {
+          int minX = Integer.MAX_VALUE;
+          int minY = Integer.MAX_VALUE;
+          int maxX = Integer.MIN_VALUE;
+          int maxY = Integer.MIN_VALUE;
+          for (Point p : points) {
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+          }
+          result.add(new int[] {minX, minY, maxX - minX, maxY - minY});
+        }
+      }
+    }
+    return result;
   }
 
   private String addPseudoState(
@@ -346,9 +466,10 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
-   * Move an auto-placed state that gets its first incoming transition next to the source: right of
-   * it, else below, above or left of it, at the first spot that is free and whose straight
-   * transition does not cross another state.
+   * Move an auto-placed state that gets its first incoming transition next to the source: below it
+   * (the book's top-to-bottom screen flow), else right of it, below-right, left or above, at the
+   * first spot clear of the other states, self-transition loops and transition labels and whose
+   * straight transition does not cross one of them.
    *
    * @return true when the state was moved
    */
@@ -358,25 +479,33 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
       return false;
     }
     List<int[]> others = new ArrayList<>();
+    for (int[] r : obstacles(diagram, target)) {
+      others.add(r);
+    }
+    // auto-placed states still waiting for their first transition move later: not obstacles
     for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      if (s.getModelElement() != null
-          && s.getWidth() > 0
-          && !s.getId().equals(target.getId())
-          && !(autoPlaced.contains(s.getId())
-              && !hasIncoming(s)
-              && !s.getId().equals(source.getId()))) {
-        others.add(rect(s));
+      if (autoPlaced.contains(s.getId())
+          && !hasIncoming(s)
+          && !s.getId().equals(source.getId())
+          && !s.getId().equals(target.getId())) {
+        others.removeIf(r -> r[0] == s.getX() && r[1] == s.getY() && r[2] == s.getWidth());
       }
     }
     int[] spot =
         StateMachineUtils.spotNextTo(
-            rect(source), target.getWidth(), target.getHeight(), others, GRID_GAP);
+            rect(source), target.getWidth(), target.getHeight(), others, GRID_GAP, FLOW_BOTTOM);
     if (spot == null) {
       return false;
     }
     target.setBounds(spot[0], spot[1], target.getWidth(), target.getHeight());
     target.resetCaption();
-    recenterConnectorsOf(target);
+    // Every transition is routed again: one may have bent around the state at its grid spot.
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      recenterConnectorsOf(s);
+    }
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      placeLabels(s);
+    }
     return true;
   }
 
