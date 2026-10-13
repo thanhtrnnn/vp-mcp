@@ -43,6 +43,101 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
 
+### Round-1 audit fixes (server version 1.32.1.x)
+
+Verified live in VP 18.1 on F1_* diagrams (exported PNGs). What changed and the quirks behind it:
+
+- **Fit size needs the active diagram**: `IShapeUIModel.fitSize()` silently does nothing (shapes
+  stay 0x0 or at their creation size) unless the shape's diagram is the active one in VP.
+  `fitShape()` now opens the diagram first (`activate()`), so tools that edit a diagram that is not
+  in front (after another create*/export call) still fit their shapes.
+- **Connection points**: VP's default "round the shape" connection points snap every connector end
+  to a shape corner. `useCenterConnectionPoints()` switches a diagram to "follow center"
+  (`setConnectionPointStyle(IShapeUIModel.CONNECTION_POINT_TYPE_CENTER)`): ends are then clipped at
+  the borders on the center-to-center line, also for null or explicit points, and a fork bar gets
+  vertical drops. Set on class, use case, state, activity, ERD, flowchart and DFD diagrams and
+  whenever the shared `connectCentered` / `centerConnector` run (component, deployment, package,
+  object diagrams too). VP does not reroute connectors when a shape moves through the API:
+  `recenterConnectorsOf()` after every move (`setElementBounds` too).
+- **Connector routing** (`AbstractDiagramMcpTools.centerConnector` + `DiagramUtils.routeBend`):
+  connectors joining the same two shapes are spread symmetrically with one bend point each
+  (opposite flows no longer lie on top of each other, labels apart), and a line that would run
+  through another leaf shape gets a bend around it (±60/120/180 px, fewest crossings otherwise).
+  VP pitfalls: querying the diagram between `clearPoints()` and the `addPoint()` calls makes VP
+  rebuild the connector with two end points and append later points behind them; points with a
+  negative coordinate are dropped; a pending `setRequestRebuild(true)` straightens a bent route.
+- **Overlap resolution**: `pushApart()` moves the sibling shapes a grown shape now overlaps (right
+  for the same row, down below its middle) and re-anchors their connectors; used after class
+  members are added (classes keep 80 px apart) and after ERD columns are added. Auto-placed
+  classes and tables take the first free spot of their row (`freeSpot` / `firstFreeSpot`).
+- **Unique names**: VP keeps model names unique per owner and model type and silently renames a
+  clash ("Actor2", "Class2", "Package3", "Component4", "Artifact", "Entity"). Elements are now
+  named inside their owner (`nameInOwner`, after `addChild`/`addArtifact`), and a root-level
+  actor, use case, package, component/interface, artifact, table or lifeline classifier with the
+  requested name is reused (a new view of it). `addClass` rejects a duplicate on the same diagram
+  and reports a rename instead of hiding it.
+- **getDiagramElements**: types come from `getModelType()` (no obfuscated class names), model-less
+  shapes show their shape type, every connector prints `Type <<stereotypes>> 'name': from -> to
+  [guard]`, links list their messages, visibility prints as + - # ~.
+- **Wrong diagram type**: `findDiagram()` / `diagramNotFound()` say "Diagram 'X' is a
+  StateDiagram, ..." instead of "Diagram not found".
+- **State machine**: entry/do/exit are `IActivity` models (`setEntry/setDoActivity/setExit`), so VP
+  draws the internal activity compartment (multi-line custom text is ignored). State names are
+  detached labels: `resetCaption()` after the final bounds. Boxes are fitted (min 100x40),
+  auto-placed on a 3-column grid, and an auto-placed state moves next to the source of its first
+  incoming transition. Self-transitions are an explicit loop on the right edge with the label
+  outside. Duplicate state names are rejected.
+- **Activity**: object node `[state]` via `addInState(IState2)` + `IObjectNodeUIModel
+  .setShowInStates(1)`; `addActivityObjectNode` takes `partitionName`. An auto-placed node moves
+  next to the source of its first incoming flow: one row below it, branches of one fork/decision
+  side by side in their lane, an object node beside its producer, a join below its lowest branch;
+  unconnected auto-placed nodes do not block. Lanes grow to the row width and shrink back to their
+  content; children keep their offset from the lane center. Fork/join bars span their branches in
+  their lane. Guards sit beside the source end of the flow; a decision's question left of the
+  diamond.
+- **Communication arrows**: a message is an invisible box whose arrow VP draws at its center, only
+  when the box is large enough (60x60 as in VP's own sample), and oriented along the link only
+  when VP lays the diagram out on opening it; until then every arrow is horizontal. The tool
+  therefore closes and reopens the diagram (`realCloseDiagram()` + `openDiagram()`) after each
+  message. Requesting a rebuild of a link moves all its messages to the link's start point, so
+  links are created with explicit center points and no rebuild. Captions are placed separately
+  (`getCaptionUIModel().setBounds`): above/below the arrow beside horizontal links, beside it for
+  vertical ones; self-link loops go on top of the box with their messages above.
+- **Sequence fragments**: `addCombinedFragment(..., fromSeq, toSeq, operandStarts)` sizes the frame
+  around the covered lifelines and messages; operands (`guard` "a|else") are
+  `IInteractionOperand` shapes added as children of the frame; VP draws the dashed separators and
+  re-lays the operands (17 px header) after the diagram is reopened. Lifeline heads are as wide as
+  their name; `generateSequenceReport` resolves message ends via `getFrom()/getTo()`.
+  `setAutoFitShapesSize` stays off on sequence diagrams (it would shrink lifelines/activations).
+- **Use case**: `IExtend` runs from the extended (base) use case to the extension in VP (arrowhead
+  and extension points on the from end), so Extend is stored base -> extension. All UC
+  relationships use the shared connector (labels «include»/«extend» rendered). Actors are fitted
+  to the figure; `addSystemBoundary` moves actors the box would cover outside it.
+- **Component interfaces**: VP's `ComponentInterface` (lollipop) shape is not rendered when created
+  through the API (by model or shape type, `DO_INTERFACE` or `DO_CLASS`, explicit 24..60 px sizes,
+  after reopening the diagram: nothing is drawn, caption 0x0). Interfaces are therefore components
+  stereotyped `<<interface>>` drawn as plain boxes (`IComponentUIModel.setShowOption(NONE)`), which
+  realizations and usages accept. Port names are re-laid after the ports are snapped to the edge.
+- **ERD**: `IDBColumn.setType` returns false for types the project's database does not know (VP
+  then keeps "integer"): nvarchar/datetime/bit/... are mapped (`ErdUtils.typeCandidates`) and an
+  unknown type is an error. `IDBForeignKey` runs from the parent (referenced) table to the child
+  and VP adds a column named after the parent's key to the child: `addForeignKey(fromTable=child,
+  toTable=parent, fromColumn)` renames that column to the child's own column (which it replaces)
+  and `toColumn` re-targets the reference; DDL prints FOREIGN KEY clauses. Multiplicities use VP's
+  constants (1 / 0..1 and 0..1, 0..*, 1, 1..*). `addColumn(diagramName, tableName, ...)` is
+  diagram-scoped.
+- **DFD / flowchart**: VP prints a data store's ID with its own "D", so only the number is stored
+  ("D1"/"1" accepted). Level-0 IDs continue 1.0 -> 2.0. A decision's later branch moves beside it;
+  diamonds get 1.5x their fitted size, processes some padding.
+- **BPMN**: no diagram auto-fit (it shrank pools/lanes as soon as a connector was drawn). An
+  auto-placed node moves right of the source of its first sequence flow (same row; a gateway's
+  further branches one row down; cross-lane targets keep their lane at the source's next column).
+
+Remaining limitations: sequence diagrams still show VP's small per-message activation ticks; a
+communication lifeline needs a name (no anonymous ":Class"); free deployment artifacts are not
+moved next to their node; no assembly/delegation connectors on component diagrams; BPMN event
+labels can touch container borders; detours on long diagonals may run near the diagram edge.
+
 ### More diagram families (server version 1.32.0-diagrams.4)
 
 Activity, component, deployment, package/object, communication, flowchart/DFD and BPMN tools, one
@@ -73,18 +168,16 @@ Quirks learned while integrating:
 - **Deployment**: an `IDeployment` from an artifact to a node is rejected with "Invalid connection.
   Node is not allowed with Deployment"; `addDeployDependency` falls back to an `IDependency` with
   the `<<deploy>>` stereotype.
-- **Open issues for the audit loop**: communication message arrows are not visible (only their
-  labels); a component port's label is drawn away from the port and the interface ball is barely
-  visible; an activity object node does not show its `[state]` line; guards of flows that cross an
-  action box overlap it.
+- The open issues listed here for the first audit (message arrows, port labels, interface ball,
+  object node state, guards) are resolved in 1.32.1.x, see above.
 
 ### State machine diagrams (server version 1.28.4)
 
 - **`createStateDiagram(diagramName)`** creates a UML state machine diagram
   (`DIAGRAM_TYPE_STATE_DIAGRAM`).
 - **`addState(diagramName, stateName, entryAction, doActivity, exitAction, x, y)`** adds an
-  `IState2` box. The optional entry/do/exit texts become the extra caption lines
-  (`entry / …`, `do / …`, `exit / …`); pass `""` to omit them. `x`/`y` > 0 place the box,
+  `IState2` box. The optional entry/do/exit texts become `IActivity` behaviours of the state
+  (drawn as `entry / …`, `do / …`, `exit / …`); pass `""` to omit them. `x`/`y` > 0 place the box,
   otherwise it is auto-positioned.
 - **`addInitialState` / `addFinalState`** add `IInitialPseudoState` / `IFinalState2` as 30x30
   shapes. `stateName` is both the handle used by `addTransition` and the label VP draws under the
@@ -96,7 +189,6 @@ Quirks learned while integrating:
   twice draws a self-transition.
 - **Captions need `resetCaption()`**: freshly created state shapes and transition connectors come
   out blank until `IBaseDiagramElement.resetCaption()` is called (same quirk as sequence messages).
-  It re-renders from the model name, so custom entry/do/exit text is applied *after* the reset.
 - **Use case / sequence captions (1.31.1-uc)**: `addActor` and `addSystemBoundary` now call
   `resetCaption()` too (actor and system names were invisible in VP 18.1). An actor's name is a
   detached label, so `setElementBounds` resets the caption after moving an actor. Actor lifelines in

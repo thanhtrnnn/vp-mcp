@@ -127,18 +127,14 @@ public class ActivityDiagramUtilsTest {
   }
 
   @Test
-  public void testBuildObjectNodeCaption() {
+  public void testRowPositionsCenterSiblings() {
+    int[] xs = ActivityDiagramUtils.rowPositions(new int[] {100, 60}, 300, 40);
+    assertEquals(200, xs[0]);
+    assertEquals(340, xs[1]);
     assertEquals(
-        "State goes under the name in brackets",
-        "Order\n[approved]",
-        ActivityDiagramUtils.buildObjectNodeCaption(" Order ", "approved"));
-    assertEquals(
-        "Bracketed state is not double-bracketed",
-        "Order\n[approved]",
-        ActivityDiagramUtils.buildObjectNodeCaption("Order", "[approved]"));
-    assertNull("No state, no caption", ActivityDiagramUtils.buildObjectNodeCaption("Order", ""));
-    assertNull(
-        "Null state, no caption", ActivityDiagramUtils.buildObjectNodeCaption("Order", null));
+        "single shape centered",
+        250,
+        ActivityDiagramUtils.rowPositions(new int[] {100}, 300, 40)[0]);
   }
 
   @Test
@@ -285,6 +281,11 @@ public class ActivityDiagramUtilsTest {
         "Off-center child moves with the lane",
         130 + 50,
         ActivityDiagramUtils.relocateInLane(130, 60, 100, 240, 150, 240));
+    // off-center child keeps its offset from the center when the lane widens
+    assertEquals(
+        "Off-center child keeps its offset from the lane center",
+        260 - 60 - 30,
+        ActivityDiagramUtils.relocateInLane(130, 60, 100, 240, 100, 320));
     // off-center child that would leave the shrunk area is clamped back in
     int pad = ActivityDiagramUtils.LANE_PADDING;
     assertEquals(

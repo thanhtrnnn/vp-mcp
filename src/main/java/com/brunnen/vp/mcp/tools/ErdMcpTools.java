@@ -7,8 +7,10 @@ import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
+import com.vp.plugin.diagram.IERDiagramUIModel;
 import com.vp.plugin.model.IDBColumn;
 import com.vp.plugin.model.IDBForeignKey;
+import com.vp.plugin.model.IDBForeignKeyConstraint;
 import com.vp.plugin.model.IDBTable;
 import com.vp.plugin.model.IModelElement;
 import java.util.ArrayList;
@@ -30,6 +32,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             IDiagramUIModel diagram =
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_ER_DIAGRAM);
             diagram.setName(diagramName);
+            diagram.setAutoFitShapesSize(true);
+            useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
             return "Created ER diagram: " + diagramName;
           });
@@ -38,30 +42,61 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addTable", description = "Add a table/entity to an ER diagram")
+  @Tool(
+      name = "addTable",
+      description =
+          "Add a table/entity to an ER diagram. A table of that name elsewhere in the project is"
+              + " the same table and is shown again (with its columns). Tables are placed left to"
+              + " right after the existing ones, wrapping to a new row")
   public String addTable(String diagramName, String tableName) {
     try {
       return runOnEdt(
           () -> {
-            IDiagramUIModel diagram =
-                (IDiagramUIModel)
-                    DiagramUtils.findDiagramByName(diagramName, IDiagramUIModel.class);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+            IDiagramUIModel diagram = findErd(diagramName);
+            String name = tableName == null ? "" : tableName.trim();
+            if (name.isEmpty()) {
+              return "Table name must not be empty";
             }
+            if (findTableOnDiagram(diagram, name) != null) {
+              return "Table already on diagram: " + name;
+            }
+            IDBTable table = findRootElement(name, IDBTable.class);
+            boolean reused = table != null;
+            if (!reused) {
+              table = getModelElementFactory().createDBTable();
+              nameInOwner(table, null, name);
+            }
+            IDiagramElement de = addToDiagram(diagram, table, name);
+            de.resetCaption();
+            fitShape(de);
+            int[] spot = freeSpot(diagram, de, 50, 50, TABLE_ROW_RIGHT, TABLE_GAP);
+            de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
 
-            IDBTable table = getModelElementFactory().createDBTable();
-            addToDiagram(diagram, table, tableName);
-
-            return "Added table '" + tableName + "' to diagram '" + diagramName + "'";
+            return "Added table '"
+                + name
+                + "' to diagram '"
+                + diagramName
+                + "' at "
+                + de.getX()
+                + ","
+                + de.getY()
+                + (reused ? " (existing table of the project)" : "");
           });
     } catch (Exception e) {
       return "Error adding table: " + e.getMessage();
     }
   }
 
-  @Tool(name = "addColumn", description = "Add a column to a database table")
+  @Tool(
+      name = "addColumn",
+      description =
+          "Add a column to a table shown on an ER diagram. columnType is a SQL type such as"
+              + " varchar, nvarchar(100), int, decimal(10,2), datetime; a length/scale written in"
+              + " the type wins over length/scale. Types the project's database does not know are"
+              + " mapped to their standard equivalent (nvarchar -> varchar, datetime -> timestamp,"
+              + " bit -> boolean, ...); a type that still cannot be set is reported as an error")
   public String addColumn(
+      String diagramName,
       String tableName,
       String columnName,
       String columnType,
@@ -72,37 +107,66 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            IDBTable table = findModelElement(tableName, IDBTable.class, null);
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable table = findTableOnDiagram(diagram, tableName);
             if (table == null) {
-              return "Table not found: " + tableName;
+              return "Table not on diagram: " + tableName;
             }
-
-            // Duplicate column guard
-            Iterator<?> existingCols = table.dBColumnIterator();
-            while (existingCols.hasNext()) {
-              Object obj = existingCols.next();
-              if (obj instanceof IDBColumn && columnName.equals(((IDBColumn) obj).getName())) {
-                return "Column '" + columnName + "' already exists in table '" + tableName + "'";
-              }
+            if (findColumnByName(table, columnName) != null) {
+              return "Column '" + columnName + "' already exists in table '" + tableName + "'";
             }
 
             IDBColumn col = getModelElementFactory().createDBColumn();
             col.setName(columnName);
+            String typeNote = "";
             if (columnType != null && !columnType.trim().isEmpty()) {
-              col.setType(columnType.trim(), length, scale);
+              String[] parsed = ErdUtils.parseColumnType(columnType, length, scale);
+              String used = null;
+              for (String candidate : ErdUtils.typeCandidates(parsed[0])) {
+                if (col.setType(
+                    candidate, Integer.parseInt(parsed[1]), Integer.parseInt(parsed[2]))) {
+                  used = candidate;
+                  break;
+                }
+              }
+              if (used == null) {
+                col.delete();
+                return "Error adding column: Visual Paradigm does not know the type '"
+                    + parsed[0]
+                    + "' for the project's database (tried "
+                    + String.join(", ", ErdUtils.typeCandidates(parsed[0]))
+                    + ")";
+              }
+              if (!used.equalsIgnoreCase(parsed[0])) {
+                typeNote = " (type " + parsed[0] + " stored as " + col.getTypeInText() + ")";
+              }
             }
             col.setPrimaryKey(isPrimaryKey);
             col.setNullable(isNullable);
             table.addDBColumn(col);
+            refitTable(table);
 
-            return "Added column '" + columnName + "' to table '" + tableName + "'";
+            return "Added column '"
+                + columnName
+                + " "
+                + col.getTypeInText()
+                + "' to table '"
+                + tableName
+                + "'"
+                + typeNote;
           });
     } catch (Exception e) {
       return "Error adding column: " + e.getMessage();
     }
   }
 
-  @Tool(name = "addForeignKey", description = "Add a foreign key relationship between two tables")
+  @Tool(
+      name = "addForeignKey",
+      description =
+          "Add a foreign key: fromTable (the child) holds fromColumn, which references toColumn"
+              + " of toTable (the parent; empty toColumn = its primary key). The relationship is"
+              + " drawn with the crow's foot at the child. An existing fromColumn becomes the FK"
+              + " column; when it is empty, Visual Paradigm adds a column named after the parent")
   public String addForeignKey(
       String diagramName,
       String fromTable,
@@ -113,44 +177,54 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            IDiagramUIModel diagram =
-                (IDiagramUIModel)
-                    DiagramUtils.findDiagramByName(diagramName, IDiagramUIModel.class);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable child = findTableOnDiagram(diagram, fromTable);
+            IDBTable parent = findTableOnDiagram(diagram, toTable);
+            if (child == null || parent == null) {
+              return "Table not on diagram: " + (child == null ? fromTable : toTable);
             }
-            IDBTable source = findModelElement(fromTable, IDBTable.class, diagram);
-            IDBTable target = findModelElement(toTable, IDBTable.class, diagram);
-            if (source == null || target == null) {
-              return "Table not found: " + (source == null ? fromTable : toTable);
-            }
-            IDiagramElement fromElement = findDiagramElementByName(diagram, fromTable);
-            IDiagramElement toElement = findDiagramElementByName(diagram, toTable);
-            if (fromElement == null || toElement == null) {
-              return "Table not on diagram: " + (fromElement == null ? fromTable : toTable);
-            }
-
-            IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
-            fk.setFrom(source);
-            fk.setTo(target);
-            if (relationshipName != null && !relationshipName.trim().isEmpty()) {
-              fk.setName(relationshipName.trim());
-            }
-            fk.setFromMultiplicity("1");
-            fk.setToMultiplicity("*");
-
-            // Resolve column references
-            if (fromColumn != null && !fromColumn.trim().isEmpty()) {
-              IDBColumn fromCol = findColumnByName(source, fromColumn.trim());
-              if (fromCol == null) {
+            IDiagramElement childShape = findDiagramElementByModel(diagram, child);
+            IDiagramElement parentShape = findDiagramElementByModel(diagram, parent);
+            IDBColumn childCol = null;
+            if (isSet(fromColumn)) {
+              childCol = findColumnByName(child, fromColumn.trim());
+              if (childCol == null) {
                 return "Column '" + fromColumn + "' not found in table '" + fromTable + "'";
               }
-              fk.setIndexColumn(fromCol);
+            }
+            IDBColumn refCol = null;
+            if (isSet(toColumn)) {
+              refCol = findColumnByName(parent, toColumn.trim());
+              if (refCol == null) {
+                return "Column '" + toColumn + "' not found in table '" + toTable + "'";
+              }
             }
 
-            getDiagramManager().createConnector(diagram, fk, fromElement, toElement, null);
+            // VP's foreign key runs from the referenced (parent) table to the child and adds an
+            // FK column to the child that references the parent's primary key.
+            IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
+            if (isSet(relationshipName)) {
+              fk.setName(relationshipName.trim());
+            }
+            fk.setFrom(parent);
+            fk.setTo(child);
+            fk.setFromMultiplicity(IDBForeignKey.FROM_MULTIPLICITY_ONE);
+            fk.setToMultiplicity(IDBForeignKey.TO_MULTIPLICITY_ZERO_TO_MANY);
+            String columnNote = adoptForeignKeyColumn(fk, child, childCol, refCol);
+            IDiagramElement connector = connectCentered(diagram, fk, parentShape, childShape);
+            if (connector == null) {
+              fk.delete();
+              return "Error adding foreign key: Visual Paradigm refused the connector";
+            }
+            refitTable(child);
 
-            return "Added foreign key from '" + fromTable + "' to '" + toTable + "'";
+            return "Added foreign key "
+                + fromTable
+                + "."
+                + columnNote
+                + " -> "
+                + toTable
+                + (refCol != null ? "." + refCol.getName() : " (primary key)");
           });
     } catch (Exception e) {
       return "Error adding foreign key: " + e.getMessage();
@@ -159,7 +233,10 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
 
   @Tool(
       name = "addTableRelationship",
-      description = "Add a relationship between tables (identifying or non-identifying)")
+      description =
+          "Add a relationship between tables (identifying or non-identifying): fromTable is the"
+              + " parent (referenced) table, toTable the child. fromMultiplicity is 1 or 0..1,"
+              + " toMultiplicity one of 0..1, 0..*, 1, 1..* (\"\" = 1 and 0..*)")
   public String addTableRelationship(
       String diagramName,
       String fromTable,
@@ -170,38 +247,44 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            IDiagramUIModel diagram =
-                (IDiagramUIModel)
-                    DiagramUtils.findDiagramByName(diagramName, IDiagramUIModel.class);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
-            IDBTable source = findModelElement(fromTable, IDBTable.class, diagram);
-            IDBTable target = findModelElement(toTable, IDBTable.class, diagram);
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable source = findTableOnDiagram(diagram, fromTable);
+            IDBTable target = findTableOnDiagram(diagram, toTable);
             if (source == null || target == null) {
-              return "Table not found: " + (source == null ? fromTable : toTable);
+              return "Table not on diagram: " + (source == null ? fromTable : toTable);
             }
-            IDiagramElement fromElement = findDiagramElementByName(diagram, fromTable);
-            IDiagramElement toElement = findDiagramElementByName(diagram, toTable);
-            if (fromElement == null || toElement == null) {
-              return "Table not on diagram: " + (fromElement == null ? fromTable : toTable);
+            String fromMult =
+                isSet(fromMultiplicity)
+                    ? fromMultiplicity.trim()
+                    : IDBForeignKey.FROM_MULTIPLICITY_ONE;
+            String toMult =
+                isSet(toMultiplicity)
+                    ? toMultiplicity.trim()
+                    : IDBForeignKey.TO_MULTIPLICITY_ZERO_TO_MANY;
+            if (!ErdUtils.FROM_MULTIPLICITIES.contains(fromMult)) {
+              return "fromMultiplicity must be one of " + ErdUtils.FROM_MULTIPLICITIES;
+            }
+            if (!ErdUtils.TO_MULTIPLICITIES.contains(toMult)) {
+              return "toMultiplicity must be one of " + ErdUtils.TO_MULTIPLICITIES;
             }
 
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
             fk.setFrom(source);
             fk.setTo(target);
-            if (fromMultiplicity != null && !fromMultiplicity.trim().isEmpty()) {
-              fk.setFromMultiplicity(fromMultiplicity.trim());
+            fk.setFromMultiplicity(fromMult);
+            fk.setToMultiplicity(toMult);
+            fk.setIdentifying("identifying".equalsIgnoreCase(type));
+            IDiagramElement connector =
+                connectCentered(
+                    diagram,
+                    fk,
+                    findDiagramElementByModel(diagram, source),
+                    findDiagramElementByModel(diagram, target));
+            if (connector == null) {
+              fk.delete();
+              return "Error adding relationship: Visual Paradigm refused the connector";
             }
-            if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
-              fk.setToMultiplicity(toMultiplicity.trim());
-            }
-            if ("identifying".equalsIgnoreCase(type)) {
-              fk.setIdentifying(true);
-            } else {
-              fk.setIdentifying(false);
-            }
-            getDiagramManager().createConnector(diagram, fk, fromElement, toElement, null);
+            refitTable(target);
 
             return "Added " + type + " relationship from '" + fromTable + "' to '" + toTable + "'";
           });
@@ -209,6 +292,87 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       return "Error adding relationship: " + e.getMessage();
     }
   }
+
+  /**
+   * Make the child's own column the FK column: VP adds a column named after the parent's key when
+   * the foreign key is set up; it is renamed to the requested column (which it replaces, keeping
+   * that column's primary-key and null flags) so the user's column carries the reference. A
+   * requested referenced column replaces the parent's primary key as the reference.
+   *
+   * @return the name of the child's FK column
+   */
+  private static String adoptForeignKeyColumn(
+      IDBForeignKey fk, IDBTable child, IDBColumn childCol, IDBColumn refCol) {
+    IDBColumn generated = null;
+    Iterator<?> cols = fk.foreignKeyColumnsIterator();
+    if (cols.hasNext()) {
+      Object first = cols.next();
+      if (first instanceof IDBColumn) {
+        generated = (IDBColumn) first;
+      }
+    }
+    if (generated == null) {
+      return childCol != null ? childCol.getName() : "?";
+    }
+    if (refCol != null) {
+      for (IDBForeignKeyConstraint constraint : generated.toForeignKeyConstraintArray()) {
+        constraint.setRefColumn(refCol);
+      }
+    }
+    if (childCol != null && childCol != generated) {
+      String name = childCol.getName();
+      boolean pk = childCol.isPrimaryKey();
+      boolean nullable = childCol.isNullable();
+      childCol.delete();
+      generated.setName(name);
+      generated.setPrimaryKey(pk);
+      generated.setNullable(nullable);
+    }
+    return generated.getName();
+  }
+
+  /** Refit every view of a table after its columns changed and keep it clear of its neighbours. */
+  private void refitTable(IDBTable table) {
+    IDiagramElement[] views = table.getDiagramElements();
+    if (views == null) {
+      return;
+    }
+    for (IDiagramElement view : views) {
+      fitShape(view);
+      if (view instanceof com.vp.plugin.diagram.IShapeUIModel) {
+        pushApart((com.vp.plugin.diagram.IShapeUIModel) view, TABLE_GAP);
+        recenterConnectorsOf(view);
+      }
+    }
+  }
+
+  private IDiagramUIModel findErd(String diagramName) {
+    return findDiagram(diagramName, IERDiagramUIModel.class, "entity relationship");
+  }
+
+  /** The table shown on the diagram with that name, or null. */
+  private IDBTable findTableOnDiagram(IDiagramUIModel diagram, String name) {
+    if (name == null) {
+      return null;
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      IModelElement m = de.getModelElement();
+      if (m instanceof IDBTable && name.trim().equals(m.getName())) {
+        return (IDBTable) m;
+      }
+    }
+    return null;
+  }
+
+  private static boolean isSet(String value) {
+    return value != null && !value.trim().isEmpty();
+  }
+
+  /** Tables wrap to a new row past this x. */
+  private static final int TABLE_ROW_RIGHT = 1200;
+
+  /** Space kept between tables. */
+  private static final int TABLE_GAP = 60;
 
   @Tool(
       name = "generateDdl",
@@ -221,7 +385,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                 (IDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             List<IDBTable> tables = ErdUtils.getTablesInDiagram(diagram);
@@ -249,7 +413,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                 (IDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             List<IDBTable> tables = ErdUtils.getTablesInDiagram(diagram);

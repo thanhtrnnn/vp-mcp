@@ -19,7 +19,6 @@ import com.vp.plugin.model.IDependency;
 import com.vp.plugin.model.IDeployment;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.INode;
-import java.awt.Point;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -207,10 +206,16 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
-            IArtifact artifact = getModelElementFactory().createArtifact();
-            artifact.setName(name);
-            if (hostShape != null) {
-              ((INode) hostShape.getModelElement()).addArtifact(artifact);
+            // Deployed into its node before it is named (named at the project root first, VP
+            // would rename it when the root already has an artifact of that name); a free
+            // artifact of a taken name is the same artifact, shown again.
+            IArtifact artifact = hostShape == null ? findRootElement(name, IArtifact.class) : null;
+            if (artifact == null) {
+              artifact = getModelElementFactory().createArtifact();
+              if (hostShape != null) {
+                ((INode) hostShape.getModelElement()).addArtifact(artifact);
+              }
+              nameInOwner(artifact, null, name);
             }
             Placement placed =
                 placeShape(diagram, artifact, hostShape, x, y, 0, 0, LEAF_WIDTH, LEAF_HEIGHT);
@@ -257,10 +262,14 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
-            IComponent component = getModelElementFactory().createComponent();
-            component.setName(name);
-            if (hostShape != null) {
-              ((INode) hostShape.getModelElement()).addComponent(component);
+            IComponent component =
+                hostShape == null ? findRootElement(name, IComponent.class) : null;
+            if (component == null) {
+              component = getModelElementFactory().createComponent();
+              if (hostShape != null) {
+                ((INode) hostShape.getModelElement()).addComponent(component);
+              }
+              nameInOwner(component, null, name);
             }
             Placement placed =
                 placeShape(diagram, component, hostShape, 0, 0, 0, 0, LEAF_WIDTH, LEAF_HEIGHT);
@@ -594,51 +603,12 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
 
   // --- Connectors ---
 
-  private IDiagramElement connectCentered(
-      IDiagramUIModel diagram, IModelElement model, IShapeUIModel from, IShapeUIModel to) {
-    // Explicit center points: with null points VP anchors both ends at the shapes' top-left
-    // corners, so the arrowheads hit the corners.
-    Point[] points = {center(from), center(to)};
-    IDiagramElement connector;
-    try {
-      connector = getDiagramManager().createConnector(diagram, model, from, to, points);
-    } catch (Exception e) {
-      return null; // VP rejects connector types it does not allow between these shapes
-    }
-    if (connector instanceof IConnectorUIModel) {
-      centerConnector((IConnectorUIModel) connector);
-    }
-    if (connector != null) {
-      connector.resetCaption(); // fresh connectors render blank until the caption is reset
-    }
-    return connector;
-  }
-
   private void recenterConnectors(IDiagramUIModel diagram) {
     for (IDiagramElement de : getDiagramElementsList(diagram)) {
       if (de instanceof IConnectorUIModel) {
         centerConnector((IConnectorUIModel) de);
       }
     }
-  }
-
-  /** Re-anchor an existing connector to the current centers of its two shapes. */
-  private static void centerConnector(IConnectorUIModel connector) {
-    IShapeUIModel from = connector.getFromShape();
-    IShapeUIModel to = connector.getToShape();
-    if (from == null || to == null) {
-      return;
-    }
-    connector.clearPoints();
-    connector.addPoint(center(from));
-    connector.addPoint(center(to));
-    connector.setUseFromShapeCenter(true);
-    connector.setUseToShapeCenter(true);
-    connector.setRequestRebuild(true);
-  }
-
-  private static Point center(IDiagramElement shape) {
-    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
   }
 
   // --- Lookup ---

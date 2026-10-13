@@ -25,6 +25,8 @@ public final class FlowchartDfdUtils {
    */
   private static final Pattern TRAILING_NUMBER = Pattern.compile("^(.*?)(\\d+)$");
 
+  private static final Pattern LEVEL_ZERO = Pattern.compile("^(\\d+)\\.0$");
+
   private FlowchartDfdUtils() {}
 
   /** Flowchart symbol kinds supported by {@code addFlowchartShape}. */
@@ -263,7 +265,8 @@ public final class FlowchartDfdUtils {
   /**
    * Next free DFD identifier. Continues the numbering of the most recently listed ID that ends in a
    * number, keeping its prefix: {@code [1, 2] -> 3}, {@code [1.1, 1.2] -> 1.3}, {@code [D1, D2] ->
-   * D3}. Without such an ID the result is {@code defaultPrefix + "1"}.
+   * D3}; level-0 numbers keep their form, {@code [1.0, 2.0] -> 3.0}. Without such an ID the result
+   * is {@code defaultPrefix + "1"}.
    *
    * @param existingIds the IDs already used on the diagram, in creation order (nulls ignored)
    * @param defaultPrefix the prefix of the first ID, e.g. {@code ""} for processes or {@code "D"}
@@ -271,6 +274,22 @@ public final class FlowchartDfdUtils {
    * @return the next ID
    */
   public static String nextDfdId(List<String> existingIds, String defaultPrefix) {
+    // Level-0 numbering 1.0, 2.0, 3.0 continues with the next whole number
+    if (existingIds != null && !existingIds.isEmpty()) {
+      long maxWhole = -1;
+      boolean allWhole = true;
+      for (String id : existingIds) {
+        Matcher m = id == null ? null : LEVEL_ZERO.matcher(id.trim());
+        if (m == null || !m.matches()) {
+          allWhole = false;
+          break;
+        }
+        maxWhole = Math.max(maxWhole, parseOrZero(m.group(1)));
+      }
+      if (allWhole) {
+        return (maxWhole + 1) + ".0";
+      }
+    }
     String prefix = null;
     if (existingIds != null) {
       for (String id : existingIds) {
@@ -443,5 +462,26 @@ public final class FlowchartDfdUtils {
       return "";
     }
     return value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+  }
+
+  /**
+   * The number part of a data store ID: Visual Paradigm prints a store's ID with its own "D" in
+   * front, so a stored "D1" would read "DD1". A leading D (any case) followed by a digit is
+   * dropped.
+   *
+   * @param id the ID as given, e.g. "D1" or "1"
+   * @return the ID without the D prefix, or null for null
+   */
+  public static String storeIdNumber(String id) {
+    if (id == null) {
+      return null;
+    }
+    String t = id.trim();
+    if (t.length() > 1
+        && (t.charAt(0) == 'D' || t.charAt(0) == 'd')
+        && Character.isDigit(t.charAt(1))) {
+      return t.substring(1);
+    }
+    return t;
   }
 }

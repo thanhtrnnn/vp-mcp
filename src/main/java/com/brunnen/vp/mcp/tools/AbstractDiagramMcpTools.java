@@ -5,14 +5,17 @@ import com.brunnen.vp.mcp.util.DiagramLayoutEngine;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
+import com.vp.plugin.model.IActivityObjectFlow;
 import com.vp.plugin.model.IActor;
 import com.vp.plugin.model.IAssociation;
 import com.vp.plugin.model.IAssociationEnd;
 import com.vp.plugin.model.IAttribute;
 import com.vp.plugin.model.IClass;
+import com.vp.plugin.model.IControlFlow;
 import com.vp.plugin.model.IDBColumn;
 import com.vp.plugin.model.IDBForeignKey;
 import com.vp.plugin.model.IDBTable;
@@ -20,14 +23,17 @@ import com.vp.plugin.model.IExtend;
 import com.vp.plugin.model.IGeneralization;
 import com.vp.plugin.model.IInclude;
 import com.vp.plugin.model.IInteractionLifeLine;
+import com.vp.plugin.model.IInteractionLifeLineLink;
 import com.vp.plugin.model.IMessage;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.IOperation;
 import com.vp.plugin.model.IParameter;
 import com.vp.plugin.model.IProject;
 import com.vp.plugin.model.IRelationship;
+import com.vp.plugin.model.IStereotype;
 import com.vp.plugin.model.IUseCase;
 import com.vp.plugin.model.factory.IModelElementFactory;
+import java.awt.Point;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -217,11 +223,11 @@ public abstract class AbstractDiagramMcpTools {
     if (diagram == null) {
       IProject project = ApplicationManager.instance().getProjectManager().getProject();
       if (project != null) {
-        Iterator<?> dIter = project.diagramIterator();
-        while (dIter.hasNext()) {
-          Object dObj = dIter.next();
-          if (dObj instanceof IDiagramUIModel) {
-            T result = findModelElementInDiagram((IDiagramUIModel) dObj, name, type);
+        Iterator<?> diagramIter = project.diagramIterator();
+        while (diagramIter.hasNext()) {
+          Object diagramObj = diagramIter.next();
+          if (diagramObj instanceof IDiagramUIModel) {
+            T result = findModelElementInDiagram((IDiagramUIModel) diagramObj, name, type);
             if (result != null) {
               return result;
             }
@@ -317,7 +323,27 @@ public abstract class AbstractDiagramMcpTools {
    */
   protected void fitShape(IDiagramElement de) {
     if (de instanceof IShapeUIModel) {
+      // fitSize() measures the caption through the diagram's open editor; on a diagram that is
+      // not the active one it silently does nothing (0x0 or creation-default sizes).
+      activate(de.getDiagramUIModel());
       ((IShapeUIModel) de).fitSize();
+    }
+  }
+
+  /**
+   * Make {@code diagram} the active diagram in VP (open it when another one is in front). Shape
+   * measurement ({@code fitSize}) and connector rebuilds only work on the active diagram.
+   *
+   * @param diagram the diagram to bring to front, may be null
+   */
+  protected void activate(IDiagramUIModel diagram) {
+    if (diagram == null) {
+      return;
+    }
+    DiagramManager dm = getDiagramManager();
+    IDiagramUIModel active = dm.getActiveDiagram();
+    if (active == null || !diagram.getId().equals(active.getId())) {
+      dm.openDiagram(diagram);
     }
   }
 
@@ -340,12 +366,441 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
+  /**
+   * Message for a diagram name the tool could not use: "Diagram not found" when no diagram has that
+   * name, otherwise which type the diagram with that name has.
+   *
+   * @param name the diagram name
+   * @return the message
+   */
+  protected static String diagramNotFound(String name) {
+    IDiagramUIModel other = DiagramUtils.findDiagramByName(name);
+    return other != null
+        ? "Diagram '" + name + "' is a " + other.getType() + ", which this tool does not edit"
+        : "Diagram not found: " + name;
+  }
+
+  /**
+   * The diagram called {@code name} as the expected diagram type. Throws with a readable message
+   * when there is no such diagram or it is a diagram of another type (callers turn exceptions into
+   * "Error ...: message" results).
+   *
+   * @param name the diagram name
+   * @param type the expected diagram UI model interface
+   * @param label the diagram kind for the message, e.g. "activity"
+   * @param <T> the diagram UI model type
+   * @return the diagram
+   */
+  protected <T extends IDiagramUIModel> T findDiagram(String name, Class<T> type, String label) {
+    IDiagramUIModel typed = DiagramUtils.findDiagramByName(name, type);
+    if (typed != null) {
+      return type.cast(typed);
+    }
+    IDiagramUIModel other = DiagramUtils.findDiagramByName(name);
+    if (other != null) {
+      throw new IllegalArgumentException(
+          "Diagram '" + name + "' is a " + other.getType() + ", not a " + label + " diagram");
+    }
+    throw new IllegalArgumentException("Diagram not found: " + name);
+  }
+
+  // --- Model names ---
+
+  /**
+   * The project-root model element of the given type called {@code name}, or null. Visual Paradigm
+   * keeps names unique per owner and type: a second root element with a taken name is silently
+   * renamed ("Actor2", "Class2", "Component3"), so tools reuse the existing element instead (a new
+   * view of it on their diagram), which is also what UML means by the same name.
+   *
+   * @param name the element name
+   * @param type the model element interface
+   * @param <T> the model element type
+   * @return the existing root element, or null
+   */
+  protected static <T extends IModelElement> T findRootElement(String name, Class<T> type) {
+    IProject project = ApplicationManager.instance().getProjectManager().getProject();
+    if (project == null || name == null) {
+      return null;
+    }
+    IModelElement[] roots = project.toModelElementArray();
+    if (roots != null) {
+      for (IModelElement m : roots) {
+        if (type.isInstance(m) && name.equals(m.getName())) {
+          return type.cast(m);
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Put a fresh element into its owner and name it there (in that order: named at the project root
+   * first, it would be renamed when the root already has that name). Fails when Visual Paradigm
+   * still changed the name.
+   *
+   * @param element the new model element
+   * @param owner its owner, or null for the project root
+   * @param name the wanted name
+   */
+  protected static void nameInOwner(IModelElement element, IModelElement owner, String name) {
+    if (owner != null) {
+      owner.addChild(element);
+    }
+    element.setName(name);
+    if (!name.equals(element.getName())) {
+      String given = element.getName();
+      element.delete();
+      throw new IllegalStateException(
+          "Visual Paradigm renamed '"
+              + name
+              + "' to '"
+              + given
+              + "' because its owner already has an element of that type and name");
+    }
+  }
+
+  // --- Connectors ---
+
+  /**
+   * Make connector ends on {@code diagram} point at the shapes' centers (VP's "follow center"
+   * connection points). With the default "round the shape" style VP snaps every end to a shape
+   * corner, so diagonal lines leave and enter at corners and several arrows share one corner.
+   *
+   * @param diagram the diagram to switch, may be null
+   */
+  protected static void useCenterConnectionPoints(IDiagramUIModel diagram) {
+    if (diagram != null
+        && diagram.getConnectionPointStyle() != IShapeUIModel.CONNECTION_POINT_TYPE_CENTER) {
+      diagram.setConnectionPointStyle(IShapeUIModel.CONNECTION_POINT_TYPE_CENTER);
+    }
+  }
+
+  /**
+   * Create a connector between two shapes whose ends are clipped at the shape borders on the
+   * center-to-center line, and render its caption. Returns null when VP refuses this connector type
+   * between the two shapes.
+   *
+   * @param diagram the diagram
+   * @param model the relationship model
+   * @param from the source shape
+   * @param to the target shape
+   * @return the connector, or null when VP did not create one
+   */
+  protected IDiagramElement connectCentered(
+      IDiagramUIModel diagram, IModelElement model, IDiagramElement from, IDiagramElement to) {
+    activate(diagram);
+    useCenterConnectionPoints(diagram);
+    IDiagramElement connector;
+    try {
+      connector =
+          getDiagramManager()
+              .createConnector(diagram, model, from, to, new Point[] {center(from), center(to)});
+    } catch (RuntimeException e) {
+      return null; // VP rejects connector types it does not allow between these shapes
+    }
+    if (connector instanceof IConnectorUIModel) {
+      IConnectorUIModel created = (IConnectorUIModel) connector;
+      centerConnector(created);
+      // a new connector between an already connected pair spreads the existing ones apart too
+      if (from instanceof IShapeUIModel && to instanceof IShapeUIModel) {
+        for (IConnectorUIModel other : pairConnectors((IShapeUIModel) from, (IShapeUIModel) to)) {
+          if (!other.getId().equals(created.getId())) {
+            centerConnector(other);
+          }
+        }
+      }
+    }
+    if (connector != null) {
+      connector.resetCaption(); // fresh connectors render blank until the caption is reset
+    }
+    return connector;
+  }
+
+  private static List<IConnectorUIModel> pairConnectors(IShapeUIModel a, IShapeUIModel b) {
+    List<IConnectorUIModel> result = new ArrayList<>();
+    IConnectorUIModel[] outgoing = a.toFromConnectorArray();
+    if (outgoing != null) {
+      for (IConnectorUIModel c : outgoing) {
+        if (c.getToShape() != null && c.getToShape().getId().equals(b.getId())) {
+          result.add(c);
+        }
+      }
+    }
+    IConnectorUIModel[] incoming = a.toToConnectorArray();
+    if (incoming != null) {
+      for (IConnectorUIModel c : incoming) {
+        if (c.getFromShape() != null && c.getFromShape().getId().equals(b.getId())) {
+          result.add(c);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Re-anchor a connector on the current centers of its two shapes; VP clips the ends at the
+   * borders. Self connectors keep their own route.
+   *
+   * @param connector the connector
+   */
+  protected static void centerConnector(IConnectorUIModel connector) {
+    IShapeUIModel from = connector.getFromShape();
+    IShapeUIModel to = connector.getToShape();
+    if (from == null || to == null || from.getId().equals(to.getId())) {
+      return;
+    }
+    useCenterConnectionPoints(connector.getDiagramUIModel());
+    // A second connector between the same two shapes (e.g. a flow back) would lie exactly on the
+    // first one, labels on top of each other: bend it off to one side. A line that would run
+    // through another shape gets a bend around it. Everything is computed before the points are
+    // touched: querying the diagram while the connector has a single point makes VP rebuild it
+    // with two end points, and points added afterwards are appended behind those.
+    boolean canonical = from.getId().compareTo(to.getId()) < 0;
+    IShapeUIModel first = canonical ? from : to;
+    IShapeUIModel second = canonical ? to : from;
+    List<String> parallel = connectorsBetween(from, to);
+    int[] bend =
+        DiagramUtils.routeBend(
+            rect(first),
+            rect(second),
+            Math.max(parallel.indexOf(connector.getId()), 0),
+            parallel.size(),
+            PARALLEL_STEP,
+            obstaclesBetween(from, to));
+    Point start = center(from);
+    Point end = center(to);
+    connector.clearPoints();
+    connector.addPoint(start);
+    if (bend != null) {
+      // VP drops points outside the canvas
+      connector.addPoint(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
+      connector.addPoint(end);
+      // a (pending) rebuild would straighten the route; VP clips both legs at the borders
+      connector.setRequestRebuild(false);
+      return;
+    }
+    connector.addPoint(end);
+    connector.setUseFromShapeCenter(true);
+    connector.setUseToShapeCenter(true);
+    connector.setRequestRebuild(true);
+  }
+
+  /**
+   * Shapes a connector between {@code from} and {@code to} should not run through: every leaf shape
+   * with a model on the diagram except the two ends (containers such as packages, lanes and nodes
+   * are skipped, the ends may sit inside them).
+   */
+  private static List<int[]> obstaclesBetween(IShapeUIModel from, IShapeUIModel to) {
+    List<int[]> obstacles = new ArrayList<>();
+    IDiagramUIModel diagram = from.getDiagramUIModel();
+    if (diagram == null) {
+      return obstacles;
+    }
+    java.util.Deque<IShapeUIModel> pending =
+        new java.util.ArrayDeque<>(java.util.Arrays.asList(diagram.toShapeUIModelArray()));
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    while (!pending.isEmpty()) {
+      IShapeUIModel s = pending.poll();
+      if (s == null || !seen.add(s.getId())) {
+        continue;
+      }
+      IShapeUIModel[] children = s.toChildArray();
+      if (children != null && children.length > 0) {
+        // a container (lane, package, node): its children are the obstacles
+        pending.addAll(java.util.Arrays.asList(children));
+        continue;
+      }
+      if (s.getModelElement() == null
+          || s.getWidth() <= 0
+          || s.getId().equals(from.getId())
+          || s.getId().equals(to.getId())) {
+        continue;
+      }
+      obstacles.add(rect(s));
+    }
+    return obstacles;
+  }
+
+  /** Perpendicular distance between parallel connectors joining the same two shapes. */
+  protected static final int PARALLEL_STEP = 80;
+
+  /** Ids of all connectors joining the same two shapes (either direction), sorted. */
+  private static List<String> connectorsBetween(IShapeUIModel from, IShapeUIModel to) {
+    List<String> ids = new ArrayList<>();
+    collectBetween(from.toFromConnectorArray(), to, false, ids);
+    collectBetween(from.toToConnectorArray(), to, true, ids);
+    java.util.Collections.sort(ids);
+    return ids;
+  }
+
+  private static void collectBetween(
+      IConnectorUIModel[] connectors, IShapeUIModel other, boolean incoming, List<String> ids) {
+    if (connectors == null) {
+      return;
+    }
+    for (IConnectorUIModel c : connectors) {
+      IShapeUIModel end = incoming ? c.getFromShape() : c.getToShape();
+      if (end != null && end.getId().equals(other.getId()) && !ids.contains(c.getId())) {
+        ids.add(c.getId());
+      }
+    }
+  }
+
+  /**
+   * Re-anchor every connector attached to a shape, e.g. after it was moved or resized (VP does not
+   * reroute connectors when a shape's bounds change through the API).
+   *
+   * @param shape the moved shape
+   */
+  protected static void recenterConnectorsOf(IDiagramElement shape) {
+    IConnectorUIModel[] from = shape.toFromConnectorArray();
+    IConnectorUIModel[] to = shape.toToConnectorArray();
+    if (from != null) {
+      for (IConnectorUIModel c : from) {
+        centerConnector(c);
+      }
+    }
+    if (to != null) {
+      for (IConnectorUIModel c : to) {
+        centerConnector(c);
+      }
+    }
+  }
+
+  /**
+   * Center point of a shape in diagram coordinates.
+   *
+   * @param shape the shape
+   * @return its center
+   */
+  protected static Point center(IDiagramElement shape) {
+    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
+  }
+
+  // --- Overlap resolution ---
+
+  /** Free space kept between neighbouring shapes when they are pushed apart. */
+  protected static final int PUSH_GAP = 40;
+
+  /**
+   * After {@code grown} got bigger, push the sibling shapes it now overlaps to the right (shapes
+   * that start right of its left edge) or down (shapes below its top edge), cascading to the shapes
+   * those collide with, and re-anchor the connectors of every moved shape.
+   *
+   * @param grown the shape that was resized or placed
+   * @return number of shapes moved
+   */
+  protected int pushApart(IShapeUIModel grown) {
+    return pushApart(grown, PUSH_GAP);
+  }
+
+  /**
+   * {@link #pushApart(IShapeUIModel)} with a custom free space between the shapes.
+   *
+   * @param grown the shape that was resized or placed
+   * @param gap free space to keep between neighbours
+   * @return number of shapes moved
+   */
+  protected int pushApart(IShapeUIModel grown, int gap) {
+    IDiagramUIModel diagram = grown.getDiagramUIModel();
+    if (diagram == null) {
+      return 0;
+    }
+    List<IShapeUIModel> siblings = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      // containers keep their place: moving a frame through the API leaves its children behind
+      if (s.getModelElement() != null
+          && sameParent(s, grown)
+          && s.getWidth() > 0
+          && s.childrenCount() == 0) {
+        siblings.add(s);
+      }
+    }
+    java.util.Deque<IShapeUIModel> queue = new java.util.ArrayDeque<>();
+    queue.add(grown);
+    java.util.Set<String> moved = new java.util.HashSet<>();
+    int guard = 0;
+    while (!queue.isEmpty() && guard++ < 200) {
+      IShapeUIModel a = queue.poll();
+      for (IShapeUIModel b : siblings) {
+        if (b.getId().equals(a.getId()) || !overlapsWithGap(a, b, gap / 2)) {
+          continue;
+        }
+        int[] shift = DiagramUtils.pushVector(rect(a), rect(b), gap);
+        if (shift[0] == 0 && shift[1] == 0) {
+          continue;
+        }
+        b.setLocation(b.getX() + shift[0], b.getY() + shift[1]);
+        moved.add(b.getId());
+        queue.add(b);
+      }
+    }
+    for (IShapeUIModel s : siblings) {
+      if (moved.contains(s.getId())) {
+        recenterConnectorsOf(s);
+      }
+    }
+    return moved.size();
+  }
+
+  /**
+   * Top-left corner for an auto-placed top-level shape: the first spot from (x0, y0), row by row,
+   * where it keeps {@code gap} from every other top-level shape at its current size.
+   *
+   * @param diagram the diagram
+   * @param self the shape being placed (ignored as an obstacle)
+   * @param x0 left edge of the rows
+   * @param y0 top of the first row
+   * @param maxRight right edge a row should not cross
+   * @param gap free space kept around every shape
+   * @return {x, y}
+   */
+  protected static int[] freeSpot(
+      IDiagramUIModel diagram, IDiagramElement self, int x0, int y0, int maxRight, int gap) {
+    List<int[]> occupied = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getId().equals(self.getId()) || s.getParent() != null || s.getWidth() <= 0) {
+        continue;
+      }
+      occupied.add(rect(s));
+    }
+    return DiagramUtils.firstFreeSpot(
+        occupied, x0, y0, self.getWidth(), self.getHeight(), maxRight, gap);
+  }
+
+  private static boolean sameParent(IShapeUIModel a, IShapeUIModel b) {
+    IDiagramElement pa = a.getParent();
+    IDiagramElement pb = b.getParent();
+    if (pa == null || pb == null) {
+      return pa == null && pb == null;
+    }
+    return pa.getId().equals(pb.getId());
+  }
+
+  private static boolean overlapsWithGap(IDiagramElement a, IDiagramElement b, int gap) {
+    return a.getX() < b.getX() + b.getWidth() + gap
+        && b.getX() < a.getX() + a.getWidth() + gap
+        && a.getY() < b.getY() + b.getHeight() + gap
+        && b.getY() < a.getY() + a.getHeight() + gap;
+  }
+
+  /**
+   * Bounds of a diagram element as {x, y, w, h}.
+   *
+   * @param de the element
+   * @return its rectangle
+   */
+  protected static int[] rect(IDiagramElement de) {
+    return new int[] {de.getX(), de.getY(), de.getWidth(), de.getHeight()};
+  }
+
   // --- Diagram Management Tools ---
 
   @Tool(
       name = "listDiagrams",
       description =
-          "List all diagrams in the project, optionally filtered by type (UseCase, Class, Sequence, ER, State)")
+          "List all diagrams in the project, optionally filtered by type (UseCase, Class,"
+              + " Sequence, ER, State)")
   public String listDiagrams(String type) {
     try {
       return runOnEdt(
@@ -383,7 +838,9 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "getDiagramElements",
       description =
-          "Get all elements (shapes and connectors) on a diagram with their names, types, details, and positions")
+          "Get all elements (shapes and connectors) on a diagram with their names, types,"
+              + " details and positions; connectors as 'Type <<stereotype>> name: from -> to"
+              + " [guard]'")
   public String getDiagramElements(String diagramName) {
     try {
       return runOnEdt(
@@ -406,36 +863,11 @@ public abstract class AbstractDiagramMcpTools {
                 .append("):\n");
             for (IDiagramElement de : elements) {
               IModelElement model = de.getModelElement();
-              String type = getSemanticTypeName(model);
+              String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
               String name = model != null ? model.getName() : "(unnamed)";
 
-              if (model instanceof IInclude
-                  || model instanceof IExtend
-                  || model instanceof IGeneralization
-                  || model instanceof IAssociation
-                  || model instanceof IDBForeignKey
-                  || model instanceof IMessage) {
-                // Connectors: show from -> to
-                if (model instanceof IRelationship) {
-                  IRelationship rel = (IRelationship) model;
-                  String from = rel.getFrom() != null ? rel.getFrom().getName() : "?";
-                  String to = rel.getTo() != null ? rel.getTo().getName() : "?";
-                  sb.append("  - ")
-                      .append(type)
-                      .append(": ")
-                      .append(from)
-                      .append(" -> ")
-                      .append(to);
-                  if (model instanceof IAssociation) {
-                    IAssociationEnd toEnd = (IAssociationEnd) ((IAssociation) model).getToEnd();
-                    if (toEnd != null && toEnd.getMultiplicity() != null) {
-                      sb.append(" [").append(toEnd.getMultiplicity()).append("]");
-                    }
-                  }
-                  sb.append("\n");
-                } else {
-                  sb.append("  - ").append(type).append(": ").append(name).append("\n");
-                }
+              if (model instanceof IRelationship || de instanceof IConnectorUIModel) {
+                sb.append("  - ").append(describeConnector(de, model, type)).append("\n");
               } else if (model instanceof IClass) {
                 // Classes: show attributes and operations
                 sb.append("  - ").append(type).append(": ").append(name);
@@ -449,9 +881,8 @@ public abstract class AbstractDiagramMcpTools {
                   Object attrObj = attrIter.next();
                   if (attrObj instanceof IAttribute) {
                     IAttribute attr = (IAttribute) attrObj;
-                    String vis = attr.getVisibility();
                     String attrStr =
-                        (vis != null ? vis : "")
+                        visibilitySymbol(attr.getVisibility())
                             + attr.getName()
                             + (attr.getType() != null ? ":" + attr.getType() : "");
                     attrs.add(attrStr);
@@ -468,22 +899,19 @@ public abstract class AbstractDiagramMcpTools {
                   if (opObj instanceof IOperation) {
                     IOperation op = (IOperation) opObj;
                     StringBuilder opStr = new StringBuilder();
-                    String opVis = op.getVisibility();
-                    if (opVis != null) {
-                      opStr.append(opVis);
-                    }
+                    opStr.append(visibilitySymbol(op.getVisibility()));
                     opStr.append(op.getName()).append("(");
                     List<String> params = new ArrayList<>();
-                    Iterator<?> pIter = op.parameterIterator();
-                    while (pIter.hasNext()) {
-                      Object pObj = pIter.next();
-                      if (pObj instanceof IParameter) {
-                        IParameter p = (IParameter) pObj;
-                        String pStr = p.getName();
+                    Iterator<?> paramIter = op.parameterIterator();
+                    while (paramIter.hasNext()) {
+                      Object paramObj = paramIter.next();
+                      if (paramObj instanceof IParameter) {
+                        IParameter p = (IParameter) paramObj;
+                        String paramText = p.getName();
                         if (p.getType() != null) {
-                          pStr += ":" + p.getType();
+                          paramText += ":" + p.getType();
                         }
-                        params.add(pStr);
+                        params.add(paramText);
                       }
                     }
                     opStr.append(String.join(", ", params)).append(")");
@@ -532,8 +960,12 @@ public abstract class AbstractDiagramMcpTools {
                 sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
                 sb.append("\n");
               } else {
-                // Default: type + name + position
-                sb.append("  - ").append(type).append(": ").append(name);
+                // Default: type + stereotypes + name + position
+                sb.append("  - ").append(type);
+                if (model != null) {
+                  appendStereotypes(sb, model, type);
+                }
+                sb.append(": ").append(name);
                 sb.append(" at (").append(de.getX()).append(",").append(de.getY());
                 sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
                 sb.append("\n");
@@ -635,6 +1067,115 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
+  /**
+   * One-line description of a connector: {@code Type <<stereotypes>> name: from -> to [guard]}.
+   * Ends come from the relationship model, falling back to the shapes the connector joins.
+   */
+  private static String describeConnector(IDiagramElement de, IModelElement model, String type) {
+    StringBuilder sb = new StringBuilder(type);
+    if (model != null) {
+      appendStereotypes(sb, model, type);
+      String name = model.getName();
+      if (name != null && !name.isEmpty()) {
+        sb.append(" '").append(name).append("'");
+      }
+    }
+    String from = null;
+    String to = null;
+    if (model instanceof IRelationship) {
+      from = displayName(((IRelationship) model).getFrom());
+      to = displayName(((IRelationship) model).getTo());
+    }
+    if (de instanceof IConnectorUIModel) {
+      IConnectorUIModel conn = (IConnectorUIModel) de;
+      if (from == null && conn.getFromShape() != null) {
+        from = displayName(conn.getFromShape().getModelElement());
+      }
+      if (to == null && conn.getToShape() != null) {
+        to = displayName(conn.getToShape().getModelElement());
+      }
+    }
+    sb.append(": ").append(from != null ? from : "?").append(" -> ").append(to != null ? to : "?");
+    String guard = null;
+    if (model instanceof IControlFlow) {
+      guard = ((IControlFlow) model).getGuard();
+    } else if (model instanceof IActivityObjectFlow) {
+      guard = ((IActivityObjectFlow) model).getGuard();
+    }
+    if (guard != null && !guard.trim().isEmpty()) {
+      sb.append(" [").append(guard.trim()).append("]");
+    }
+    if (model instanceof IAssociation) {
+      IAssociationEnd fromEnd = (IAssociationEnd) ((IAssociation) model).getFromEnd();
+      IAssociationEnd toEnd = (IAssociationEnd) ((IAssociation) model).getToEnd();
+      String ma = fromEnd != null ? multiplicityText(fromEnd.getMultiplicity()) : "";
+      String mb = toEnd != null ? multiplicityText(toEnd.getMultiplicity()) : "";
+      if (!ma.isEmpty() || !mb.isEmpty()) {
+        sb.append(" mult ")
+            .append(ma != null ? ma : "")
+            .append(" .. ")
+            .append(mb != null ? mb : "");
+      }
+    }
+    if (model instanceof IInteractionLifeLineLink) {
+      List<String> msgs = new ArrayList<>();
+      for (IModelElement child : model.toChildArray()) {
+        if (child instanceof IMessage) {
+          String seq = ((IMessage) child).getSequenceNumber();
+          msgs.add((seq != null && !seq.isEmpty() ? seq + ": " : "") + child.getName());
+        }
+      }
+      if (!msgs.isEmpty()) {
+        sb.append(" messages ").append(msgs);
+      }
+    }
+    return sb.toString();
+  }
+
+  /** Stereotypes of an element, except VP's built-in one named like the element type. */
+  private static void appendStereotypes(StringBuilder sb, IModelElement model, String type) {
+    IStereotype[] stereotypes = model.toStereotypeModelArray();
+    if (stereotypes != null) {
+      for (IStereotype st : stereotypes) {
+        if (!st.getName().equalsIgnoreCase(type)) {
+          sb.append(" <<").append(st.getName()).append(">>");
+        }
+      }
+    }
+  }
+
+  /** A multiplicity worth printing: empty for unset or VP's "Unspecified". */
+  private static String multiplicityText(String multiplicity) {
+    return multiplicity == null || "Unspecified".equalsIgnoreCase(multiplicity) ? "" : multiplicity;
+  }
+
+  /** UML visibility symbol (+ - # ~) for VP's visibility keyword, empty when unset. */
+  private static String visibilitySymbol(String visibility) {
+    if (visibility == null) {
+      return "";
+    }
+    switch (visibility) {
+      case "public":
+        return "+";
+      case "private":
+        return "-";
+      case "protected":
+        return "#";
+      case "package":
+        return "~";
+      default:
+        return "";
+    }
+  }
+
+  private static String displayName(IModelElement element) {
+    if (element == null) {
+      return null;
+    }
+    String name = element.getName();
+    return name != null && !name.isEmpty() ? name : "(" + element.getModelType() + ")";
+  }
+
   // --- Type Name Helper ---
 
   private static String getSemanticTypeName(IModelElement model) {
@@ -693,7 +1234,7 @@ public abstract class AbstractDiagramMcpTools {
     if (model instanceof com.vp.plugin.model.ITransition2) {
       return "Transition";
     }
-    return model.getClass().getSimpleName();
+    return model.getModelType();
   }
 
   // --- VP API Accessors ---

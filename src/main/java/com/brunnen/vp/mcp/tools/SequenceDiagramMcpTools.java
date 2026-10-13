@@ -4,6 +4,7 @@ import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.SequenceDiagramUtils;
 import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IInteractionDiagramUIModel;
@@ -84,29 +85,39 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 (IInteractionDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IInteractionDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             String type = lifelineType != null ? lifelineType.trim() : "";
             String classifierName =
                 className != null && !className.trim().isEmpty() ? className.trim() : lifelineName;
-            int index = participantCount(diagram);
             boolean isActor = "actor".equalsIgnoreCase(type);
 
-            int participantX = LIFELINE_X0 + index * LIFELINE_DX;
+            // Heads are as wide as their name (at least LIFELINE_W) and laid out left to right
+            // after the widest head so far, keeping the usual gap between lifelines.
+            int headWidth = Math.max(LIFELINE_W, estimateHeadWidth(lifelineName));
+            int participantX = nextParticipantX(diagram);
             // Every participant is a real lifeline so its activation bars and message arrows anchor
             // correctly. Boundary/entity/control carry their type stereotype for the head icon; an
             // actor lifeline gets a real IActor as its base classifier so VP draws the stick
             // figure.
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
+            // An actor/class of that name already in the project is the lifeline's classifier
+            // (VP would rename a second root element of the same type and name).
             if (isActor) {
-              IActor baseActor = getModelElementFactory().createActor();
-              baseActor.setName(classifierName);
+              IActor baseActor = findRootElement(classifierName, IActor.class);
+              if (baseActor == null) {
+                baseActor = getModelElementFactory().createActor();
+                nameInOwner(baseActor, null, classifierName);
+              }
               lifeline.setBaseClassifier(baseActor);
             } else {
-              IClass baseClass = getModelElementFactory().createClass();
-              baseClass.setName(classifierName);
-              if (!type.isEmpty()) {
+              IClass baseClass = findRootElement(classifierName, IClass.class);
+              if (baseClass == null) {
+                baseClass = getModelElementFactory().createClass();
+                nameInOwner(baseClass, null, classifierName);
+              }
+              if (!type.isEmpty() && !baseClass.hasStereotype(type)) {
                 baseClass.addStereotype(type);
               }
               lifeline.setBaseClassifier(baseClass);
@@ -114,7 +125,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             addToDiagram(diagram, lifeline, lifelineName);
             IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
             if (headShape != null) {
-              headShape.setBounds(participantX, LIFELINE_Y0, LIFELINE_W, LIFELINE_HEAD_H);
+              headShape.setBounds(participantX, LIFELINE_Y0, headWidth, LIFELINE_HEAD_H);
               if (headShape instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
                 ((com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) headShape)
                     .setShowClassifier(false);
@@ -160,7 +171,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 (IInteractionDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IInteractionDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             IInteractionLifeLine lifeline =
@@ -198,7 +209,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 (IInteractionDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IInteractionDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             boolean async =
@@ -227,7 +238,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 (IInteractionDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IInteractionDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             return createMessageConnector(
@@ -240,63 +251,172 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
   @Tool(
       name = "addCombinedFragment",
-      description = "Add a combined fragment (alt/opt/loop) to a sequence diagram")
+      description =
+          "Add a combined fragment frame (alt/opt/loop/break/par) to a sequence diagram."
+              + " guard is the operand guard; separate several operands with '|' (e.g."
+              + " \"còn phòng|else\" for alt/else). coveredLifelines is a comma list (empty = all"
+              + " lifelines). fromSeq/toSeq are the first and last top-level message numbers the"
+              + " frame encloses (0 = 1 / the last message so far); messages are laid out by"
+              + " sequence number, so the frame can be added before or after them. operandStarts"
+              + " is a comma list with the first message number of operands 2..n (empty = share"
+              + " the messages out evenly)")
   public String addCombinedFragment(
-      String diagramName, String operator, String guard, String coveredLifelines) {
+      String diagramName,
+      String operator,
+      String guard,
+      String coveredLifelines,
+      int fromSeq,
+      int toSeq,
+      String operandStarts) {
     try {
       return runOnEdt(
           () -> {
             IInteractionDiagramUIModel diagram =
-                (IInteractionDiagramUIModel)
-                    DiagramUtils.findDiagramByName(diagramName, IInteractionDiagramUIModel.class);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
+                findDiagram(diagramName, IInteractionDiagramUIModel.class, "sequence");
 
             ICombinedFragment fragment = getModelElementFactory().createCombinedFragment();
-
-            // Set operator type
-            if ("alt".equalsIgnoreCase(operator)) {
-              fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_ALT);
-            } else if ("opt".equalsIgnoreCase(operator)) {
-              fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_OPT);
-            } else if ("loop".equalsIgnoreCase(operator)) {
-              fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_LOOP);
-            } else if ("break".equalsIgnoreCase(operator)) {
-              fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_BREAK);
-            } else if ("par".equalsIgnoreCase(operator)) {
-              fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_PAR);
-            } else {
-              fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_ALT);
+            String op = operator == null ? "" : operator.trim().toLowerCase(java.util.Locale.ROOT);
+            switch (op) {
+              case "opt":
+                fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_OPT);
+                break;
+              case "loop":
+                fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_LOOP);
+                break;
+              case "break":
+                fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_BREAK);
+                break;
+              case "par":
+                fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_PAR);
+                break;
+              default:
+                op = "alt";
+                fragment.setInteractionOperator(ICombinedFragment.INTERACTION_OPERATOR_ALT);
             }
 
-            // Create operand with guard
-            IInteractionOperand operand = getModelElementFactory().createInteractionOperand();
-            if (guard != null && !guard.trim().isEmpty()) {
-              IInteractionConstraint constraint =
-                  getModelElementFactory().createInteractionConstraint();
-              constraint.setConstraint(guard.trim());
-              operand.setGuard(constraint);
+            // One operand per '|'-separated guard (alt/else); a blank guard leaves it unguarded.
+            String[] guards = guard == null ? new String[] {""} : guard.split("\\|", -1);
+            List<IInteractionOperand> operands = new ArrayList<>();
+            for (String g : guards) {
+              IInteractionOperand operand = getModelElementFactory().createInteractionOperand();
+              if (!g.trim().isEmpty()) {
+                IInteractionConstraint constraint =
+                    getModelElementFactory().createInteractionConstraint();
+                constraint.setConstraint(g.trim());
+                operand.setGuard(constraint);
+              }
+              fragment.addOperand(operand);
+              operands.add(operand);
             }
-            fragment.addOperand(operand);
 
-            // Add covered lifelines
+            // Covered lifelines (all of them when none are named)
             List<String> notFound = new ArrayList<>();
+            List<IShapeUIModel> covered = new ArrayList<>();
             if (coveredLifelines != null && !coveredLifelines.trim().isEmpty()) {
               for (String lifelineName : coveredLifelines.split(",")) {
                 IInteractionLifeLine lifeline =
                     SequenceDiagramUtils.findLifelineByName(diagram, lifelineName.trim());
-                if (lifeline != null) {
+                IShapeUIModel shape =
+                    lifeline == null ? null : findLifelineShape(diagram, lifeline);
+                if (shape != null) {
                   fragment.addCoveredLifeLine(lifeline);
+                  covered.add(shape);
                 } else {
                   notFound.add(lifelineName.trim());
                 }
               }
+            } else {
+              for (IInteractionLifeLine lifeline : SequenceDiagramUtils.getAllLifelines(diagram)) {
+                IShapeUIModel shape = findLifelineShape(diagram, lifeline);
+                if (shape != null) {
+                  fragment.addCoveredLifeLine(lifeline);
+                  covered.add(shape);
+                }
+              }
+            }
+            if (covered.isEmpty()) {
+              return "Error adding combined fragment: no covered lifeline on '"
+                  + diagramName
+                  + "'"
+                  + (notFound.isEmpty() ? "" : " (not found: " + String.join(", ", notFound) + ")");
             }
 
-            getDiagramManager().createDiagramElement(diagram, fragment);
+            int messageCount = SequenceDiagramUtils.getAllMessages(diagram).size();
+            int first = fromSeq > 0 ? fromSeq : 1;
+            int last = toSeq > 0 ? toSeq : Math.max(first, messageCount);
+            if (last < first) {
+              return "Error adding combined fragment: toSeq " + toSeq + " < fromSeq " + fromSeq;
+            }
+            int[] explicit = parseInts(operandStarts);
+            int[] starts =
+                SequenceDiagramUtils.operandStarts(first, last, operands.size(), explicit);
+            int[] firstYs = new int[starts.length];
+            for (int i = 0; i < starts.length; i++) {
+              firstYs[i] = messageTop(starts[i]);
+            }
+            int[] layout =
+                SequenceDiagramUtils.fragmentLayout(
+                    firstYs,
+                    messageTop(last),
+                    FRAGMENT_HEADER,
+                    FRAGMENT_TOP_PAD,
+                    FRAGMENT_SEPARATOR_PAD,
+                    FRAGMENT_BOTTOM_PAD);
 
-            String result = "Added " + operator + " fragment to diagram '" + diagramName + "'";
+            int left = Integer.MAX_VALUE;
+            int right = Integer.MIN_VALUE;
+            for (IShapeUIModel shape : covered) {
+              left = Math.min(left, shape.getX());
+              right = Math.max(right, shape.getX() + shape.getWidth());
+            }
+            left -= FRAGMENT_MARGIN;
+            right += FRAGMENT_MARGIN;
+
+            IDiagramElement created = getDiagramManager().createDiagramElement(diagram, fragment);
+            if (!(created instanceof IShapeUIModel)) {
+              return "Error adding combined fragment: Visual Paradigm did not create the frame";
+            }
+            IShapeUIModel frame = (IShapeUIModel) created;
+            frame.setBounds(left, layout[0], right - left, layout[1] - layout[0]);
+            frame.resetCaption();
+            // Operands are shapes inside the frame: VP draws each [guard] at an operand's top-left
+            // and a dashed separator between operands.
+            for (int i = 0; i < operands.size(); i++) {
+              IDiagramElement opDe =
+                  getDiagramManager().createDiagramElement(diagram, operands.get(i));
+              if (opDe instanceof IShapeUIModel) {
+                IShapeUIModel opShape = (IShapeUIModel) opDe;
+                frame.addChild(opShape);
+                int top = layout[2 + i];
+                int bottom = i + 1 < operands.size() ? layout[3 + i] : layout[1];
+                opShape.setBounds(left, top, right - left, bottom - top);
+                opShape.resetCaption();
+              }
+            }
+            frame.sendToBack();
+            // VP lays the operands out (separators, guard positions) when it opens the diagram.
+            diagram.realCloseDiagram();
+            getDiagramManager().openDiagram(diagram);
+
+            String result =
+                "Added "
+                    + op
+                    + " fragment with "
+                    + operands.size()
+                    + " operand(s) around messages "
+                    + first
+                    + ".."
+                    + last
+                    + " to diagram '"
+                    + diagramName
+                    + "' at "
+                    + frame.getX()
+                    + ","
+                    + frame.getY()
+                    + " "
+                    + frame.getWidth()
+                    + "x"
+                    + frame.getHeight();
             if (!notFound.isEmpty()) {
               result += " WARNING: lifelines not found: " + String.join(", ", notFound);
             }
@@ -305,6 +425,23 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding combined fragment: " + e.getMessage();
     }
+  }
+
+  /** Comma-separated integers, or null when the text is blank or not all numbers. */
+  private static int[] parseInts(String text) {
+    if (text == null || text.trim().isEmpty()) {
+      return null;
+    }
+    String[] parts = text.split(",");
+    int[] values = new int[parts.length];
+    try {
+      for (int i = 0; i < parts.length; i++) {
+        values[i] = Integer.parseInt(parts[i].trim());
+      }
+    } catch (NumberFormatException e) {
+      return null;
+    }
+    return values;
   }
 
   @Tool(
@@ -318,7 +455,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 (IInteractionDiagramUIModel)
                     DiagramUtils.findDiagramByName(diagramName, IInteractionDiagramUIModel.class);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
 
             List<IInteractionLifeLine> lifelines = SequenceDiagramUtils.getAllLifelines(diagram);
@@ -355,20 +492,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             for (int i = 0; i < messages.size(); i++) {
               IMessage msg = messages.get(i);
               String fromAct =
-                  msg.getFromActivation() != null
-                      ? activationToLifeline.getOrDefault(msg.getFromActivation(), "?")
-                      : "?";
-              String toAct =
-                  msg.getToActivation() != null
-                      ? activationToLifeline.getOrDefault(msg.getToActivation(), "?")
-                      : "?";
+                  endName(msg.getFrom(), msg.getFromActivation(), activationToLifeline);
+              String toAct = endName(msg.getTo(), msg.getToActivation(), activationToLifeline);
 
               report.append("  ").append(i + 1).append(". ");
               report.append(fromAct).append(" -> ").append(toAct);
               report.append(": ").append(msg.getName());
 
               // Message type hints
-              if (fromAct.equals(toAct)) {
+              if (!"?".equals(fromAct) && fromAct.equals(toAct)) {
                 report.append(" (self)");
               } else if (msg.isAsynchronous()) {
                 report.append(" (async)");
@@ -392,20 +524,23 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                   StringBuilder fragStr = new StringBuilder();
                   // Operator
                   String op = cf.getInteractionOperator();
-                  if (ICombinedFragment.INTERACTION_OPERATOR_ALT.equals(op)) fragStr.append("alt");
-                  else if (ICombinedFragment.INTERACTION_OPERATOR_OPT.equals(op))
+                  if (ICombinedFragment.INTERACTION_OPERATOR_ALT.equals(op)) {
+                    fragStr.append("alt");
+                  } else if (ICombinedFragment.INTERACTION_OPERATOR_OPT.equals(op)) {
                     fragStr.append("opt");
-                  else if (ICombinedFragment.INTERACTION_OPERATOR_LOOP.equals(op))
+                  } else if (ICombinedFragment.INTERACTION_OPERATOR_LOOP.equals(op)) {
                     fragStr.append("loop");
-                  else if (ICombinedFragment.INTERACTION_OPERATOR_BREAK.equals(op))
+                  } else if (ICombinedFragment.INTERACTION_OPERATOR_BREAK.equals(op)) {
                     fragStr.append("break");
-                  else if (ICombinedFragment.INTERACTION_OPERATOR_PAR.equals(op))
+                  } else if (ICombinedFragment.INTERACTION_OPERATOR_PAR.equals(op)) {
                     fragStr.append("par");
-                  else fragStr.append(op);
+                  } else {
+                    fragStr.append(op);
+                  }
 
-                  // Guard from first operand
+                  // Guards of every operand
                   java.util.Iterator<?> opIter = cf.operandIterator();
-                  if (opIter.hasNext()) {
+                  while (opIter.hasNext()) {
                     Object opObj = opIter.next();
                     if (opObj instanceof IInteractionOperand) {
                       IInteractionOperand operand = (IInteractionOperand) opObj;
@@ -449,6 +584,26 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  /**
+   * Name of a message end: the lifeline (or actor) model the message is bound to, else the lifeline
+   * owning its activation, else "?".
+   */
+  private static String endName(
+      IModelElement end,
+      IActivation activation,
+      java.util.Map<IActivation, String> activationToLifeline) {
+    if (end instanceof IInteractionLifeLine || end instanceof IActor) {
+      return end.getName();
+    }
+    if (end instanceof IActivation && activationToLifeline.containsKey(end)) {
+      return activationToLifeline.get(end);
+    }
+    if (activation != null && activationToLifeline.containsKey(activation)) {
+      return activationToLifeline.get(activation);
+    }
+    return "?";
+  }
+
   // --- Sequence geometry ---
   // Messages are placed top-to-bottom by sequence number. Activation bars follow the call stack:
   // Each lifeline gets one continuous activation bar (grown to cover its messages). Messages are
@@ -458,6 +613,14 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int MSG_STEP_Y = 36;
   private static final int SELF_LOOP_W = 36;
   private static final int SELF_LOOP_H = 10;
+  // Combined fragment frame: VP's operator tab row, distance from the frame top / an operand
+  // separator / the frame bottom to the nearest covered message (messages are MSG_STEP_Y apart),
+  // and the side margin around the covered lifelines.
+  private static final int FRAGMENT_HEADER = 17;
+  private static final int FRAGMENT_TOP_PAD = 30;
+  private static final int FRAGMENT_SEPARATOR_PAD = 18;
+  private static final int FRAGMENT_BOTTOM_PAD = 16;
+  private static final int FRAGMENT_MARGIN = 24;
   // Horizontal lifeline layout (tighter than the default 250px spread).
   private static final int LIFELINE_X0 = 40;
   private static final int LIFELINE_DX = 150;
@@ -731,7 +894,12 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     if (idx < 1) {
       idx = SequenceDiagramUtils.getAllMessages(diagram).size() + 1;
     }
-    return MSG_TOP_Y + (idx - 1) * MSG_STEP_Y;
+    return messageTop(idx);
+  }
+
+  /** Vertical position of the top-level message number {@code idx} (1-based). */
+  private static int messageTop(int idx) {
+    return MSG_TOP_Y + (Math.max(idx, 1) - 1) * MSG_STEP_Y;
   }
 
   private IActivationUIModel findActivationShapeById(
@@ -749,16 +917,23 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return null;
   }
 
-  /** Count lifelines already on the diagram, for horizontal indexing. */
-  private int participantCount(IInteractionDiagramUIModel diagram) {
-    int n = 0;
+  /** Left edge for the next lifeline: right of the rightmost head plus the usual gap. */
+  private int nextParticipantX(IInteractionDiagramUIModel diagram) {
+    int right = -1;
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
-      if (iter.next() instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
-        n++;
+      Object obj = iter.next();
+      if (obj instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
+        IShapeUIModel head = (IShapeUIModel) obj;
+        right = Math.max(right, head.getX() + head.getWidth());
       }
     }
-    return n;
+    return right < 0 ? LIFELINE_X0 : right + (LIFELINE_DX - LIFELINE_W);
+  }
+
+  /** Width a lifeline head needs to show its name on one line. */
+  private static int estimateHeadWidth(String name) {
+    return name == null ? 0 : name.trim().length() * 7 + 24;
   }
 
   private IShapeUIModel findLifelineShape(

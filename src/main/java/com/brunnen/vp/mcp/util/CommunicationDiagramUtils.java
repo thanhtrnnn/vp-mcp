@@ -25,11 +25,11 @@ public final class CommunicationDiagramUtils {
   /** Center y of the first grid cell. */
   public static final int GRID_ORIGIN_Y = 100;
 
-  /** How far a self link loops out to the right of its shape. */
-  public static final int SELF_LOOP_WIDTH = 40;
+  /** How far a self link loops up above its shape. */
+  public static final int SELF_LOOP_HEIGHT = 40;
 
-  /** Half the vertical span of a self link loop. */
-  public static final int SELF_LOOP_HALF_HEIGHT = 12;
+  /** Half the horizontal span of a self link loop. */
+  public static final int SELF_LOOP_HALF_WIDTH = 24;
 
   /**
    * UML sequence expression: dot-separated integers, each optionally followed by a concurrent
@@ -245,58 +245,8 @@ public final class CommunicationDiagramUtils {
   }
 
   /**
-   * Extent of an axis-aligned box measured along a unit direction (its projection length).
-   *
-   * @param width the box width
-   * @param height the box height
-   * @param nx unit direction x
-   * @param ny unit direction y
-   * @return the projected extent
-   */
-  public static double normalExtent(int width, int height, double nx, double ny) {
-    return Math.abs(nx) * width + Math.abs(ny) * height;
-  }
-
-  /**
-   * Distance from the link to the near edge of the next stacked message: just past the farthest
-   * edge of the messages already on that side, or {@code base} when there are none.
-   *
-   * @param base the distance of the first message
-   * @param gap the gap kept between stacked messages
-   * @param farEdges distance of each existing message's far edge from the link (same side)
-   * @return the distance for the new message's near edge
-   */
-  public static double stackedDistance(double base, double gap, double... farEdges) {
-    double distance = base;
-    if (farEdges != null) {
-      for (double edge : farEdges) {
-        distance = Math.max(distance, edge + gap);
-      }
-    }
-    return distance;
-  }
-
-  /**
-   * Center of a message box placed beside a link: {@code distance} from the anchor point along the
-   * unit normal, plus half the box extent so its near edge sits exactly at that distance.
-   *
-   * @param anchorX link anchor x (usually the link midpoint)
-   * @param anchorY link anchor y
-   * @param nx unit normal x (side of the link)
-   * @param ny unit normal y
-   * @param distance distance of the box's near edge from the link
-   * @param extent the box extent along the normal
-   * @return {center x, center y}
-   */
-  public static double[] messageCenter(
-      double anchorX, double anchorY, double nx, double ny, double distance, double extent) {
-    double d = distance + extent / 2.0;
-    return new double[] {anchorX + nx * d, anchorY + ny * d};
-  }
-
-  /**
-   * Route of a self link: a rectangular loop leaving the right edge of the shape and returning to
-   * it.
+   * Route of a self link: a rectangular loop on top of the shape, leaving and re-entering its top
+   * edge, so it stays clear of the links that leave the shape sideways.
    *
    * @param x shape x
    * @param y shape y
@@ -305,14 +255,79 @@ public final class CommunicationDiagramUtils {
    * @return four {x, y} points: out, corner, corner, back
    */
   public static int[][] selfLoopPoints(int x, int y, int width, int height) {
-    int right = x + width;
-    int cy = y + height / 2;
-    int far = right + SELF_LOOP_WIDTH;
+    int cx = x + width / 2;
+    int top = y - SELF_LOOP_HEIGHT;
     return new int[][] {
-      {right, cy - SELF_LOOP_HALF_HEIGHT},
-      {far, cy - SELF_LOOP_HALF_HEIGHT},
-      {far, cy + SELF_LOOP_HALF_HEIGHT},
-      {right, cy + SELF_LOOP_HALF_HEIGHT}
+      {cx - SELF_LOOP_HALF_WIDTH, y},
+      {cx - SELF_LOOP_HALF_WIDTH, top},
+      {cx + SELF_LOOP_HALF_WIDTH, top},
+      {cx + SELF_LOOP_HALF_WIDTH, y}
     };
+  }
+
+  /** Size of the (invisible) box of a message arrow; VP draws the arrow at its center. */
+  public static final int MESSAGE_BOX = 60;
+
+  /** Distance from the link to the center of the first message arrow. */
+  public static final int ARROW_OFFSET = 14;
+
+  /**
+   * Spacing between stacked message rows beside a vertical link (arrow and caption side by side).
+   */
+  public static final int SLOT_STEP = 22;
+
+  /** Spacing between stacked messages beside a horizontal link (arrow with its caption outside). */
+  public static final int STACK_STEP = 32;
+
+  /** Distance from an arrow's center to the center of its caption beside a horizontal link. */
+  public static final int CAPTION_OFFSET = 15;
+
+  /** Half the length of the arrow VP draws for a message. */
+  public static final int ARROW_HALF = 11;
+
+  /**
+   * Where the {@code slot}-th message beside a link goes. Beside a mostly horizontal link the arrow
+   * sits next to the link with its caption centered just outside it, and further messages stack
+   * away from the link; beside a mostly vertical link each message is an arrow followed by its
+   * caption on one line, stacked downwards along the link, the caption on the outer side.
+   *
+   * @param mx link midpoint x
+   * @param my link midpoint y
+   * @param nx unit normal x of the side the message goes on
+   * @param ny unit normal y of the side the message goes on
+   * @param slot index of the message among those already on that side
+   * @param captionWidth caption width
+   * @param captionHeight caption height
+   * @return {arrow center x, arrow center y, caption x, caption y}
+   */
+  public static int[] messageSlot(
+      double mx, double my, double nx, double ny, int slot, int captionWidth, int captionHeight) {
+    double ax;
+    double ay;
+    int capX;
+    if (Math.abs(ny) >= Math.abs(nx)) {
+      // horizontal-ish link: the arrow beside the link, its caption centered just outside it;
+      // further messages stack away from the link
+      double d = ARROW_OFFSET + slot * STACK_STEP;
+      ax = mx + nx * d;
+      ay = my + ny * d;
+      double cy = ay + Math.signum(ny) * CAPTION_OFFSET;
+      return new int[] {
+        (int) Math.round(ax),
+        (int) Math.round(ay),
+        (int) Math.round(ax - captionWidth / 2.0),
+        (int) Math.round(cy - captionHeight / 2.0)
+      };
+    } else {
+      // vertical-ish link: rows stack downwards beside it, captions on the outer side
+      ax = mx + nx * ARROW_OFFSET;
+      ay = my + ny * ARROW_OFFSET - SLOT_STEP / 2.0 + slot * SLOT_STEP;
+      capX =
+          nx > 0
+              ? (int) Math.round(ax + ARROW_HALF + 4)
+              : (int) Math.round(ax - ARROW_HALF - 4 - captionWidth);
+    }
+    int capY = (int) Math.round(ay - captionHeight / 2.0);
+    return new int[] {(int) Math.round(ax), (int) Math.round(ay), capX, capY};
   }
 }

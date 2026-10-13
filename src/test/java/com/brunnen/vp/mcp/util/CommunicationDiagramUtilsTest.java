@@ -190,52 +190,37 @@ public class CommunicationDiagramUtilsTest {
   }
 
   @Test
-  public void testNormalExtent() {
-    assertEquals(
-        "Vertical normal measures height",
-        20,
-        CommunicationDiagramUtils.normalExtent(100, 20, 0, -1),
-        EPS);
-    assertEquals(
-        "Horizontal normal measures width",
-        100,
-        CommunicationDiagramUtils.normalExtent(100, 20, 1, 0),
-        EPS);
+  public void testMessageSlotAboveHorizontalLink() {
+    // link midpoint (300, 100), normal up; caption 100x14
+    int[] first = CommunicationDiagramUtils.messageSlot(300, 100, 0, -1, 0, 100, 14);
+    int[] second = CommunicationDiagramUtils.messageSlot(300, 100, 0, -1, 1, 100, 14);
+    assertArrayEquals(
+        "Arrow 14px above the link midpoint", new int[] {300, 86}, new int[] {first[0], first[1]});
+    assertEquals("Caption centered on the arrow", 250, first[2]);
+    assertEquals("Caption above the arrow", 86 - 15 - 7, first[3]);
+    assertEquals("Second message one step further out", 86 - 32, second[1]);
   }
 
   @Test
-  public void testStackedDistance() {
-    assertEquals(
-        "No siblings: base distance", 6, CommunicationDiagramUtils.stackedDistance(6, 4), EPS);
-    assertEquals(
-        "Past the farthest sibling plus the gap",
-        34,
-        CommunicationDiagramUtils.stackedDistance(6, 4, 10, 30, 2),
-        EPS);
-    assertEquals(
-        "Siblings closer than the base keep the base",
-        6,
-        CommunicationDiagramUtils.stackedDistance(6, 4, -20, 1),
-        EPS);
-  }
-
-  @Test
-  public void testMessageCenter() {
-    double[] c = CommunicationDiagramUtils.messageCenter(200, 100, 0, -1, 6, 20);
-    assertEquals("Stays on the anchor x", 200, c[0], EPS);
-    assertEquals("Near edge sits 6px above the link", 84, c[1], EPS);
+  public void testMessageSlotBesideVerticalLink() {
+    int[] right = CommunicationDiagramUtils.messageSlot(300, 200, 1, 0, 0, 80, 14);
+    int[] left = CommunicationDiagramUtils.messageSlot(300, 200, -1, 0, 1, 80, 14);
+    assertEquals("Arrow right of the link", 314, right[0]);
+    assertEquals("Caption right of the arrow", 329, right[2]);
+    assertEquals("Arrow left of the link", 286, left[0]);
+    assertEquals("Caption left of the arrow", 286 - 15 - 80, left[2]);
+    assertEquals("Second row one step lower", right[1] + 22, left[1]);
   }
 
   @Test
   public void testSelfLoopPoints() {
     int[][] loop = CommunicationDiagramUtils.selfLoopPoints(100, 50, 80, 40);
-    int right = 180;
-    int far = right + CommunicationDiagramUtils.SELF_LOOP_WIDTH;
-    int half = CommunicationDiagramUtils.SELF_LOOP_HALF_HEIGHT;
+    int top = 50 - CommunicationDiagramUtils.SELF_LOOP_HEIGHT;
+    int half = CommunicationDiagramUtils.SELF_LOOP_HALF_WIDTH;
     assertEquals("Four points", 4, loop.length);
-    assertArrayEquals("Leaves the right edge", new int[] {right, 70 - half}, loop[0]);
-    assertArrayEquals("Out to the far side", new int[] {far, 70 - half}, loop[1]);
-    assertArrayEquals("Down the far side", new int[] {far, 70 + half}, loop[2]);
-    assertArrayEquals("Back to the right edge", new int[] {right, 70 + half}, loop[3]);
+    assertArrayEquals("Leaves the top edge", new int[] {140 - half, 50}, loop[0]);
+    assertArrayEquals("Up", new int[] {140 - half, top}, loop[1]);
+    assertArrayEquals("Across", new int[] {140 + half, top}, loop[2]);
+    assertArrayEquals("Back to the top edge", new int[] {140 + half, 50}, loop[3]);
   }
 }

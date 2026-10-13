@@ -5,6 +5,7 @@ import com.brunnen.vp.mcp.util.CommunicationDiagramUtils;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IBaseDiagramElement;
+import com.vp.plugin.diagram.ICaptionUIModel;
 import com.vp.plugin.diagram.ICommunicationDiagramUIModel;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
@@ -48,12 +49,6 @@ import java.util.Set;
  * arrows are stacked beside their link (one side per direction) so labels do not overlap.
  */
 public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
-
-  /** Distance between a link and the first message arrow beside it. */
-  private static final double MESSAGE_BASE_GAP = 6;
-
-  /** Gap kept between message arrows stacked on the same side of a link. */
-  private static final double MESSAGE_GAP = 4;
 
   @Tool(
       name = "createCommunicationDiagram",
@@ -107,7 +102,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             ICommunicationDiagramUIModel diagram = findCommunicationDiagram(diagramName);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             String name = CommunicationDiagramUtils.clean(lifelineName);
             if (name == null) {
@@ -179,7 +174,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             ICommunicationDiagramUIModel diagram = findCommunicationDiagram(diagramName);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             IShapeUIModel from = findParticipant(diagram, fromLifeline);
             if (from == null) {
@@ -226,7 +221,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             ICommunicationDiagramUIModel diagram = findCommunicationDiagram(diagramName);
             if (diagram == null) {
-              return "Diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             String[] resolved =
                 CommunicationDiagramUtils.resolveMessage(sequenceNumber, messageText);
@@ -288,15 +283,23 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             IBaseCommunicationMessageUIModel shape = (IBaseCommunicationMessageUIModel) created;
             IMessage message = (IMessage) createdModel;
-            message.setName(text);
-            message.setSequenceNumber(seq);
+            int slot = countMessagesOnSide(link, forward);
+            linkModel.addMessage(message);
             // VP derives the arrow direction from the message's from end (compared with the
             // link connector's from shape), so bind both ends to the participants.
             message.setFrom(from.getModelElement());
             message.setTo(to.getModelElement());
             bindRelationshipEnds(message, from.getModelElement(), to.getModelElement());
-            linkModel.addMessage(message);
+            message.setName(text);
+            message.setSequenceNumber(seq);
 
+            // The shape is an invisible box: VP draws the arrow at its center and only when the
+            // box is large enough (the 60x60 of Visual Paradigm's own sample), so it is never
+            // fitted. The caption is rendered first and then positioned on its own.
+            int[] slotBounds = messageSlot(link, forward, self, slot, shape);
+            int box = CommunicationDiagramUtils.MESSAGE_BOX;
+            shape.setBounds(slotBounds[0] - box / 2, slotBounds[1] - box / 2, box, box);
+            renderCaption(shape);
             // VP lays message arrows out relative to their parent connector, so the shape must be
             // a child of the link.
             link.addChild(shape);
@@ -307,11 +310,16 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
                   + "link";
             }
             shape.setMessageIds(new String[] {message.getId()});
-
-            renderCaption(shape);
-            fitShape(shape);
-            placeMessage(link, shape, forward, self);
-            renderCaption(shape);
+            ICaptionUIModel caption = shape.getCaptionUIModel();
+            if (caption != null) {
+              caption.setBounds(
+                  slotBounds[2], slotBounds[3], caption.getWidth(), caption.getHeight());
+            }
+            // VP orients a message arrow along its link only when it lays the diagram out from
+            // scratch (opening it); arrows created through the API are drawn horizontally until
+            // then.
+            diagram.realCloseDiagram();
+            getDiagramManager().openDiagram(diagram);
 
             return "Added message '"
                 + CommunicationDiagramUtils.formatMessageLabel(seq, text)
@@ -522,98 +530,74 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
       return null;
     }
     IConnectorUIModel connector = (IConnectorUIModel) de;
-    if (!self) {
-      anchorLinkToCenters(connector);
-    }
+    // No setRequestRebuild here: when VP rebuilds a link it moves every message on it to the
+    // link's start point. The explicit center points are clipped at the borders by VP anyway.
     renderCaption(connector);
     return connector;
-  }
-
-  /** Re-anchor a straight connector to the current centers of its two shapes. */
-  private static void anchorLinkToCenters(IConnectorUIModel connector) {
-    IShapeUIModel from = connector.getFromShape();
-    IShapeUIModel to = connector.getToShape();
-    if (from == null || to == null) {
-      return;
-    }
-    connector.clearPoints();
-    connector.addPoint(shapeCenter(from));
-    connector.addPoint(shapeCenter(to));
-    connector.setUseFromShapeCenter(true);
-    connector.setUseToShapeCenter(true);
-    connector.setRequestRebuild(true);
   }
 
   // --- Messages ---
 
   /**
-   * Stack a message arrow beside its link: forward arrows on one side, reverse arrows on the other,
-   * each new arrow just past the ones already on that side. Self-link messages go right of the
-   * loop.
+   * Arrow center and caption corner for a new message: the {@code slot}-th row beside the link on
+   * the side of its direction (forward messages on one side, reverse ones on the other), or above
+   * the loop of a self link.
+   *
+   * @return {arrow center x, arrow center y, caption x, caption y}
    */
-  private void placeMessage(
+  private static int[] messageSlot(
       IConnectorUIModel link,
-      IBaseCommunicationMessageUIModel shape,
       boolean forward,
-      boolean self) {
+      boolean self,
+      int slot,
+      IBaseCommunicationMessageUIModel shape) {
     IShapeUIModel a = link.getFromShape();
     IShapeUIModel b = link.getToShape();
-    if (a == null || b == null) {
-      return;
-    }
-    double anchorX;
-    double anchorY;
-    double nx;
-    double ny;
+    ICaptionUIModel caption = shape.getCaptionUIModel();
+    int capWidth = caption != null && caption.getWidth() > 0 ? caption.getWidth() : 100;
+    int capHeight = caption != null && caption.getHeight() > 0 ? caption.getHeight() : 14;
     if (self) {
-      anchorX = a.getX() + a.getWidth() + CommunicationDiagramUtils.SELF_LOOP_WIDTH;
-      anchorY = a.getY() + a.getHeight() / 2.0;
-      nx = 1;
-      ny = 0;
-    } else {
-      double fx = a.getX() + a.getWidth() / 2.0;
-      double fy = a.getY() + a.getHeight() / 2.0;
-      double tx = b.getX() + b.getWidth() / 2.0;
-      double ty = b.getY() + b.getHeight() / 2.0;
-      anchorX = (fx + tx) / 2.0;
-      anchorY = (fy + ty) / 2.0;
-      double[] normal = CommunicationDiagramUtils.unitNormal(fx, fy, tx, ty);
-      double side = forward ? 1 : -1;
-      nx = normal[0] * side;
-      ny = normal[1] * side;
-    }
-
-    List<Double> edges = new ArrayList<>();
-    IShapeUIModel[] siblings = link.toChildArray();
-    if (siblings != null) {
-      for (IShapeUIModel sibling : siblings) {
-        if (!(sibling instanceof IBaseCommunicationMessageUIModel)
-            || isSameElement(sibling, shape)
-            || isReverseMessage(sibling) == forward) {
-          continue;
+      int loopTop = a.getY() - CommunicationDiagramUtils.SELF_LOOP_HEIGHT;
+      Point[] points = link.getPoints();
+      if (points != null) {
+        for (Point p : points) {
+          loopTop = Math.min(loopTop, p.y);
         }
-        double sx = sibling.getX() + sibling.getWidth() / 2.0;
-        double sy = sibling.getY() + sibling.getHeight() / 2.0;
-        double along = (sx - anchorX) * nx + (sy - anchorY) * ny;
-        double half =
-            CommunicationDiagramUtils.normalExtent(sibling.getWidth(), sibling.getHeight(), nx, ny)
-                / 2.0;
-        edges.add(along + half);
+      }
+      return CommunicationDiagramUtils.messageSlot(
+          a.getX() + a.getWidth() / 2.0, loopTop, 0, -1, slot, capWidth, capHeight);
+    }
+    double fx = a.getX() + a.getWidth() / 2.0;
+    double fy = a.getY() + a.getHeight() / 2.0;
+    double tx = b.getX() + b.getWidth() / 2.0;
+    double ty = b.getY() + b.getHeight() / 2.0;
+    double[] normal = CommunicationDiagramUtils.unitNormal(fx, fy, tx, ty);
+    double side = forward ? 1 : -1;
+    // middle of the visible part of the link (VP clips its ends at the shape borders)
+    double mx = (fx + tx) / 2.0;
+    double my = (fy + ty) / 2.0;
+    Point[] points = link.getPoints();
+    if (points != null && points.length >= 2) {
+      mx = (points[0].x + points[points.length - 1].x) / 2.0;
+      my = (points[0].y + points[points.length - 1].y) / 2.0;
+    }
+    return CommunicationDiagramUtils.messageSlot(
+        mx, my, normal[0] * side, normal[1] * side, slot, capWidth, capHeight);
+  }
+
+  /** Messages already drawn on the link in the given direction (forward = link's from->to). */
+  private static int countMessagesOnSide(IConnectorUIModel link, boolean forward) {
+    int count = 0;
+    IShapeUIModel[] children = link.toChildArray();
+    if (children != null) {
+      for (IShapeUIModel child : children) {
+        if (child instanceof IBaseCommunicationMessageUIModel
+            && isReverseMessage(child) != forward) {
+          count++;
+        }
       }
     }
-    double[] farEdges = new double[edges.size()];
-    for (int i = 0; i < farEdges.length; i++) {
-      farEdges[i] = edges.get(i);
-    }
-    double distance =
-        CommunicationDiagramUtils.stackedDistance(MESSAGE_BASE_GAP, MESSAGE_GAP, farEdges);
-    int width = shape.getWidth();
-    int height = shape.getHeight();
-    double extent = CommunicationDiagramUtils.normalExtent(width, height, nx, ny);
-    double[] c =
-        CommunicationDiagramUtils.messageCenter(anchorX, anchorY, nx, ny, distance, extent);
-    int[] topLeft = CommunicationDiagramUtils.topLeftForCenter(c[0], c[1], width, height);
-    shape.setBounds(topLeft[0], topLeft[1], width, height);
+    return count;
   }
 
   private static boolean isReverseMessage(IShapeUIModel shape) {

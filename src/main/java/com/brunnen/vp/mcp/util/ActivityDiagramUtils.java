@@ -79,6 +79,9 @@ public final class ActivityDiagramUtils {
   /** Children whose center is this close to the lane center count as centered. */
   private static final int CENTER_TOLERANCE = 2;
 
+  /** Horizontal gap between sibling branches placed side by side. */
+  public static final int BRANCH_GAP = 40;
+
   /** Rough width of one character of the default diagram font. */
   private static final int CHAR_WIDTH = 8;
 
@@ -208,22 +211,6 @@ public final class ActivityDiagramUtils {
   public static String formatGuard(String guard) {
     String normalized = normalizeGuard(guard);
     return normalized == null ? "" : "[" + normalized + "]";
-  }
-
-  /**
-   * Build the caption of an object node: the object name, plus the UML in-state line {@code
-   * [state]} under it when a state was given.
-   *
-   * @param objectName the object name
-   * @param state the state, with or without brackets; may be null or blank
-   * @return the two-line caption, or null when no state was supplied
-   */
-  public static String buildObjectNodeCaption(String objectName, String state) {
-    String normalized = normalizeGuard(state);
-    if (normalized == null) {
-      return null;
-    }
-    return objectName.trim() + "\n[" + normalized + "]";
   }
 
   /**
@@ -376,7 +363,10 @@ public final class ActivityDiagramUtils {
     if (Math.abs(offset) <= CENTER_TOLERANCE) {
       return centeredX(newLaneX + newLaneWidth / 2, childWidth);
     }
-    return clampIntoLane(childX + (newLaneX - oldLaneX), childWidth, newLaneX, newLaneWidth);
+    // keep the offset from the lane center, so a row of branches centered in the lane stays
+    // centered (and together) when the lane widens
+    int newCenter = newLaneX + newLaneWidth / 2;
+    return clampIntoLane(newCenter + offset - childWidth / 2, childWidth, newLaneX, newLaneWidth);
   }
 
   /**
@@ -394,5 +384,28 @@ public final class ActivityDiagramUtils {
       }
     }
     return -1;
+  }
+
+  /**
+   * Left edges of shapes laid side by side in one row, centered on {@code centerX}.
+   *
+   * @param widths the widths of the shapes, in row order
+   * @param centerX the row's center
+   * @param gap the gap between neighbours
+   * @return the x of each shape
+   */
+  public static int[] rowPositions(int[] widths, int centerX, int gap) {
+    int total = 0;
+    for (int w : widths) {
+      total += w;
+    }
+    total += gap * Math.max(0, widths.length - 1);
+    int[] xs = new int[widths.length];
+    int x = centerX - total / 2;
+    for (int i = 0; i < widths.length; i++) {
+      xs[i] = x;
+      x += widths[i] + gap;
+    }
+    return xs;
   }
 }

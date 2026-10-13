@@ -6,7 +6,6 @@ import com.brunnen.vp.mcp.util.ComponentDiagramUtils.Kind;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IComponentDiagramUIModel;
-import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -20,9 +19,7 @@ import com.vp.plugin.model.IJavaClassCodeDetail;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.IPort;
 import com.vp.plugin.model.IRealization;
-import com.vp.plugin.model.IRelationship;
 import com.vp.plugin.model.IUsage;
-import java.awt.Point;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -49,16 +46,14 @@ import java.util.Set;
  */
 public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
 
-  /** Stereotype VP itself puts on the interfaces of component diagrams. */
-  private static final String INTERFACE_STEREOTYPE = "Interface";
+  /**
+   * Keyword of an interface. Lower case: with VP's own "Interface" stereotype VP would pick its
+   * ComponentInterface (lollipop) shape, which it does not render when created through the API.
+   */
+  private static final String INTERFACE_STEREOTYPE = "interface";
 
   /** Keyword of the dependency drawn when VP cannot draw a usage on a component diagram. */
   private static final String USE_STEREOTYPE = "use";
-
-  /** Default and largest believable side length of an interface ball after fit-size. */
-  private static final int BALL_SIZE = 24;
-
-  private static final int BALL_MAX = 60;
 
   /** Default and largest believable side length of a port square after fit-size. */
   private static final int PORT_SIZE = 16;
@@ -137,13 +132,17 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             List<String> stereotypes = ComponentDiagramUtils.parseStereotypes(stereotype);
-            IComponent component = getModelElementFactory().createComponent();
-            component.setName(name);
-            for (String s : stereotypes) {
-              component.addStereotype(s);
+            // A top-level component of that name is the same component (a new view of it); a
+            // nested one is created inside its parent before it is named.
+            IComponent component = parent == null ? findRootElement(name, IComponent.class) : null;
+            if (component == null) {
+              component = getModelElementFactory().createComponent();
+              nameInOwner(component, parent != null ? parent.getModelElement() : null, name);
             }
-            if (parent != null) {
-              parent.getModelElement().addChild(component);
+            for (String s : stereotypes) {
+              if (!component.hasStereotype(s)) {
+                component.addStereotype(s);
+              }
             }
 
             IDiagramElement de = getDiagramManager().createDiagramElement(diagram, component);
@@ -188,8 +187,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addComponentInterface",
       description =
-          "Add an interface to a component diagram, drawn in UML ball (lollipop) notation."
-              + " Connect it to components with addProvidedInterface / addRequiredInterface. x/y"
+          "Add an interface to a component diagram, drawn as a box with the <<interface>>"
+              + " keyword (Visual Paradigm does not render its lollipop shape when it is created"
+              + " through the API). An interface of that name elsewhere in the project is reused."
+              + " Connect it to components with addProvidedInterface (realization, hollow"
+              + " triangle at the interface) / addRequiredInterface (<<use>> dependency). x/y"
               + " (>0) place it explicitly, otherwise it is auto-placed on the grid")
   public String addComponentInterface(String diagramName, String interfaceName, int x, int y) {
     try {
@@ -207,32 +209,25 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Component or interface already on diagram: " + name;
             }
 
-            // VP draws a component whose Java detail is an interface with its interface shape.
-            IComponent iface = getModelElementFactory().createComponent();
-            iface.setName(name);
-            iface.addStereotype(INTERFACE_STEREOTYPE);
-            IJavaClassCodeDetail javaDetail = getModelElementFactory().createJavaClassCodeDetail();
-            javaDetail.setJavaInterface(true);
-            iface.setJavaDetail(javaDetail);
-
+            IComponent iface = findRootElement(name, IComponent.class);
+            if (iface == null) {
+              iface = getModelElementFactory().createComponent();
+              nameInOwner(iface, null, name);
+            }
+            if (!iface.hasStereotype(INTERFACE_STEREOTYPE)) {
+              iface.addStereotype(INTERFACE_STEREOTYPE);
+            }
             IDiagramElement de = getDiagramManager().createDiagramElement(diagram, iface);
             if (!(de instanceof IShapeUIModel)) {
               return "Error adding interface: Visual Paradigm could not draw '" + name + "'";
             }
             IShapeUIModel shape = (IShapeUIModel) de;
-            boolean ball = shape instanceof IComponentInterfaceUIModel;
-            if (ball) {
-              ((IComponentInterfaceUIModel) shape)
-                  .setDisplayOption(IComponentInterfaceUIModel.DO_INTERFACE);
+            if (shape instanceof IComponentUIModel) {
+              // a plain classifier box: no <<component>> keyword or component icon
+              ((IComponentUIModel) shape)
+                  .setShowOption(IComponentUIModel.SHOW_COMPONENT_OPTION_NONE);
             }
             showCaption(shape);
-            if (ball) {
-              // The name is drawn outside the ball; never let fit-size stretch the circle.
-              int[] size =
-                  ComponentDiagramUtils.symbolSize(
-                      shape.getWidth(), shape.getHeight(), BALL_SIZE, BALL_MAX);
-              shape.setBounds(shape.getX(), shape.getY(), size[0], size[1]);
-            }
             int[] pos = topLevelPosition(diagram, shape, x, y);
             shape.setBounds(pos[0], pos[1], shape.getWidth(), shape.getHeight());
 
@@ -242,9 +237,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
                 + diagramName
                 + "' at "
                 + bounds(shape)
-                + (ball
-                    ? " (ball notation)"
-                    : " (drawn as a box: Visual Paradigm did not use its interface shape)");
+                + " (<<interface>> box)";
           });
     } catch (Exception e) {
       return "Error adding interface: " + e.getMessage();
@@ -323,7 +316,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             IUsage usage = getModelElementFactory().createUsage();
             usage.setFrom(source.getModelElement());
             usage.setTo(target.getModelElement());
-            IDiagramElement connector = tryConnect(diagram, usage, source, target);
+            IDiagramElement connector = connectCentered(diagram, usage, source, target);
             if (connector == null) {
               // Component diagrams do not list the Usage connector type; a dependency stereotyped
               // <<use>> is the same UML relationship.
@@ -332,7 +325,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               dependency.setFrom(source.getModelElement());
               dependency.setTo(target.getModelElement());
               dependency.addStereotype(USE_STEREOTYPE);
-              connector = tryConnect(diagram, dependency, source, target);
+              connector = connectCentered(diagram, dependency, source, target);
               if (connector == null) {
                 dependency.delete();
                 return "Error adding required interface: Visual Paradigm could not draw the"
@@ -481,6 +474,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
                     portShape.getWidth(), portShape.getHeight(), PORT_SIZE, PORT_MAX);
             portShape.setBounds(portShape.getX(), portShape.getY(), size[0], size[1]);
             snapPorts(owner);
+            // a port's name is a detached label laid out where the caption was last reset, so
+            // reset the captions of all the owner's ports now that they sit on its edges
+            for (IShapeUIModel p : portsOf(owner)) {
+              p.resetCaption();
+            }
             portShape.bringToFront();
             IShapeUIModel up = parentShapeOf(owner);
             if (up != null && kindOf(up) == Kind.COMPONENT) {
@@ -761,10 +759,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     return shape.getWidth() > 0 && shape.getHeight() > 0;
   }
 
-  private static int[] rect(IDiagramElement de) {
-    return new int[] {de.getX(), de.getY(), de.getWidth(), de.getHeight()};
-  }
-
   private static String bounds(IDiagramElement de) {
     return de.getX() + "," + de.getY() + " " + de.getWidth() + "x" + de.getHeight();
   }
@@ -783,47 +777,5 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   private void showCaption(IShapeUIModel shape) {
     shape.resetCaption();
     fitShape(shape);
-  }
-
-  /** {@link #connectCentered}, or null when VP refuses the connector for this diagram. */
-  private IDiagramElement tryConnect(
-      IDiagramUIModel diagram, IRelationship model, IShapeUIModel from, IShapeUIModel to) {
-    try {
-      return connectCentered(diagram, model, from, to);
-    } catch (RuntimeException e) {
-      return null;
-    }
-  }
-
-  private IDiagramElement connectCentered(
-      IDiagramUIModel diagram, IModelElement model, IShapeUIModel from, IShapeUIModel to) {
-    // Explicit center points: with null points VP anchors both ends at the shapes' top-left
-    // corners, so arrows hit the corners instead of the shapes.
-    Point[] points = {center(from), center(to)};
-    IDiagramElement connector =
-        getDiagramManager().createConnector(diagram, model, from, to, points);
-    if (connector instanceof IConnectorUIModel) {
-      centerConnector((IConnectorUIModel) connector);
-    }
-    return connector;
-  }
-
-  /** Re-anchor a connector to the current centers of its two shapes. */
-  private static void centerConnector(IConnectorUIModel connector) {
-    IShapeUIModel from = connector.getFromShape();
-    IShapeUIModel to = connector.getToShape();
-    if (from == null || to == null) {
-      return;
-    }
-    connector.clearPoints();
-    connector.addPoint(center(from));
-    connector.addPoint(center(to));
-    connector.setUseFromShapeCenter(true);
-    connector.setUseToShapeCenter(true);
-    connector.setRequestRebuild(true);
-  }
-
-  private static Point center(IDiagramElement shape) {
-    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
   }
 }

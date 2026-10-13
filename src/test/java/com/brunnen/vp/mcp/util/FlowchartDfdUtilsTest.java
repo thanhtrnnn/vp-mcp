@@ -237,4 +237,22 @@ public class FlowchartDfdUtilsTest {
         new Point(FlowchartDfdUtils.MIN_MARGIN, FlowchartDfdUtils.MIN_MARGIN),
         FlowchartDfdUtils.placeShape(-1, -1, new Point(100, 20), 400, 80));
   }
+
+  @Test
+  public void testNextDfdIdLevelZero() {
+    assertEquals("2.0", FlowchartDfdUtils.nextDfdId(Arrays.asList("1.0"), ""));
+    assertEquals("4.0", FlowchartDfdUtils.nextDfdId(Arrays.asList("1.0", "3.0", "2.0"), ""));
+    assertEquals(
+        "child numbers still count up",
+        "1.3",
+        FlowchartDfdUtils.nextDfdId(Arrays.asList("1.1", "1.2"), ""));
+  }
+
+  @Test
+  public void testStoreIdNumber() {
+    assertEquals("1", FlowchartDfdUtils.storeIdNumber("D1"));
+    assertEquals("12", FlowchartDfdUtils.storeIdNumber(" d12 "));
+    assertEquals("1", FlowchartDfdUtils.storeIdNumber("1"));
+    assertEquals("DB", FlowchartDfdUtils.storeIdNumber("DB"));
+  }
 }

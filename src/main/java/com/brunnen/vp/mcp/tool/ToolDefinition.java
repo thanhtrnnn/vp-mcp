@@ -93,11 +93,21 @@ public class ToolDefinition {
   }
 
   private static Object getDefaultValue(Class<?> type) {
-    if (type == int.class) return 0;
-    if (type == long.class) return 0L;
-    if (type == boolean.class) return false;
-    if (type == double.class) return 0.0;
-    if (type == float.class) return 0.0f;
+    if (type == int.class) {
+      return 0;
+    }
+    if (type == long.class) {
+      return 0L;
+    }
+    if (type == boolean.class) {
+      return false;
+    }
+    if (type == double.class) {
+      return 0.0;
+    }
+    if (type == float.class) {
+      return 0.0f;
+    }
     return null;
   }
 

@@ -2,7 +2,6 @@ package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.ActivityDiagramUtils;
-import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IActivityDiagramUIModel;
 import com.vp.plugin.diagram.IBaseDiagramElement;
@@ -18,6 +17,7 @@ import com.vp.plugin.diagram.shape.IActivitySwimlane2CompartmentUIModel;
 import com.vp.plugin.diagram.shape.IActivitySwimlane2NewUIModel;
 import com.vp.plugin.diagram.shape.IBranchShapeUIModel;
 import com.vp.plugin.diagram.shape.IJoinNodeUIModel;
+import com.vp.plugin.diagram.shape.IObjectNodeUIModel;
 import com.vp.plugin.model.IActivityAction;
 import com.vp.plugin.model.IActivityFinalNode;
 import com.vp.plugin.model.IActivityObjectFlow;
@@ -32,6 +32,7 @@ import com.vp.plugin.model.IJoinNode;
 import com.vp.plugin.model.IMergeNode;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.IObjectNode;
+import com.vp.plugin.model.IState2;
 import com.vp.plugin.model.factory.IModelElementFactory;
 import java.awt.Point;
 import java.util.ArrayList;
@@ -76,6 +77,15 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
   /** Fallback box height when Visual Paradigm could not fit a box. */
   private static final int FALLBACK_BOX_HEIGHT = 40;
 
+  /** {@code IObjectNodeUIModel.setShowInStates} value that draws the [state] line. */
+  private static final int SHOW_IN_STATES = 1;
+
+  /** Ids of node shapes placed automatically (no x/y), which flows may move next to a source. */
+  private final java.util.Set<String> autoPlaced = new java.util.HashSet<>();
+
+  /** Lane body height requested per diagram id (addActivityPartition height or default). */
+  private final Map<String, Integer> laneHeights = new java.util.HashMap<>();
+
   /** A lane of the swimlane frame: its partition model, header shape and compartment shape. */
   private static final class Lane {
     private final IActivityPartition partition;
@@ -119,6 +129,7 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_ACTIVITY_DIAGRAM);
             diagram.setName(diagramName);
             diagram.setAutoFitShapesSize(true);
+            useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
             return "Created activity diagram: " + diagramName;
           });
@@ -153,9 +164,6 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       return runOnEdt(
           () -> {
             IActivityDiagramUIModel diagram = findActivityDiagram(diagramName);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
             if (!ActivityDiagramUtils.isValidName(partitionName)) {
               return "Partition name must not be empty";
             }
@@ -275,9 +283,6 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       return runOnEdt(
           () -> {
             IActivityDiagramUIModel diagram = findActivityDiagram(diagramName);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
             if (!ActivityDiagramUtils.isValidName(actionName)) {
               return "Action name must not be empty";
             }
@@ -344,9 +349,6 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       return runOnEdt(
           () -> {
             IActivityDiagramUIModel diagram = findActivityDiagram(diagramName);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
             String nodeKind = ActivityDiagramUtils.parseControlNodeKind(kind);
             if (nodeKind == null) {
               return "Unknown control node kind '"
@@ -416,6 +418,7 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
    * @param diagramName the activity diagram
    * @param objectName the object name, unique on the diagram
    * @param state the object state, or empty for none
+   * @param partitionName the lane, or empty for none
    * @param x explicit left (&gt;0), otherwise auto-placed
    * @param y explicit top (&gt;0), otherwise auto-placed
    * @return a human-readable result or error message
@@ -426,18 +429,16 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add an object node (rectangle, fitted to its text) to an activity diagram. state is"
               + " shown under the name as [state] (\"\" = none). objectName is the handle used by"
               + " addActivityFlow and must be unique on the diagram; flows to/from it are object"
-              + " flows. x/y (>0) place its top-left corner explicitly, and a node placed inside a"
-              + " swimlane lane joins that lane; otherwise it goes one row below the lowest node"
-              + " outside the lanes")
+              + " flows. partitionName puts it in that swimlane lane (\"\" = no lane, or the lane"
+              + " under an explicit x/y). x/y (>0) place its top-left corner explicitly; otherwise"
+              + " it goes one row below the lowest node and moves next to the node of its first"
+              + " incoming flow")
   public String addActivityObjectNode(
-      String diagramName, String objectName, String state, int x, int y) {
+      String diagramName, String objectName, String state, String partitionName, int x, int y) {
     try {
       return runOnEdt(
           () -> {
             IActivityDiagramUIModel diagram = findActivityDiagram(diagramName);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
             if (!ActivityDiagramUtils.isValidName(objectName)) {
               return "Object name must not be empty";
             }
@@ -445,26 +446,39 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
             if (findNodeShape(diagram, name) != null) {
               return duplicateNodeMessage(name);
             }
-            Lane lane = x > 0 && y > 0 ? laneAt(diagram, x, y) : null;
+            Lane lane = null;
+            if (isSet(partitionName)) {
+              lane = findLaneOnDiagram(diagram, partitionName.trim());
+              if (lane == null) {
+                return "Partition not on diagram: " + partitionName.trim();
+              }
+            } else if (x > 0 && y > 0) {
+              lane = laneAt(diagram, x, y);
+            }
 
             IObjectNode node = getModelElementFactory().createObjectNode();
+            String stateName = ActivityDiagramUtils.normalizeGuard(state);
+            if (stateName != null) {
+              // UML "in state": VP draws the object's states as [state] under its name
+              IState2 inState = getModelElementFactory().createState2();
+              inState.setName(stateName);
+              node.addInState(inState);
+            }
             IShapeUIModel shape = createNodeShape(diagram, node, name, lane);
             if (shape == null) {
               return "Error adding object node: Visual Paradigm did not create a shape for " + name;
             }
-            // resetCaption() renders the model name, so the [state] line goes on afterwards.
-            resetCaption(shape);
-            String caption = ActivityDiagramUtils.buildObjectNodeCaption(name, state);
-            if (caption != null) {
-              shape.setCustomText(caption);
+            if (stateName != null && shape instanceof IObjectNodeUIModel) {
+              ((IObjectNodeUIModel) shape).setShowInStates(SHOW_IN_STATES);
             }
-            fitBox(shape, caption != null ? caption : name);
+            resetCaption(shape);
+            fitBox(shape, stateName != null ? name + " [" + stateName + "]" : name);
             place(diagram, shape, lane, x, y);
 
             return "Added object node '"
                 + name
                 + "'"
-                + (caption != null ? " " + ActivityDiagramUtils.formatGuard(state) : "")
+                + (stateName != null ? " [" + stateName + "]" : "")
                 + " to diagram '"
                 + diagramName
                 + "'"
@@ -492,15 +506,15 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
           "Connect two nodes of an activity diagram (by action/control/object node name) with a"
               + " flow arrow. guard is the condition shown as [guard] on the arrow, typically on"
               + " flows leaving a decision (\"\" = none; brackets optional). The flow is an object"
-              + " flow when either end is an object node, otherwise a control flow")
+              + " flow when either end is an object node, otherwise a control flow. A target that"
+              + " was auto-placed (no x/y) and has no incoming flow yet is moved one row below the"
+              + " source; branches of the same fork/decision in one lane are laid side by side,"
+              + " and a join moves below its lowest incoming branch")
   public String addActivityFlow(String diagramName, String fromNode, String toNode, String guard) {
     try {
       return runOnEdt(
           () -> {
             IActivityDiagramUIModel diagram = findActivityDiagram(diagramName);
-            if (diagram == null) {
-              return "Diagram not found: " + diagramName;
-            }
             IShapeUIModel from = isSet(fromNode) ? findNodeShape(diagram, fromNode.trim()) : null;
             if (from == null) {
               return "Node not on diagram: " + fromNode;
@@ -543,15 +557,20 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
               flow = controlEdge;
             }
 
-            // Explicit center points: with null points Visual Paradigm anchors both ends at the
-            // shapes' top-left corners.
-            Point[] points = {center(from), center(to)};
-            IDiagramElement connector =
-                getDiagramManager().createConnector(diagram, flow, from, to, points);
-            if (connector instanceof IConnectorUIModel) {
-              centerConnector((IConnectorUIModel) connector);
+            // An auto-placed target moves next to its source before it is connected: below it,
+            // and beside the other branches of a fork/decision instead of under them.
+            String moved = placeAfter(diagram, from, to);
+            if (connectCentered(diagram, flow, from, to) == null) {
+              flow.delete();
+              return "Error adding flow: Visual Paradigm refused the connector";
             }
-            resetCaption(connector);
+            if (moved != null) {
+              rerouteFlows(diagram);
+            }
+            IDiagramElement created = findFlowConnector(from, flow);
+            if (created instanceof IConnectorUIModel) {
+              placeGuard((IConnectorUIModel) created);
+            }
 
             String suffix = condition == null ? "" : " " + ActivityDiagramUtils.formatGuard(guard);
             return "Added "
@@ -561,7 +580,8 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                 + "' -> '"
                 + toNode.trim()
                 + "'"
-                + suffix;
+                + suffix
+                + (moved != null ? "; moved '" + toNode.trim() + "' to " + moved : "");
           });
     } catch (Exception e) {
       return "Error adding flow: " + e.getMessage();
@@ -668,12 +688,265 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                   lowestNodeBottom(diagram, false, shape), ActivityDiagramUtils.FREE_TOP_Y);
     }
     shape.setBounds(px, py, width, height);
+    if (x <= 0 && y <= 0) {
+      autoPlaced.add(shape.getId());
+    }
     if (lane != null) {
       IActivitySwimlane2NewUIModel swimlane = findSwimlane(diagram);
       if (swimlane != null) {
         relayoutLanes(diagram, swimlane, 0);
       }
     }
+  }
+
+  /**
+   * Move an auto-placed flow target next to its source. An action or control node goes one row
+   * below the source, beside the other branches of the same source in its lane (parallel or
+   * alternative branches side by side); an object node goes beside its source on the source's row;
+   * a join goes below its lowest incoming branch. Nodes placed with explicit x/y and targets that
+   * already have an incoming flow (except joins) are left alone.
+   *
+   * @return the new bounds as text, or null when the target was not moved
+   */
+  private String placeAfter(IActivityDiagramUIModel diagram, IShapeUIModel from, IShapeUIModel to) {
+    if (!autoPlaced.contains(to.getId())) {
+      return null;
+    }
+    String toKind = kindOf(to.getModelElement());
+    List<IShapeUIModel> incoming = flowEnds(to, false);
+    boolean join = ActivityDiagramUtils.KIND_JOIN.equals(toKind);
+    if (!incoming.isEmpty() && !join) {
+      return null;
+    }
+    Lane lane = laneOf(diagram, to);
+    List<IShapeUIModel> row = new ArrayList<>();
+    int top;
+    int centerX;
+    if (ActivityDiagramUtils.KIND_OBJECT.equals(toKind)) {
+      // beside the producing action, so the control flow below it stays clear
+      top = from.getY() + (from.getHeight() - to.getHeight()) / 2;
+      centerX =
+          sameLane(diagram, from, lane)
+              ? from.getX() + from.getWidth() + ActivityDiagramUtils.BRANCH_GAP + to.getWidth() / 2
+              : laneCenter(lane, from);
+      row.add(to);
+    } else if (join) {
+      // below the lowest branch, centered under the branches of its own lane
+      incoming.add(from);
+      top = -1;
+      int sum = 0;
+      int count = 0;
+      for (IShapeUIModel branch : incoming) {
+        top = Math.max(top, branch.getY() + branch.getHeight() + ActivityDiagramUtils.ROW_GAP);
+        if (sameLane(diagram, branch, lane)) {
+          sum += branch.getX() + branch.getWidth() / 2;
+          count++;
+        }
+      }
+      centerX = count > 0 ? sum / count : laneCenter(lane, to);
+      row.add(to);
+    } else {
+      top = from.getY() + from.getHeight() + ActivityDiagramUtils.ROW_GAP;
+      centerX = lane != null ? laneCenter(lane, to) : from.getX() + from.getWidth() / 2;
+      for (IShapeUIModel sibling : flowEnds(from, true)) {
+        if (!sameShape(sibling, to)
+            && autoPlaced.contains(sibling.getId())
+            && !ActivityDiagramUtils.KIND_OBJECT.equals(kindOf(sibling.getModelElement()))
+            && sameLane(diagram, sibling, lane)) {
+          if (row.isEmpty()) {
+            top = sibling.getY(); // the branches of one source share a row
+          }
+          row.add(sibling);
+        }
+      }
+      row.sort((a, b) -> Integer.compare(a.getX(), b.getX()));
+      row.add(to);
+    }
+    top = clearRowTop(diagram, from, row, centerX, top);
+    arrangeRow(row, centerX, top);
+    if (lane != null) {
+      IActivitySwimlane2NewUIModel swimlane = findSwimlane(diagram);
+      if (swimlane != null) {
+        relayoutLanes(diagram, swimlane, 0);
+        Lane relaid = laneOf(diagram, to);
+        if (relaid != null && row.size() > 1) {
+          arrangeRow(row, laneCenter(relaid, to), top);
+        }
+      }
+    }
+    if (row.size() > 1) {
+      spanBar(diagram, from, row);
+    }
+    if (join) {
+      spanBar(diagram, to, incoming);
+    }
+    for (IShapeUIModel member : row) {
+      refreshControlNodeCaption(member);
+    }
+    return bounds(to);
+  }
+
+  /** Lay shapes side by side in one row centered on centerX, all with the same top. */
+  private static void arrangeRow(List<IShapeUIModel> row, int centerX, int top) {
+    int[] widths = new int[row.size()];
+    for (int i = 0; i < widths.length; i++) {
+      widths[i] = row.get(i).getWidth();
+    }
+    int[] xs = ActivityDiagramUtils.rowPositions(widths, centerX, ActivityDiagramUtils.BRANCH_GAP);
+    for (int i = 0; i < xs.length; i++) {
+      IShapeUIModel shape = row.get(i);
+      shape.setBounds(
+          Math.max(ActivityDiagramUtils.MIN_X, xs[i]), top, shape.getWidth(), shape.getHeight());
+    }
+  }
+
+  /**
+   * The first top at or below {@code top} where the row (centered on centerX) does not collide with
+   * a placed node of its lane. Auto-placed nodes still waiting for their first incoming flow do not
+   * block: they move once they are connected.
+   */
+  private int clearRowTop(
+      IActivityDiagramUIModel diagram,
+      IShapeUIModel from,
+      List<IShapeUIModel> row,
+      int centerX,
+      int top) {
+    int height = 0;
+    int width = -ActivityDiagramUtils.BRANCH_GAP;
+    for (IShapeUIModel member : row) {
+      height = Math.max(height, member.getHeight());
+      width += member.getWidth() + ActivityDiagramUtils.BRANCH_GAP;
+    }
+    int left = centerX - width / 2 - ActivityDiagramUtils.BRANCH_GAP;
+    int right = centerX + width / 2 + ActivityDiagramUtils.BRANCH_GAP;
+    Lane lane = laneOf(diagram, row.get(row.size() - 1));
+    int y = top;
+    for (int guard = 0; guard < 50; guard++) {
+      int blockedUntil = -1;
+      for (IShapeUIModel other : nodeShapes(diagram)) {
+        if (containsShape(row, other)
+            || !sameLane(diagram, other, lane)
+            || (!sameShape(other, from) && isFloating(other))) {
+          continue;
+        }
+        boolean verticalHit = other.getY() < y + height && y < other.getY() + other.getHeight();
+        boolean horizontalHit = other.getX() < right && left < other.getX() + other.getWidth();
+        if (verticalHit && horizontalHit) {
+          blockedUntil =
+              Math.max(
+                  blockedUntil, other.getY() + other.getHeight() + ActivityDiagramUtils.ROW_GAP);
+        }
+      }
+      if (blockedUntil < 0) {
+        return y;
+      }
+      y = blockedUntil;
+    }
+    return y;
+  }
+
+  /** The connector drawing {@code flow} among the outgoing connectors of its source shape. */
+  private static IDiagramElement findFlowConnector(IShapeUIModel from, IModelElement flow) {
+    IConnectorUIModel[] outgoing = from.toFromConnectorArray();
+    if (outgoing != null) {
+      for (IConnectorUIModel c : outgoing) {
+        if (c.getModelElement() != null && c.getModelElement().getId().equals(flow.getId())) {
+          return c;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** An auto-placed node with no incoming flow yet: a placeholder until it is connected. */
+  private boolean isFloating(IShapeUIModel node) {
+    return autoPlaced.contains(node.getId()) && flowEnds(node, false).isEmpty();
+  }
+
+  /**
+   * Widen a fork/join bar so it spans the centers of the branches in its own lane (branches in
+   * other lanes are reached by slanted flows; the bar never grows past its lane).
+   */
+  private void spanBar(
+      IActivityDiagramUIModel diagram, IShapeUIModel bar, List<IShapeUIModel> branches) {
+    if (!ActivityDiagramUtils.isBar(kindOf(bar.getModelElement()))) {
+      return;
+    }
+    Lane lane = laneOf(diagram, bar);
+    int left = Integer.MAX_VALUE;
+    int right = Integer.MIN_VALUE;
+    int count = 0;
+    for (IShapeUIModel branch : branches) {
+      if (sameLane(diagram, branch, lane)) {
+        int c = branch.getX() + branch.getWidth() / 2;
+        left = Math.min(left, c);
+        right = Math.max(right, c);
+        count++;
+      }
+    }
+    if (count < 2) {
+      return;
+    }
+    int margin = 30;
+    int newLeft = Math.min(bar.getX(), left - margin);
+    int newRight = Math.max(bar.getX() + bar.getWidth(), right + margin);
+    if (lane != null) {
+      newLeft = Math.max(newLeft, lane.header.getX() + ActivityDiagramUtils.LANE_PADDING);
+      newRight =
+          Math.min(
+              newRight,
+              lane.header.getX() + lane.header.getWidth() - ActivityDiagramUtils.LANE_PADDING);
+    }
+    if (newRight > newLeft) {
+      bar.setBounds(newLeft, bar.getY(), newRight - newLeft, bar.getHeight());
+    }
+  }
+
+  /** Source shapes of a node's incoming flows, or target shapes of its outgoing flows. */
+  private static List<IShapeUIModel> flowEnds(IShapeUIModel node, boolean outgoing) {
+    List<IShapeUIModel> ends = new ArrayList<>();
+    IConnectorUIModel[] connectors =
+        outgoing ? node.toFromConnectorArray() : node.toToConnectorArray();
+    if (connectors != null) {
+      for (IConnectorUIModel c : connectors) {
+        IModelElement model = c.getModelElement();
+        IShapeUIModel end = outgoing ? c.getToShape() : c.getFromShape();
+        if (end != null
+            && (model instanceof IControlFlow || model instanceof IActivityObjectFlow)
+            && !containsShape(ends, end)) {
+          ends.add(end);
+        }
+      }
+    }
+    return ends;
+  }
+
+  /** The lane whose compartment holds the shape, or null for a node outside the swimlane. */
+  private Lane laneOf(IActivityDiagramUIModel diagram, IShapeUIModel shape) {
+    IDiagramElement parent = shape.getParent();
+    IActivitySwimlane2NewUIModel swimlane = findSwimlane(diagram);
+    if (parent == null || swimlane == null) {
+      return null;
+    }
+    for (Lane lane : lanesOf(diagram, swimlane)) {
+      if (lane.cell.getId().equals(parent.getId())) {
+        return lane;
+      }
+    }
+    return null;
+  }
+
+  private boolean sameLane(IActivityDiagramUIModel diagram, IShapeUIModel shape, Lane lane) {
+    Lane other = laneOf(diagram, shape);
+    return lane == null
+        ? other == null
+        : other != null && lane.cell.getId().equals(other.cell.getId());
+  }
+
+  private static int laneCenter(Lane lane, IShapeUIModel fallback) {
+    return lane != null
+        ? lane.header.getX() + lane.header.getWidth() / 2
+        : fallback.getX() + fallback.getWidth() / 2;
   }
 
   /** Center line for nodes outside the swimlane: right of the frame, or the default column. */
@@ -772,12 +1045,15 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     int contentTop = top + headerHeight;
 
     List<List<IShapeUIModel>> children = new ArrayList<>();
-    int bodyHeight = minBodyHeight;
+    // Lanes keep the requested height (or the default) and otherwise follow their content, so
+    // they shrink again when flows pull auto-placed nodes up.
+    int requested = Math.max(minBodyHeight, laneHeights.getOrDefault(diagram.getId(), 0));
+    laneHeights.put(diagram.getId(), requested);
+    int bodyHeight = requested > 0 ? requested : ActivityDiagramUtils.DEFAULT_LANE_HEIGHT;
     int lowest = -1;
     for (Lane lane : lanes) {
       List<IShapeUIModel> laneChildren = laneChildren(diagram, lane);
       children.add(laneChildren);
-      bodyHeight = Math.max(bodyHeight, lane.cell.getHeight());
       for (IShapeUIModel child : laneChildren) {
         lowest = Math.max(lowest, child.getY() + child.getHeight());
       }
@@ -794,11 +1070,19 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       // Capture child bounds before moving the lane: Visual Paradigm may drag children along with
       // their compartment, so the target positions are computed from the old geometry.
       int[][] childBounds = new int[laneChildren.size()][];
+      int minLeft = Integer.MAX_VALUE;
+      int maxRight = Integer.MIN_VALUE;
       for (int c = 0; c < laneChildren.size(); c++) {
         IShapeUIModel child = laneChildren.get(c);
         childBounds[c] =
             new int[] {child.getX(), child.getY(), child.getWidth(), child.getHeight()};
         widest = Math.max(widest, child.getWidth());
+        minLeft = Math.min(minLeft, child.getX());
+        maxRight = Math.max(maxRight, child.getX() + child.getWidth());
+      }
+      // branches laid side by side need the whole row to fit, not just the widest node
+      if (maxRight > minLeft) {
+        widest = Math.max(widest, maxRight - minLeft);
       }
       int laneWidth = ActivityDiagramUtils.requiredLaneWidth(oldWidth, widest);
 
@@ -1014,34 +1298,51 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       if (de instanceof IConnectorUIModel
           && (model instanceof IControlFlow || model instanceof IActivityObjectFlow)) {
         centerConnector((IConnectorUIModel) de);
+        placeGuard((IConnectorUIModel) de);
       }
     }
   }
 
-  /** Re-anchor a connector to the current centers of its two shapes. */
-  private static void centerConnector(IConnectorUIModel connector) {
-    IShapeUIModel from = connector.getFromShape();
-    IShapeUIModel to = connector.getToShape();
-    if (from == null || to == null) {
+  /**
+   * Put a flow's [guard] next to its source end, beside the line (VP centers it on the flow, where
+   * guards of the branches leaving one decision pile up and sit on the next node).
+   */
+  private static void placeGuard(IConnectorUIModel flow) {
+    IModelElement model = flow.getModelElement();
+    String guard =
+        model instanceof IControlFlow
+            ? ((IControlFlow) model).getGuard()
+            : model instanceof IActivityObjectFlow
+                ? ((IActivityObjectFlow) model).getGuard()
+                : null;
+    ICaptionUIModel caption = flow.getCaptionUIModel();
+    IShapeUIModel from = flow.getFromShape();
+    IShapeUIModel to = flow.getToShape();
+    if (guard == null || guard.trim().isEmpty() || caption == null || from == null || to == null) {
       return;
     }
-    connector.clearPoints();
-    connector.addPoint(center(from));
-    connector.addPoint(center(to));
-    connector.setUseFromShapeCenter(true);
-    connector.setUseToShapeCenter(true);
-    connector.setRequestRebuild(true);
-  }
-
-  private static Point center(IDiagramElement shape) {
-    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
+    Point[] points = flow.getPoints();
+    Point start = points != null && points.length > 0 ? points[0] : center(from);
+    Point next = points != null && points.length > 1 ? points[1] : center(to);
+    double len = Math.max(1, start.distance(next));
+    double ux = (next.x - start.x) / len;
+    double uy = (next.y - start.y) / len;
+    double along = Math.min(18, len / 3);
+    double ax = start.x + ux * along;
+    double ay = start.y + uy * along;
+    int w =
+        caption.getWidth() > 0 ? caption.getWidth() : ActivityDiagramUtils.estimateTextWidth(guard);
+    int h = caption.getHeight() > 0 ? caption.getHeight() : 14;
+    // beside the line, on the side the flow turns to (right of a flow going down or right)
+    int x = ux < -0.2 ? (int) Math.round(ax - w - 6) : (int) Math.round(ax + 6);
+    int y = (int) Math.round(ay - h / 2.0);
+    caption.setBounds(x, y, w, h);
   }
 
   // --- Lookups ---
 
   private IActivityDiagramUIModel findActivityDiagram(String diagramName) {
-    return (IActivityDiagramUIModel)
-        DiagramUtils.findDiagramByName(diagramName, IActivityDiagramUIModel.class);
+    return findDiagram(diagramName, IActivityDiagramUIModel.class, "activity");
   }
 
   /**
@@ -1171,6 +1472,16 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     resetCaption(shape);
     if (!ActivityDiagramUtils.showsLabel(kind)) {
       hideCaption(shape);
+    } else if (ActivityDiagramUtils.KIND_DECISION.equals(kind)) {
+      // VP puts the question under the diamond, where the outgoing flow crosses it
+      ICaptionUIModel caption = shape.getCaptionUIModel();
+      if (caption != null && caption.getWidth() > 0) {
+        caption.setBounds(
+            shape.getX() - caption.getWidth() - 6,
+            shape.getY() + shape.getHeight() / 2 - caption.getHeight() / 2,
+            caption.getWidth(),
+            caption.getHeight());
+      }
     }
   }
 

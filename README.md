@@ -54,8 +54,8 @@ The main tools per diagram family are listed below. Project, layout and export h
 ##### ERD - Entity Relationship Diagram (7 tools)
 - **createErd(diagramName)**: Create new ER diagrams
 - **addTable(diagramName, tableName)**: Add tables to ER diagrams
-- **addColumn(tableName, columnName, columnType, length, scale, isPrimaryKey, isNullable)**: Add columns
-- **addForeignKey(diagramName, fromTable, toTable, fromColumn, toColumn, relationshipName)**: Add FK relationships
+- **addColumn(diagramName, tableName, columnName, columnType, length, scale, isPrimaryKey, isNullable)**: Add columns to a table shown on the diagram (SQL Server types such as nvarchar/datetime are mapped to the project database's types)
+- **addForeignKey(diagramName, fromTable, toTable, fromColumn, toColumn, relationshipName)**: Add an FK: fromTable (child) column fromColumn references toTable (parent)
 - **addTableRelationship(diagramName, fromTable, toTable, type, fromMultiplicity, toMultiplicity)**: Add identifying/non-identifying relationships
 - **generateDdl(diagramName)**: Generate CREATE TABLE DDL statements
 - **generateErdReport(diagramName)**: Generate ERD analysis report
@@ -66,7 +66,7 @@ The main tools per diagram family are listed below. Project, layout and export h
 - **addActivation(diagramName, lifelineName)**: Add activation bars
 - **addMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber, messageType)**: Add sync/async messages
 - **addReturnMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber)**: Add return messages
-- **addCombinedFragment(diagramName, operator, guard, coveredLifelines)**: Add alt/opt/loop fragments
+- **addCombinedFragment(diagramName, operator, guard, coveredLifelines, fromSeq, toSeq, operandStarts)**: Add an alt/opt/loop/break/par frame around messages fromSeq..toSeq (guards `a|else` give one operand each)
 - **generateSequenceReport(diagramName)**: Generate sequence diagram analysis report
 
 ##### Activity Diagram (6 tools)
@@ -74,13 +74,13 @@ The main tools per diagram family are listed below. Project, layout and export h
 - **addActivityPartition(diagramName, partitionName, x, y, width, height)**: Add a vertical swimlane lane
 - **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text
 - **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes
-- **addActivityObjectNode(diagramName, objectName, state, x, y)**: Add an object node with optional [state]
+- **addActivityObjectNode(diagramName, objectName, state, partitionName, x, y)**: Add an object node with optional [state], optionally in a lane
 - **addActivityFlow(diagramName, fromNode, toNode, guard)**: Add a control or object flow with optional [guard]
 
 ##### Component Diagram (7 tools)
 - **createComponentDiagram(diagramName)**: Create new component diagrams
 - **addComponent(diagramName, componentName, stereotype, parentComponent, x, y)**: Add (nested) components
-- **addComponentInterface(diagramName, interfaceName, x, y)**: Add an interface (ball notation)
+- **addComponentInterface(diagramName, interfaceName, x, y)**: Add an interface (an `<<interface>>` box)
 - **addProvidedInterface(diagramName, componentName, interfaceName)**: Component provides an interface
 - **addRequiredInterface(diagramName, componentName, interfaceName)**: Component requires an interface
 - **addComponentDependency(diagramName, fromComponent, toComponent, stereotype)**: Add a dependency

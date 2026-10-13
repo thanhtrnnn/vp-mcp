@@ -56,6 +56,12 @@ import java.util.List;
  */
 public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
+  /** Ids of shapes placed automatically; a decision's later branches may move them aside. */
+  private final java.util.Set<String> autoPlaced = new java.util.HashSet<>();
+
+  /** Horizontal gap between a decision and a branch placed beside it. */
+  private static final int BRANCH_GAP = 80;
+
   /** Flowchart auto-placement: one column top to bottom, wrapping after seven shapes. */
   private static final Grid FLOWCHART_GRID = new Grid(200, 60, 280, 110, 7);
 
@@ -93,6 +99,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
                 dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_FLOWCHART);
             diagram.setName(diagramName);
             diagram.setAutoFitShapesSize(true);
+            useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
             return "Created flowchart: " + diagramName;
           });
@@ -183,7 +190,11 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             if (caption != null) {
               flow.setName(caption);
             }
-            connectCentered(diagram, flow, from, to);
+            String moved = placeBranch(diagram, from, to);
+            if (connectCentered(diagram, flow, from, to) == null) {
+              flow.delete();
+              return "Error adding flowchart flow: Visual Paradigm did not create the connector";
+            }
 
             String hint =
                 caption == null && from.getModelElement() instanceof IFlowchartDecision
@@ -195,7 +206,8 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
                 + toShape
                 + "'"
                 + FlowchartDfdUtils.labelSuffix(caption)
-                + hint;
+                + hint
+                + (moved != null ? "; moved '" + toShape + "' beside the decision" + moved : "");
           });
     } catch (Exception e) {
       return "Error adding flowchart flow: " + e.getMessage();
@@ -232,6 +244,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             }
             diagram.setName(diagramName);
             diagram.setAutoFitShapesSize(true);
+            useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
             return "Created " + parsed.label() + " data flow diagram: " + diagramName;
           });
@@ -244,8 +257,9 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       name = "addDfdProcess",
       description =
           "Add a process to a data flow diagram. processId is the number shown on the process "
-              + "(e.g. \"1\", \"2\" or \"1.1\" on a child diagram); pass \"\" to continue the "
-              + "diagram's numbering. The process can be referenced by name or ID in "
+              + "(e.g. \"1\", \"2\", \"1.0\" or \"1.1\" on a child diagram); pass \"\" to continue "
+              + "the diagram's numbering (1.0 continues with 2.0). The process can be referenced "
+              + "by name or ID in "
               + "addDfdDataFlow. x/y (>0) set its top-left corner, otherwise it is auto-placed in "
               + "the center column")
   public String addDfdProcess(
@@ -267,7 +281,8 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       name = "addDfdDataStore",
       description =
           "Add a data store to a data flow diagram. storeId is the label shown on the store "
-              + "(e.g. \"D1\"); pass \"\" to continue the diagram's numbering. The store can be "
+              + "(\"D1\" or \"1\": Visual Paradigm prints the D itself); pass \"\" to continue the "
+              + "diagram's numbering. The store can be "
               + "referenced by name or ID in addDfdDataFlow. x/y (>0) set its top-left corner, "
               + "otherwise it is auto-placed in the right column")
   public String addDfdDataStore(
@@ -316,7 +331,10 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             if (caption != null) {
               flow.setName(caption);
             }
-            connectCentered(diagram, flow, from, to);
+            if (connectCentered(diagram, flow, from, to) == null) {
+              flow.delete();
+              return "Error adding data flow: Visual Paradigm did not create the connector";
+            }
             return "Added data flow '"
                 + fromElement
                 + "' -> '"
@@ -355,10 +373,11 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             String id = null;
             if (role != DfdRole.EXTERNAL_ENTITY) {
               id = FlowchartDfdUtils.normalizeLabel(elementId);
+              if (role == DfdRole.DATA_STORE) {
+                id = FlowchartDfdUtils.storeIdNumber(id); // VP prints the "D" itself
+              }
               if (id == null) {
-                id =
-                    FlowchartDfdUtils.nextDfdId(
-                        dfdIdsOf(diagram, role), role == DfdRole.PROCESS ? "" : "D");
+                id = FlowchartDfdUtils.nextDfdId(dfdIdsOf(diagram, role), "");
               } else if (findDfdShapeById(diagram, id) != null) {
                 return "ID '" + id + "' is already used on data flow diagram '" + diagramName + "'";
               }
@@ -376,7 +395,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
                 + " '"
                 + name
                 + "'"
-                + (id == null ? "" : " (ID " + id + ")")
+                + (id == null ? "" : " (ID " + (role == DfdRole.DATA_STORE ? "D" : "") + id + ")")
                 + " to data flow diagram '"
                 + diagramName
                 + "'"
@@ -407,9 +426,21 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     applyBlueFill(de);
     int width = de.getWidth();
     int height = de.getHeight();
+    // fit-size hugs the text: a diamond needs room around it (its text would otherwise run to
+    // the vertices), and processes / data symbols get some side padding
+    if (model instanceof IFlowchartDecision) {
+      width = (int) Math.round(width * 1.5);
+      height = (int) Math.round(height * 1.5);
+    } else if (dfdRoleOf(model) == DfdRole.PROCESS
+        || model instanceof com.vp.plugin.model.IFlowchartData) {
+      width += 16;
+    }
     Point autoCenter = FlowchartDfdUtils.freeCellCenter(grid, occupied);
     Point topLeft = FlowchartDfdUtils.placeShape(x, y, autoCenter, width, height);
     de.setBounds(topLeft.x, topLeft.y, width, height);
+    if (x <= 0 && y <= 0) {
+      autoPlaced.add(de.getId());
+    }
     // Flowchart shapes keep their caption where it was laid out at creation (the diagram origin);
     // reset it again so it is laid out inside the final bounds.
     de.resetCaption();
@@ -616,7 +647,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       if (dfdRoleOf(model) == role) {
         String id = dfIdOf(model);
         if (id != null && !id.trim().isEmpty()) {
-          ids.add(id.trim());
+          ids.add(role == DfdRole.DATA_STORE ? FlowchartDfdUtils.storeIdNumber(id) : id.trim());
         }
       }
     }
@@ -637,8 +668,17 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       return null;
     }
     for (IShapeUIModel shape : shapesOf(diagram)) {
-      String shapeId = dfIdOf(shape.getModelElement());
-      if (shapeId != null && id.equals(shapeId.trim())) {
+      IModelElement model = shape.getModelElement();
+      String shapeId = dfIdOf(model);
+      if (shapeId == null) {
+        continue;
+      }
+      if (id.equals(shapeId.trim())) {
+        return shape;
+      }
+      // a data store is shown as "D" + its number: accept "D1" and "1"
+      if (dfdRoleOf(model) == DfdRole.DATA_STORE
+          && FlowchartDfdUtils.storeIdNumber(id).equals(FlowchartDfdUtils.storeIdNumber(shapeId))) {
         return shape;
       }
     }
@@ -711,28 +751,62 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
-   * Connect two shapes with explicit center points. With null points VP anchors both ends at the
-   * shapes' top-left corners, so arrowheads would hit the corners instead of the borders.
+   * The second and later branches of a decision go beside it instead of under the first branch: an
+   * auto-placed target that has no incoming flow yet moves right of the decision (then further
+   * right, below or left when that spot is taken), so the branches do not lie on one line.
+   *
+   * @return the new geometry as text, or null when the target stays where it is
    */
-  private void connectCentered(
-      IDiagramUIModel diagram, IModelElement model, IShapeUIModel from, IShapeUIModel to) {
-    Point[] points = {center(from), center(to)};
-    IDiagramElement connector =
-        getDiagramManager().createConnector(diagram, model, from, to, points);
-    if (connector == null) {
-      throw new IllegalStateException("Visual Paradigm did not create the connector");
+  private String placeBranch(IDiagramUIModel diagram, IShapeUIModel from, IShapeUIModel to) {
+    if (!(from.getModelElement() instanceof IFlowchartDecision)
+        || !autoPlaced.contains(to.getId())
+        || hasIncoming(to)
+        || !hasOutgoing(from)) {
+      return null;
     }
-    if (connector instanceof IConnectorUIModel) {
-      IConnectorUIModel c = (IConnectorUIModel) connector;
-      c.clearPoints();
-      c.addPoint(center(from));
-      c.addPoint(center(to));
-      c.setUseFromShapeCenter(true);
-      c.setUseToShapeCenter(true);
-      c.setRequestRebuild(true);
+    List<Rectangle> occupied = new ArrayList<>();
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (!sameShape(shape, to) && !(autoPlaced.contains(shape.getId()) && !hasIncoming(shape))) {
+        occupied.add(
+            new Rectangle(shape.getX(), shape.getY(), shape.getWidth(), shape.getHeight()));
+      }
     }
-    // Fresh connectors render without their label until the caption is reset.
-    connector.resetCaption();
+    int cy = from.getY() + from.getHeight() / 2;
+    int[][] candidates = {
+      {from.getX() + from.getWidth() + BRANCH_GAP, cy - to.getHeight() / 2},
+      {from.getX() + from.getWidth() + 2 * BRANCH_GAP + to.getWidth(), cy - to.getHeight() / 2},
+      {from.getX() - BRANCH_GAP - to.getWidth(), cy - to.getHeight() / 2}
+    };
+    for (int[] c : candidates) {
+      if (c[0] < 0) {
+        continue;
+      }
+      Rectangle r = new Rectangle(c[0] - 20, c[1] - 20, to.getWidth() + 40, to.getHeight() + 40);
+      boolean free = true;
+      for (Rectangle o : occupied) {
+        if (o.intersects(r)) {
+          free = false;
+          break;
+        }
+      }
+      if (free) {
+        to.setBounds(c[0], c[1], to.getWidth(), to.getHeight());
+        to.resetCaption();
+        recenterConnectorsOf(to);
+        return geometry(to);
+      }
+    }
+    return null;
+  }
+
+  private static boolean hasIncoming(IShapeUIModel shape) {
+    IConnectorUIModel[] in = shape.toToConnectorArray();
+    return in != null && in.length > 0;
+  }
+
+  private static boolean hasOutgoing(IShapeUIModel shape) {
+    IConnectorUIModel[] out = shape.toFromConnectorArray();
+    return out != null && out.length > 0;
   }
 
   /** Same shape? Compared by ID because VP may hand out a new wrapper per lookup. */
@@ -742,10 +816,6 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     }
     String idA = a.getId();
     return idA != null && idA.equals(b.getId());
-  }
-
-  private static Point center(IDiagramElement shape) {
-    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
   }
 
   private static String geometry(IDiagramElement de) {

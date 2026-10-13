@@ -4,7 +4,6 @@ import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.PackageObjectDiagramUtils;
 import com.vp.plugin.DiagramManager;
-import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -24,7 +23,6 @@ import com.vp.plugin.model.IPackage;
 import com.vp.plugin.model.IRelationship;
 import com.vp.plugin.model.ISimpleRelationship;
 import com.vp.plugin.model.ISlot;
-import java.awt.Point;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -145,14 +143,19 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
-            IPackage pkg = getModelElementFactory().createPackage();
-            pkg.setName(name);
-            if (parentShape != null) {
-              parentShape.getModelElement().addChild(pkg);
+            // A top-level package of that name is the same package (a new view of it); a
+            // nested one is created inside its parent before it is named.
+            IPackage pkg = parentShape == null ? findRootElement(name, IPackage.class) : null;
+            boolean reused = pkg != null;
+            if (!reused) {
+              pkg = getModelElementFactory().createPackage();
+              nameInOwner(pkg, parentShape != null ? parentShape.getModelElement() : null, name);
             }
             IDiagramElement de = getDiagramManager().createDiagramElement(diagram, pkg);
             if (!(de instanceof IShapeUIModel)) {
-              pkg.delete();
+              if (!reused) {
+                pkg.delete();
+              }
               return "Visual Paradigm did not create a package shape for: " + name;
             }
             IShapeUIModel shape = (IShapeUIModel) de;
@@ -291,8 +294,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             boolean created = cls == null;
             if (created) {
               cls = getModelElementFactory().createClass();
-              cls.setName(name);
-              pkg.addChild(cls);
+              nameInOwner(cls, pkg, name);
             }
             IDiagramElement de = getDiagramManager().createDiagramElement(diagram, cls);
             if (!(de instanceof IShapeUIModel)) {
@@ -598,7 +600,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
           + kind
           + " diagram";
     }
-    return "Diagram not found: " + diagramName;
+    return diagramNotFound(diagramName);
   }
 
   // --- Shape lookup (diagram-scoped, includes shapes nested in packages) ---
@@ -805,32 +807,6 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   // --- Connectors and captions ---
-
-  /**
-   * Create a connector anchored at the two shape centers. With null points Visual Paradigm pins
-   * both ends to the shapes' top-left corners, so the arrowheads hit the corners.
-   */
-  private IDiagramElement connectCentered(
-      IDiagramUIModel diagram, IModelElement model, IShapeUIModel from, IShapeUIModel to) {
-    Point[] points = {center(from), center(to)};
-    IDiagramElement connector =
-        getDiagramManager().createConnector(diagram, model, from, to, points);
-    if (connector instanceof IConnectorUIModel) {
-      IConnectorUIModel c = (IConnectorUIModel) connector;
-      c.clearPoints();
-      c.addPoint(center(from));
-      c.addPoint(center(to));
-      c.setUseFromShapeCenter(true);
-      c.setUseToShapeCenter(true);
-      c.setRequestRebuild(true);
-    }
-    resetCaption(connector);
-    return connector;
-  }
-
-  private static Point center(IDiagramElement shape) {
-    return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
-  }
 
   /**
    * Force Visual Paradigm to render the caption of a freshly created shape or connector; without

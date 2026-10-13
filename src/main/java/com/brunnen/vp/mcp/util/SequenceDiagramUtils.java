@@ -146,4 +146,58 @@ public final class SequenceDiagramUtils {
   public static boolean isValidLifelineName(String name) {
     return name != null && !name.trim().isEmpty() && name.trim().length() >= 2;
   }
+
+  /**
+   * First message number of each operand of a combined fragment that covers messages {@code from}
+   * to {@code to}. Explicit starts are used when given (one per operand after the first), otherwise
+   * the messages are shared out evenly.
+   *
+   * @param from first covered top-level message number
+   * @param to last covered top-level message number
+   * @param operands number of operands
+   * @param explicitStarts first message of operands 2..n, or null
+   * @return first message number of every operand (length {@code operands})
+   */
+  public static int[] operandStarts(int from, int to, int operands, int[] explicitStarts) {
+    int[] starts = new int[operands];
+    starts[0] = from;
+    int count = Math.max(1, to - from + 1);
+    for (int k = 1; k < operands; k++) {
+      if (explicitStarts != null && explicitStarts.length >= operands - 1) {
+        starts[k] = explicitStarts[k - 1];
+      } else {
+        starts[k] = from + (int) Math.round((double) k * count / operands);
+      }
+      starts[k] = Math.max(starts[k], starts[k - 1] + 1);
+    }
+    return starts;
+  }
+
+  /**
+   * Vertical layout of a combined fragment: {top, bottom, operand tops...}. The frame starts {@code
+   * topPad} above the first covered message (just below the previous message, whose label sits
+   * above its arrow), the first operand starts a header below the frame top (VP draws the operator
+   * tab there), later operands start {@code separatorPad} above their first message (the dashed
+   * separator between two message rows) and the frame ends {@code bottomPad} below the last
+   * message.
+   *
+   * @param operandFirstYs y of the first message of each operand
+   * @param lastY y of the last covered message
+   * @param header height VP gives the operator tab row
+   * @param topPad distance from the frame top to the first message
+   * @param separatorPad distance from an operand separator to the operand's first message
+   * @param bottomPad distance from the last message to the frame bottom
+   * @return {frame top, frame bottom, operand 1 top, operand 2 top, ...}
+   */
+  public static int[] fragmentLayout(
+      int[] operandFirstYs, int lastY, int header, int topPad, int separatorPad, int bottomPad) {
+    int[] layout = new int[2 + operandFirstYs.length];
+    layout[0] = operandFirstYs[0] - topPad;
+    layout[1] = lastY + bottomPad;
+    layout[2] = layout[0] + header;
+    for (int i = 1; i < operandFirstYs.length; i++) {
+      layout[2 + i] = operandFirstYs[i] - separatorPad;
+    }
+    return layout;
+  }
 }

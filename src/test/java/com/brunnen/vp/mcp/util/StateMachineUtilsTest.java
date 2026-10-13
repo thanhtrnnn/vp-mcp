@@ -30,25 +30,27 @@ public class StateMachineUtilsTest {
   }
 
   @Test
-  public void testBuildStateCaptionWithoutActions() {
-    assertNull(
-        "No action text means no custom caption",
-        StateMachineUtils.buildStateCaption("Approved", "", null, "   "));
+  public void testSelfLoopPointsLeaveAndReenterTheRightEdge() {
+    int[][] loop = StateMachineUtils.selfLoopPoints(100, 50, 120, 60);
+    int far = 220 + StateMachineUtils.SELF_LOOP_WIDTH;
+    assertEquals(4, loop.length);
+    assertEquals(220, loop[0][0]);
+    assertEquals(70, loop[0][1]);
+    assertEquals(far, loop[1][0]);
+    assertEquals(far, loop[2][0]);
+    assertEquals(90, loop[3][1]);
+    assertEquals(220, loop[3][0]);
   }
 
   @Test
-  public void testBuildStateCaptionWithActions() {
-    String caption =
-        StateMachineUtils.buildStateCaption("Exported", "writeExportedAt", "packGoods", "notify");
-    assertEquals(
-        "Caption lists name then entry/do/exit in UML order",
-        "Exported\nentry / writeExportedAt\ndo / packGoods\nexit / notify",
-        caption);
-  }
-
-  @Test
-  public void testBuildStateCaptionSkipsBlankCompartments() {
-    String caption = StateMachineUtils.buildStateCaption("Delivering", null, "trackParcel", "");
-    assertEquals("Only the do compartment is kept", "Delivering\ndo / trackParcel", caption);
+  public void testSpotNextToPrefersRightThenBelow() {
+    java.util.List<int[]> others = new java.util.ArrayList<>();
+    int[] source = {100, 100, 100, 40};
+    others.add(source);
+    int[] right = StateMachineUtils.spotNextTo(source, 80, 40, others, 110);
+    org.junit.Assert.assertArrayEquals(new int[] {310, 100}, right);
+    others.add(new int[] {310, 100, 80, 40}); // right is taken
+    int[] below = StateMachineUtils.spotNextTo(source, 80, 40, others, 110);
+    org.junit.Assert.assertArrayEquals(new int[] {110, 213}, below);
   }
 }

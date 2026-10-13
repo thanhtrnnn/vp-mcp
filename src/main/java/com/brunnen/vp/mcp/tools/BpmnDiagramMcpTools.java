@@ -65,6 +65,12 @@ import java.util.Set;
  */
 public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
 
+  /** Ids of flow nodes placed automatically; their first incoming flow moves them. */
+  private final Set<String> autoPlaced = new HashSet<>();
+
+  /** Vertical step between the branches of a gateway placed in the same lane. */
+  private static final int BRANCH_ROW = 90;
+
   /** Size of a task box before it is fitted to its text. */
   private static final int TASK_WIDTH = 110;
 
@@ -127,7 +133,9 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Visual Paradigm could not create a business process diagram";
             }
             diagram.setName(diagramName.trim());
-            diagram.setAutoFitShapesSize(true);
+            // No diagram-level auto-fit: VP would also fit pools and lanes (they shrink to their
+            // content as soon as a connector is drawn). Tasks are fitted one by one in sizeOf;
+            // pools and lanes are sized to enclose their content by relayoutPool.
             if (diagram instanceof IBusinessProcessDiagramUIModel) {
               // Draw the "X" in exclusive gateways so they cannot be mistaken for inclusive ones.
               ((IBusinessProcessDiagramUIModel) diagram).setDataBasedXORGatewayMarkersVisible(true);
@@ -395,7 +403,10 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addBpmnSequenceFlow",
       description =
           "Connect two elements of the same pool of a BPMN diagram with a sequence flow (solid "
-              + "arrow), referenced by name. condition labels the flow, e.g. \"Yes\"/\"No\" or "
+              + "arrow), referenced by name. A target that was auto-placed and has no incoming "
+              + "flow yet moves right of its source (on the source's row in the same lane, the "
+              + "next row down for a gateway's further branches, the source's column offset in "
+              + "another lane). condition labels the flow, e.g. \"Yes\"/\"No\" or "
               + "\"[in stock]\" on the branches of a gateway (pass \"\" for none). BPMN rules are "
               + "checked: no flow out of an end event, none into a start event, none across pools "
               + "(use addBpmnMessageFlow). If one end is a data object a data association (dotted "
@@ -459,6 +470,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
               return violation;
             }
 
+            String moved = placeAfterSource(diagram, from, to);
             IBPSequenceFlow flow = factory().createBPSequenceFlow();
             flow.setFrom(from.getModelElement());
             flow.setTo(to.getModelElement());
@@ -483,7 +495,8 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
                 + toElement
                 + "'"
                 + BpmnUtils.labelSuffix(caption)
-                + hint;
+                + hint
+                + (moved != null ? "; moved '" + toElement + "' next to its source" + moved : "");
           });
     } catch (Exception e) {
       return "Error adding sequence flow: " + e.getMessage();
@@ -612,6 +625,9 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
               pos = BpmnUtils.clampInto(pos.x, pos.y, size[1], body);
             }
             shape.setBounds(pos.x, pos.y, size[0], size[1]);
+            if (x <= 0 && y <= 0 && role != NodeRole.DATA_OBJECT) {
+              autoPlaced.add(shape.getId());
+            }
             style(shape, role);
             // Last: the caption is laid out for the final bounds (event/gateway names are
             // detached labels that would otherwise stay at the creation position).
@@ -1036,6 +1052,102 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     shape.setBounds(target.x, target.y, target.width, target.height);
     shape.resetCaption(); // pool/lane names are centered in their band: re-center them
     return true;
+  }
+
+  // --- Placement on connect ---
+
+  /**
+   * Move an auto-placed flow node that gets its first incoming sequence flow next to its source:
+   * right of it on the source's row when they share a lane (a gateway's later branches one row
+   * further down each), in its own lane at the source's next column otherwise. It is pushed right
+   * past placed nodes it would overlap; containers then grow around it.
+   *
+   * @return the new geometry as text, or null when the node stays where it is
+   */
+  private String placeAfterSource(
+      IBusinessProcessDiagramUIModel diagram, IShapeUIModel from, IShapeUIModel to) {
+    if (!autoPlaced.contains(to.getId()) || incomingFlows(to) > 0) {
+      return null;
+    }
+    IShapeUIModel container = parentShapeOf(to);
+    IShapeUIModel fromContainer = parentShapeOf(from);
+    boolean sameContainer =
+        container == null
+            ? fromContainer == null
+            : fromContainer != null && sameShape(container, fromContainer);
+    int x = from.getX() + from.getWidth() + BpmnUtils.NODE_GAP;
+    int y;
+    if (sameContainer) {
+      int branch = outgoingFlows(from); // flows already leaving the source
+      y = from.getY() + from.getHeight() / 2 - to.getHeight() / 2 + branch * BRANCH_ROW;
+    } else {
+      y = to.getY(); // keep its row in its own lane
+    }
+    Rectangle body = bodyOf(diagram, container);
+    if (container != null) {
+      y = Math.max(y, body.y + BpmnUtils.MIN_INSET);
+    }
+    // push right past placed nodes it would overlap (unconnected auto-placed ones do not count)
+    List<Rectangle> others = new ArrayList<>();
+    for (IShapeUIModel shape : allShapes(diagram)) {
+      NodeRole role = roleOf(shape);
+      if (role == null
+          || role == NodeRole.POOL
+          || role == NodeRole.LANE
+          || sameShape(shape, to)
+          || (autoPlaced.contains(shape.getId())
+              && incomingFlows(shape) == 0
+              && !sameShape(shape, from))) {
+        continue;
+      }
+      others.add(rect(shape));
+    }
+    for (int guard = 0; guard < 50; guard++) {
+      Rectangle candidate = new Rectangle(x - 10, y - 10, to.getWidth() + 20, to.getHeight() + 20);
+      Rectangle hit = null;
+      for (Rectangle r : others) {
+        if (r.intersects(candidate)) {
+          hit = r;
+          break;
+        }
+      }
+      if (hit == null) {
+        break;
+      }
+      x = hit.x + hit.width + BpmnUtils.NODE_GAP;
+    }
+    if (x == to.getX() && y == to.getY()) {
+      return null;
+    }
+    moveShapeTree(to, x - to.getX(), y - to.getY());
+    IShapeUIModel pool = poolOf(diagram, to);
+    if (pool != null) {
+      relayoutPool(diagram, pool);
+    }
+    reanchorConnectors(diagram);
+    return geometry(to);
+  }
+
+  /** Sequence flows arriving at a shape. */
+  private static int incomingFlows(IShapeUIModel shape) {
+    Set<String> seen = new HashSet<>();
+    int count = 0;
+    for (IConnectorUIModel[] connectors :
+        new IConnectorUIModel[][] {shape.toFromConnectorArray(), shape.toToConnectorArray()}) {
+      if (connectors == null) {
+        continue;
+      }
+      for (IConnectorUIModel c : connectors) {
+        if (c != null
+            && c.getModelElement() instanceof IBPSequenceFlow
+            && c.getToShape() != null
+            && sameShape(c.getToShape(), shape)
+            && seen.add(c.getId())) {
+          count++;
+        }
+      }
+    }
+    return count;
   }
 
   // --- Connectors ---

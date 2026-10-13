@@ -3,6 +3,7 @@ package com.brunnen.vp.mcp.util;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.model.IDBColumn;
+import com.vp.plugin.model.IDBForeignKeyConstraint;
 import com.vp.plugin.model.IDBTable;
 import com.vp.plugin.model.IModelElement;
 import java.util.ArrayList;
@@ -13,34 +14,6 @@ import java.util.List;
 public final class ErdUtils {
 
   private ErdUtils() {}
-
-  /**
-   * Get all ER diagrams in the current project.
-   *
-   * @return list of ER diagrams
-   */
-  public static List<IDiagramUIModel> getAllERDiagrams() {
-    return DiagramUtils.findAllDiagrams(IDiagramUIModel.class);
-  }
-
-  /**
-   * Find a table by name.
-   *
-   * @param name the table name
-   * @return the table, or null if not found
-   */
-  public static IDBTable findTableByName(String name) {
-    return DiagramUtils.findModelElementByName(name, IDBTable.class);
-  }
-
-  /**
-   * Get all tables in the current project.
-   *
-   * @return list of tables
-   */
-  public static List<IDBTable> getAllTables() {
-    return DiagramUtils.findAllModelElements(IDBTable.class);
-  }
 
   /**
    * Get all tables in a specific ER diagram.
@@ -104,10 +77,113 @@ public final class ErdUtils {
     if (!primaryKeys.isEmpty()) {
       sql.append(",\n  PRIMARY KEY (").append(String.join(", ", primaryKeys)).append(")");
     }
+    // FOREIGN KEY clauses from the columns' foreign key constraints
+    Iterator<?> fkIter = table.dBColumnIterator();
+    while (fkIter.hasNext()) {
+      Object obj = fkIter.next();
+      if (obj instanceof IDBColumn) {
+        IDBColumn col = (IDBColumn) obj;
+        for (IDBForeignKeyConstraint constraint : col.toForeignKeyConstraintArray()) {
+          IDBColumn ref = constraint.getRefColumn();
+          if (ref != null && ref.getParent() != null) {
+            sql.append(",\n  FOREIGN KEY (")
+                .append(col.getName())
+                .append(") REFERENCES ")
+                .append(ref.getParent().getName())
+                .append("(")
+                .append(ref.getName())
+                .append(")");
+          }
+        }
+      }
+    }
 
     sql.append("\n);");
     return sql.toString();
   }
+
+  /**
+   * Split a SQL column type such as {@code nvarchar(100)} or {@code decimal(10,2)} into its name,
+   * length and scale.
+   *
+   * @param type the type text
+   * @param length the length used when the text has none
+   * @param scale the scale used when the text has none
+   * @return {name, length, scale} as strings
+   */
+  public static String[] parseColumnType(String type, int length, int scale) {
+    String t = type.trim();
+    int open = t.indexOf('(');
+    if (open > 0 && t.endsWith(")")) {
+      String[] args = t.substring(open + 1, t.length() - 1).split(",");
+      String l = args[0].trim();
+      String sc = args.length > 1 ? args[1].trim() : String.valueOf(scale);
+      return new String[] {t.substring(0, open).trim(), l, sc};
+    }
+    return new String[] {t, String.valueOf(length), String.valueOf(scale)};
+  }
+
+  /**
+   * Type names to try, in order, for a column type Visual Paradigm's database may not know (SQL
+   * Server spellings first mapped to their standard equivalents).
+   *
+   * @param typeName the requested type name
+   * @return the requested name followed by its fallbacks
+   */
+  public static List<String> typeCandidates(String typeName) {
+    List<String> names = new ArrayList<>();
+    names.add(typeName);
+    switch (typeName.toLowerCase(java.util.Locale.ROOT)) {
+      case "nvarchar":
+      case "varchar2":
+      case "nvarchar2":
+        names.add("varchar");
+        break;
+      case "nchar":
+        names.add("char");
+        break;
+      case "ntext":
+      case "longtext":
+      case "mediumtext":
+        names.add("text");
+        names.add("longvarchar");
+        break;
+      case "datetime":
+      case "datetime2":
+      case "smalldatetime":
+      case "datetimeoffset":
+        names.add("timestamp");
+        break;
+      case "bit":
+        names.add("boolean");
+        break;
+      case "money":
+      case "smallmoney":
+      case "number":
+        names.add("decimal");
+        names.add("numeric");
+        break;
+      case "tinyint":
+        names.add("smallint");
+        break;
+      case "int":
+        names.add("integer");
+        break;
+      case "uniqueidentifier":
+        names.add("char");
+        break;
+      default:
+        break;
+    }
+    return names;
+  }
+
+  /** Valid parent-end multiplicities of a foreign key ({@code IDBForeignKey.FROM_*}). */
+  public static final List<String> FROM_MULTIPLICITIES = java.util.Arrays.asList("1", "0..1");
+
+  /** Valid child-end multiplicities of a foreign key ({@code IDBForeignKey.TO_*}). */
+  public static final List<String> TO_MULTIPLICITIES =
+      java.util.Arrays.asList("0..1", "0..*", "1", "1..*");
 
   /**
    * Validate a table name.
