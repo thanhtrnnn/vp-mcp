@@ -2102,10 +2102,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
           typeMatch =
               model instanceof IAssociation
                   && hasAggregationKind(
-                      (IAssociation) model,
-                      "aggregation".equals(type)
-                          ? IAssociationEnd.AGGREGATION_KIND_AGGREGATION
-                          : IAssociationEnd.AGGREGATION_KIND_COMPOSITED);
+                      (IAssociation) model, "aggregation".equals(type) ? "shared" : "composite");
           directionMatch = forward || backward;
           break;
         default:
@@ -2118,11 +2115,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     return result;
   }
 
+  /** Whether either end of the association is "shared" or "composite" ({@code kind}). */
   private static boolean hasAggregationKind(IAssociation assoc, String kind) {
-    IAssociationEnd a = (IAssociationEnd) assoc.getFromEnd();
-    IAssociationEnd b = (IAssociationEnd) assoc.getToEnd();
-    return (a != null && kind.equalsIgnoreCase(a.getAggregationKind()))
-        || (b != null && kind.equalsIgnoreCase(b.getAggregationKind()));
+    return kind.equals(aggregationOf((IAssociationEnd) assoc.getFromEnd()))
+        || kind.equals(aggregationOf((IAssociationEnd) assoc.getToEnd()));
   }
 
   private IShapeUIModel findPackageShape(IDiagramUIModel diagram, String packageName) {

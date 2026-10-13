@@ -5,6 +5,7 @@ import com.brunnen.vp.mcp.util.DiagramLayoutEngine;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.IBaseDiagramElement;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -1187,7 +1188,9 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "removeDiagramElement",
       description =
-          "Remove an element (shape or connector) from a diagram by its model element name")
+          "Remove an element (shape or connector) from a diagram by its model element name. Only"
+              + " the view goes (with the connectors attached to a removed shape); the model"
+              + " element stays in the project")
   public String removeDiagramElement(String diagramName, String elementName) {
     try {
       return runOnEdt(
@@ -1200,7 +1203,15 @@ public abstract class AbstractDiagramMcpTools {
             if (element == null) {
               return "Element not found on diagram: " + elementName;
             }
-            diagram.removeDiagramElement(element);
+            // IDiagramUIModel.removeDiagramElement leaves the shape on the diagram
+            if (!(element instanceof IBaseDiagramElement)) {
+              return "Error removing element: cannot remove '" + elementName + "'";
+            }
+            ((IBaseDiagramElement) element).deleteViewOnly();
+            IDiagramElement left = findDiagramElementByName(diagram, elementName);
+            if (left != null && left.getId().equals(element.getId())) {
+              return "Error removing element: Visual Paradigm kept '" + elementName + "'";
+            }
             return "Removed element '" + elementName + "' from diagram '" + diagramName + "'";
           });
     } catch (Exception e) {
@@ -1305,12 +1316,10 @@ public abstract class AbstractDiagramMcpTools {
       }
       // aggregation kind and the whole end (the diamond)
       for (IAssociationEnd end : new IAssociationEnd[] {fromEnd, toEnd}) {
-        String kind = end != null ? end.getAggregationKind() : null;
-        if (kind != null
-            && (IAssociationEnd.AGGREGATION_KIND_COMPOSITED.equalsIgnoreCase(kind)
-                || IAssociationEnd.AGGREGATION_KIND_AGGREGATION.equalsIgnoreCase(kind))) {
-          boolean composite = IAssociationEnd.AGGREGATION_KIND_COMPOSITED.equalsIgnoreCase(kind);
-          sb.append(composite ? " composite" : " shared")
+        String kind = aggregationOf(end);
+        if (kind != null) {
+          sb.append(" ")
+              .append(kind)
               .append(" (whole: ")
               .append(displayName(end.getModelElement()))
               .append(")");
@@ -1330,6 +1339,27 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return sb.toString();
+  }
+
+  /**
+   * The aggregation an association end carries: "composite", "shared" or null for none. VP reports
+   * "composite"/"shared" although the kind is set with "Composited"/"Aggregation", so both
+   * spellings are accepted.
+   *
+   * @param end the association end, may be null
+   * @return "composite", "shared" or null
+   */
+  protected static String aggregationOf(IAssociationEnd end) {
+    String kind = end != null ? end.getAggregationKind() : null;
+    if (IAssociationEnd.AGGREGATION_KIND_composite.equalsIgnoreCase(kind)
+        || IAssociationEnd.AGGREGATION_KIND_COMPOSITED.equalsIgnoreCase(kind)) {
+      return "composite";
+    }
+    if (IAssociationEnd.AGGREGATION_KIND_shared.equalsIgnoreCase(kind)
+        || IAssociationEnd.AGGREGATION_KIND_AGGREGATION.equalsIgnoreCase(kind)) {
+      return "shared";
+    }
+    return null;
   }
 
   /**
