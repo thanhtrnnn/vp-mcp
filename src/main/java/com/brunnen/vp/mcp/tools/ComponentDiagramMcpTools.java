@@ -545,24 +545,37 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int PORT_CLEARANCE = 30;
 
   /**
+   * How far the names of a component's ports reach outside its left and right edges: {left, right},
+   * 0 when no port sits there.
+   */
+  private static int[] portExtents(IShapeUIModel component) {
+    int left = 0;
+    int right = 0;
+    int edge = component.getX() + component.getWidth();
+    for (IShapeUIModel port : portsOf(component)) {
+      com.vp.plugin.diagram.ICaptionUIModel cap = port.getCaptionUIModel();
+      int nameWidth = cap != null && cap.getWidth() > 0 ? cap.getWidth() : 0;
+      boolean leftSide =
+          port.getX() + port.getWidth() / 2 < component.getX() + component.getWidth() / 2;
+      if (leftSide) {
+        left = Math.max(left, component.getX() - (port.getX() - nameWidth - 3));
+      } else {
+        right = Math.max(right, port.getX() + port.getWidth() + 3 + nameWidth - edge);
+      }
+    }
+    return new int[] {left, right};
+  }
+
+  /**
    * A port sits on the border of its component and its name is drawn outside it: the neighbours on
-   * that side move away until the name fits between the two components (a name that is clipped by
-   * the next box, or a port that lies over a neighbour's icon, is unreadable).
+   * that side move away until the names of both components' ports fit between the two boxes (a name
+   * that is clipped by the next box, or that runs into the name of the neighbour's port, is
+   * unreadable).
    */
   private void makeRoomForPorts(IShapeUIModel owner) {
     int right = owner.getX() + owner.getWidth();
-    int needRight = 0;
-    int needLeft = 0;
-    for (IShapeUIModel port : portsOf(owner)) {
-      com.vp.plugin.diagram.ICaptionUIModel cap = port.getCaptionUIModel();
-      int nameWidth = cap != null && cap.getWidth() > 0 ? cap.getWidth() : 0;
-      boolean leftSide = port.getX() + port.getWidth() / 2 < owner.getX() + owner.getWidth() / 2;
-      if (leftSide) {
-        needLeft = Math.max(needLeft, owner.getX() - (port.getX() - nameWidth - 3));
-      } else {
-        needRight = Math.max(needRight, port.getX() + port.getWidth() + 3 + nameWidth - right);
-      }
-    }
+    int[] own = portExtents(owner);
+    int needLeft = own[0];
     IDiagramUIModel diagram = owner.getDiagramUIModel();
     IShapeUIModel rightNeighbour = null;
     IShapeUIModel leftNeighbour = null;
@@ -603,11 +616,14 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
         }
       }
     }
-    if (rightNeighbour != null && needRight > 0) {
-      makeRoomBetween(owner, rightNeighbour, needRight + PORT_CLEARANCE, 0);
+    if (rightNeighbour != null && (own[1] > 0 || portExtents(rightNeighbour)[0] > 0)) {
+      // the names of the ports on the facing edges both have to fit between the two boxes
+      makeRoomBetween(
+          owner, rightNeighbour, own[1] + portExtents(rightNeighbour)[0] + PORT_CLEARANCE, 0);
     }
-    if (leftNeighbour != null && needLeft > 0) {
-      makeRoomBetween(leftNeighbour, owner, needLeft + PORT_CLEARANCE, 0);
+    if (leftNeighbour != null && (needLeft > 0 || portExtents(leftNeighbour)[1] > 0)) {
+      makeRoomBetween(
+          leftNeighbour, owner, portExtents(leftNeighbour)[1] + needLeft + PORT_CLEARANCE, 0);
     }
     for (IShapeUIModel s : allShapes(diagram)) {
       if (kindOf(s) == Kind.COMPONENT) {
