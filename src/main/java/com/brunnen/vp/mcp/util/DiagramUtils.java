@@ -579,8 +579,11 @@ public final class DiagramUtils {
     return candidates;
   }
 
-  /** Smallest coordinate a bend point may have (VP drops points outside the canvas). */
-  private static final int MIN_COORD = 5;
+  /**
+   * Smallest coordinate a bend point may have: VP drops points outside the canvas, and the label
+   * drawn at a bend needs room above it (a bend on the edge has its label cut off by the image).
+   */
+  private static final int MIN_COORD = 30;
 
   /** Detour steps tried on each side of a blocked connector. */
   private static final int MAX_DETOUR_STEPS = 3;

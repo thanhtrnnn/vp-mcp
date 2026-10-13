@@ -350,166 +350,199 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
-
-            // Collect use case shapes and compute their bounding box.
-            List<IUseCase> useCases = new ArrayList<>();
-            int minX = Integer.MAX_VALUE;
-            int minY = Integer.MAX_VALUE;
-            int maxX = Integer.MIN_VALUE;
-            int maxY = Integer.MIN_VALUE;
-            Iterator<?> iter = diagram.diagramElementIterator();
-            while (iter.hasNext()) {
-              Object obj = iter.next();
-              if (obj instanceof IDiagramElement) {
-                IDiagramElement de = (IDiagramElement) obj;
-                if (de.getModelElement() instanceof IUseCase) {
-                  useCases.add((IUseCase) de.getModelElement());
-                  minX = Math.min(minX, de.getX());
-                  minY = Math.min(minY, de.getY());
-                  maxX = Math.max(maxX, de.getX() + de.getWidth());
-                  maxY = Math.max(maxY, de.getY() + de.getHeight());
-                }
-              }
-            }
-            if (useCases.isEmpty()) {
-              return "No use cases found on diagram '" + diagramName + "' to wrap";
-            }
-            // the detours and labels of lines between use cases stay inside the boundary
-            for (IDiagramElement de : getDiagramElementsList(diagram)) {
-              if (!(de instanceof IConnectorUIModel)) {
-                continue;
-              }
-              IConnectorUIModel c = (IConnectorUIModel) de;
-              if (c.getFromShape() == null
-                  || c.getToShape() == null
-                  || !(c.getFromShape().getModelElement() instanceof IUseCase)
-                  || !(c.getToShape().getModelElement() instanceof IUseCase)) {
-                continue;
-              }
-              java.awt.Point[] points = c.getPoints();
-              for (int i = 0; points != null && i < points.length; i++) {
-                minX = Math.min(minX, points[i].x);
-                minY = Math.min(minY, points[i].y);
-                maxX = Math.max(maxX, points[i].x);
-                maxY = Math.max(maxY, points[i].y);
-              }
-              com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
-              if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
-                minX = Math.min(minX, cap.getX());
-                minY = Math.min(minY, cap.getY());
-                maxX = Math.max(maxX, cap.getX() + cap.getWidth());
-                maxY = Math.max(maxY, cap.getY() + cap.getHeight());
-              }
-            }
-
-            String boundaryName = systemName == null ? "" : systemName.trim();
-            if (boundaryName.isEmpty()) {
-              return "System name must not be empty";
-            }
-            // One boundary per diagram: a second call renames and re-sizes the existing one.
-            IShapeUIModel existingBox = null;
-            for (IDiagramElement de : getDiagramElementsList(diagram)) {
-              if (de.getModelElement() instanceof ISystem && de instanceof IShapeUIModel) {
-                existingBox = (IShapeUIModel) de;
-              }
-            }
-            ISystem system;
-            if (existingBox != null) {
-              system = (ISystem) existingBox.getModelElement();
-              if (!boundaryName.equals(system.getName())) {
-                system.setName(boundaryName);
-              }
-            } else {
-              system = findRootElement(boundaryName, ISystem.class);
-              if (system == null) {
-                system = getModelElementFactory().createSystem();
-                nameInOwner(system, null, boundaryName);
-              }
-            }
-            for (IUseCase uc : useCases) {
-              if (uc.getParent() == null || !uc.getParent().getId().equals(system.getId())) {
-                system.addUseCase(uc);
-              }
-            }
-
-            int pad = 40;
-            int boxX = minX - pad;
-            int boxY = minY - pad;
-            int boxW = (maxX - minX) + 2 * pad;
-            int boxH = (maxY - minY) + 2 * pad;
-            // Actors stand outside the system: move any actor the box would cover to the
-            // nearer side of it (an auto-layout may have put a use case in the actor column).
-            List<String> moved = new ArrayList<>();
-            int actorGap = 40;
-            for (IDiagramElement de : getDiagramElementsList(diagram)) {
-              if (!(de.getModelElement() instanceof IActor) || !(de instanceof IShapeUIModel)) {
-                continue;
-              }
-              boolean inside =
-                  de.getX() < boxX + boxW
-                      && boxX < de.getX() + de.getWidth()
-                      && de.getY() < boxY + boxH
-                      && boxY < de.getY() + de.getHeight();
-              if (!inside) {
-                continue;
-              }
-              boolean left = de.getX() + de.getWidth() / 2 < boxX + boxW / 2;
-              int nx = left ? boxX - actorGap - de.getWidth() : boxX + boxW + actorGap;
-              if (nx < 0) {
-                // no room on the left: shift the box (and its use cases) right instead
-                int shift = -nx;
-                boxX += shift;
-                for (IDiagramElement uc : getDiagramElementsList(diagram)) {
-                  if (uc.getModelElement() instanceof IUseCase) {
-                    uc.setLocation(uc.getX() + shift, uc.getY());
-                    recenterConnectorsOf(uc);
-                  }
-                }
-                nx = 0;
-              }
-              de.setLocation(nx, de.getY());
-              de.resetCaption(); // an actor's name is a detached label
-              recenterConnectorsOf(de);
-              moved.add(de.getModelElement().getName());
-            }
-
-            IDiagramElement sysDe =
-                existingBox != null
-                    ? existingBox
-                    : getDiagramManager().createDiagramElement(diagram, system);
-            if (sysDe instanceof IShapeUIModel) {
-              IShapeUIModel shape = (IShapeUIModel) sysDe;
-              shape.setCustomText(boundaryName);
-              shape.setBounds(boxX, boxY, boxW, boxH);
-              shape.sendToBack();
-              resetCaption(shape);
-              if (existingBox != null) {
-                // Renaming a shown element makes VP fit its shape to the new name once our call
-                // returns (the diagram auto-fits); the box is a container, so its bounds are
-                // applied again after that.
-                final int bx = boxX;
-                final int by = boxY;
-                final int bw = boxW;
-                final int bh = boxH;
-                SwingUtilities.invokeLater(() -> shape.setBounds(bx, by, bw, bh));
-              }
-            }
-
-            return (existingBox != null ? "Updated" : "Added")
-                + " system boundary '"
-                + boundaryName
-                + "' wrapping "
-                + useCases.size()
-                + " use case(s) on diagram '"
-                + diagramName
-                + "'"
-                + (moved.isEmpty()
-                    ? ""
-                    : "; moved actor(s) out of the boundary: " + String.join(", ", moved));
+            return wrapInBoundary(diagram, diagramName, systemName);
           });
     } catch (Exception e) {
       return "Error adding system boundary: " + e.getMessage();
     }
+  }
+
+  @Override
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    if (!(diagram instanceof IUseCaseDiagramUIModel)) {
+      return null;
+    }
+    IShapeUIModel box = null;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de.getModelElement() instanceof ISystem && de instanceof IShapeUIModel) {
+        box = (IShapeUIModel) de;
+      }
+    }
+    if (box == null) {
+      return null; // no boundary: the plain layout applies
+    }
+    // the layout arranges use cases and actors, not the box around them: it is fitted again
+    // around the use cases where they ended up (the boundary was added first or last, either way)
+    String name = box.getModelElement().getName();
+    layoutDiagram(diagram);
+    return "Auto-layout applied to diagram: "
+        + diagram.getName()
+        + "; "
+        + wrapInBoundary((IUseCaseDiagramUIModel) diagram, diagram.getName(), name);
+  }
+
+  /**
+   * Wrap every use case of the diagram in the system boundary (created, or renamed and re-sized
+   * when the diagram has one), moving actors the box would cover outside it. Runs on the EDT.
+   */
+  private String wrapInBoundary(
+      IUseCaseDiagramUIModel diagram, String diagramName, String systemName) {
+
+    // Collect use case shapes and compute their bounding box.
+    List<IUseCase> useCases = new ArrayList<>();
+    int minX = Integer.MAX_VALUE;
+    int minY = Integer.MAX_VALUE;
+    int maxX = Integer.MIN_VALUE;
+    int maxY = Integer.MIN_VALUE;
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (obj instanceof IDiagramElement) {
+        IDiagramElement de = (IDiagramElement) obj;
+        if (de.getModelElement() instanceof IUseCase) {
+          useCases.add((IUseCase) de.getModelElement());
+          minX = Math.min(minX, de.getX());
+          minY = Math.min(minY, de.getY());
+          maxX = Math.max(maxX, de.getX() + de.getWidth());
+          maxY = Math.max(maxY, de.getY() + de.getHeight());
+        }
+      }
+    }
+    if (useCases.isEmpty()) {
+      return "No use cases found on diagram '" + diagramName + "' to wrap";
+    }
+    // the detours and labels of lines between use cases stay inside the boundary
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (!(de instanceof IConnectorUIModel)) {
+        continue;
+      }
+      IConnectorUIModel c = (IConnectorUIModel) de;
+      if (c.getFromShape() == null
+          || c.getToShape() == null
+          || !(c.getFromShape().getModelElement() instanceof IUseCase)
+          || !(c.getToShape().getModelElement() instanceof IUseCase)) {
+        continue;
+      }
+      java.awt.Point[] points = c.getPoints();
+      for (int i = 0; points != null && i < points.length; i++) {
+        minX = Math.min(minX, points[i].x);
+        minY = Math.min(minY, points[i].y);
+        maxX = Math.max(maxX, points[i].x);
+        maxY = Math.max(maxY, points[i].y);
+      }
+      com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
+      if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+        minX = Math.min(minX, cap.getX());
+        minY = Math.min(minY, cap.getY());
+        maxX = Math.max(maxX, cap.getX() + cap.getWidth());
+        maxY = Math.max(maxY, cap.getY() + cap.getHeight());
+      }
+    }
+
+    String boundaryName = systemName == null ? "" : systemName.trim();
+    if (boundaryName.isEmpty()) {
+      return "System name must not be empty";
+    }
+    // One boundary per diagram: a second call renames and re-sizes the existing one.
+    IShapeUIModel existingBox = null;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de.getModelElement() instanceof ISystem && de instanceof IShapeUIModel) {
+        existingBox = (IShapeUIModel) de;
+      }
+    }
+    ISystem system;
+    if (existingBox != null) {
+      system = (ISystem) existingBox.getModelElement();
+      if (!boundaryName.equals(system.getName())) {
+        system.setName(boundaryName);
+      }
+    } else {
+      system = findRootElement(boundaryName, ISystem.class);
+      if (system == null) {
+        system = getModelElementFactory().createSystem();
+        nameInOwner(system, null, boundaryName);
+      }
+    }
+    for (IUseCase uc : useCases) {
+      if (uc.getParent() == null || !uc.getParent().getId().equals(system.getId())) {
+        system.addUseCase(uc);
+      }
+    }
+
+    int pad = 40;
+    int boxX = minX - pad;
+    int boxY = minY - pad;
+    int boxW = (maxX - minX) + 2 * pad;
+    int boxH = (maxY - minY) + 2 * pad;
+    // Actors stand outside the system: move any actor the box would cover to the
+    // nearer side of it (an auto-layout may have put a use case in the actor column).
+    List<String> moved = new ArrayList<>();
+    int actorGap = 40;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (!(de.getModelElement() instanceof IActor) || !(de instanceof IShapeUIModel)) {
+        continue;
+      }
+      boolean inside =
+          de.getX() < boxX + boxW
+              && boxX < de.getX() + de.getWidth()
+              && de.getY() < boxY + boxH
+              && boxY < de.getY() + de.getHeight();
+      if (!inside) {
+        continue;
+      }
+      boolean left = de.getX() + de.getWidth() / 2 < boxX + boxW / 2;
+      int nx = left ? boxX - actorGap - de.getWidth() : boxX + boxW + actorGap;
+      if (nx < 0) {
+        // no room on the left: shift the box (and its use cases) right instead
+        int shift = -nx;
+        boxX += shift;
+        for (IDiagramElement uc : getDiagramElementsList(diagram)) {
+          if (uc.getModelElement() instanceof IUseCase) {
+            uc.setLocation(uc.getX() + shift, uc.getY());
+            recenterConnectorsOf(uc);
+          }
+        }
+        nx = 0;
+      }
+      de.setLocation(nx, de.getY());
+      de.resetCaption(); // an actor's name is a detached label
+      recenterConnectorsOf(de);
+      moved.add(de.getModelElement().getName());
+    }
+
+    IDiagramElement sysDe =
+        existingBox != null
+            ? existingBox
+            : getDiagramManager().createDiagramElement(diagram, system);
+    if (sysDe instanceof IShapeUIModel) {
+      IShapeUIModel shape = (IShapeUIModel) sysDe;
+      shape.setCustomText(boundaryName);
+      shape.setBounds(boxX, boxY, boxW, boxH);
+      shape.sendToBack();
+      resetCaption(shape);
+      if (existingBox != null) {
+        // Renaming a shown element makes VP fit its shape to the new name once our call
+        // returns (the diagram auto-fits); the box is a container, so its bounds are
+        // applied again after that.
+        final int bx = boxX;
+        final int by = boxY;
+        final int bw = boxW;
+        final int bh = boxH;
+        SwingUtilities.invokeLater(() -> shape.setBounds(bx, by, bw, bh));
+      }
+    }
+
+    return (existingBox != null ? "Updated" : "Added")
+        + " system boundary '"
+        + boundaryName
+        + "' wrapping "
+        + useCases.size()
+        + " use case(s) on diagram '"
+        + diagramName
+        + "'"
+        + (moved.isEmpty()
+            ? ""
+            : "; moved actor(s) out of the boundary: " + String.join(", ", moved));
   }
 
   /** Left edge of the auto-placed actor column and the use case column. */

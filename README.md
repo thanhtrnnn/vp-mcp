@@ -25,13 +25,16 @@ The plugin includes an embedded MCP server that:
 - Runs on **port 2026** with SSE endpoint `/sse`
 - Provides **tool capabilities** for external MCP clients
 
-#### Available MCP Tools (117 total)
+#### Available MCP Tools (121 total)
 
 The main tools per diagram family are listed below. Project, layout and export helpers
 (for example `listDiagrams`, `exportDiagramImage`, `saveProject`) are also available, and so are
-tools that work on any diagram: `setElementBounds` (a container takes its nested shapes along, a
-sequence lifeline its messages), `rerouteConnectors`, `removeDiagramElement`, `addNote(diagramName,
-text, attachedTo, x, y)` (a comment box, optionally anchored to a shape) and
+tools that work on any diagram: `setElementBounds` (x or y <= 0 keeps the current coordinate; a
+container takes its nested shapes along, a sequence lifeline its messages),
+`rerouteConnectors`, `removeDiagramElement`, `removeRelationship(diagramName, fromElement, toElement,
+relationshipType)` (also deletes an unnamed connector of a use case, activity, state, flowchart, DFD
+or BPMN diagram), `renameElement(diagramName, elementName, newName)`, `addNote(diagramName,
+text, attachedTo, x, y)` (a comment box at the first free spot beside the shape it is anchored to) and
 `getDiagramGeometry(diagramName)` (bounds of every shape, points of every connector, caption
 bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
 and matches the exact diagram type.
@@ -48,6 +51,7 @@ and matches the exact diagram type.
 - **addClass(diagramName, className)**: Add classes to diagrams
 - **addAttribute(className, attributeName, attributeType, visibility)**: Add attributes to classes
 - **addOperation(className, operationName, returnType, params)**: Add operations/methods to classes
+- **removeAttribute(diagramName, className, attributeName)**, **removeOperation(diagramName, className, operationName)**: Correct a class without rebuilding it
 - **addAssociation(diagramName, fromClass, toClass, fromMultiplicity, toMultiplicity, name)**: Add associations
 - **addGeneralization(diagramName, fromClass, toClass)**: Add inheritance relationships
 - **addAggregation(diagramName, fromClass, toClass, fromMultiplicity, toMultiplicity)**: Add aggregation
@@ -61,7 +65,7 @@ and matches the exact diagram type.
 - **createErd(diagramName)**: Create new ER diagrams
 - **addTable(diagramName, tableName)**: Add tables to ER diagrams
 - **addColumn(diagramName, tableName, columnName, columnType, length, scale, isPrimaryKey, isNullable, isUnique)**: Add columns to a table shown on the diagram (SQL Server types such as nvarchar/datetime are mapped to the project database's types; varchar without a length gets 255; isUnique draws the book's "U")
-- **addForeignKey(diagramName, fromTable, toTable, fromColumn, toColumn, relationshipName)**: Add an FK: fromTable (child) column fromColumn references toTable (parent)
+- **addForeignKey(diagramName, fromTable, toTable, fromColumn, toColumn, relationshipName)**: Add an FK: fromTable (child) column fromColumn (created when it does not exist yet) references toTable (parent)
 - **addTableRelationship(diagramName, fromTable, toTable, type, fromMultiplicity, toMultiplicity)**: Add identifying/non-identifying relationships
 - **removeColumn(diagramName, tableName, columnName)**, **renameColumn(diagramName, tableName, columnName, newName)**, **removeForeignKey(diagramName, parentTable, childTable)**, **removeTable(diagramName, tableName)**: Correct a data model without rebuilding it
 - **generateDdl(diagramName)**: Generate CREATE TABLE DDL statements
@@ -80,7 +84,7 @@ and matches the exact diagram type.
 - **createActivityDiagram(diagramName)**: Create new activity diagrams
 - **addActivityPartition(diagramName, partitionName, x, y, width, height)**: Add a vertical swimlane lane
 - **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text
-- **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes
+- **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes (a trailing ` #2` is only part of the handle: a second "End #2" shows "End")
 - **addActivityObjectNode(diagramName, objectName, state, partitionName, x, y)**: Add an object node with optional [state], optionally in a lane
 - **addActivityFlow(diagramName, fromNode, toNode, guard, twoWay)**: Add a control or object flow with optional [guard]; twoWay draws a double-headed exchange (action <-> "XxxDAO: method()")
 - **addActivityFrame(diagramName, title, nodeNames, x, y, width, height)**: Add a rounded titled frame around nodes ("Xử lí tại gdXxx.jsp")
@@ -111,6 +115,7 @@ and matches the exact diagram type.
 - **addClassInPackage(diagramName, packageName, className)**: Show a class inside a package
 - **createObjectDiagram(diagramName)**: Create new object diagrams
 - **addObject(diagramName, objectName, className, slots, x, y, modelPackage)**: Add an object with `attr=value;...` slots (empty objectName: anonymous `: Class`; modelPackage picks the class when several packages own one of that name)
+- **setObjectSlot(diagramName, objectName, attribute, value)**: Set, change or clear (value empty) a slot of an object
 - **addObjectLink(diagramName, fromObject, toObject, label)**: Link two objects
 
 ##### Communication Diagram (5 tools)

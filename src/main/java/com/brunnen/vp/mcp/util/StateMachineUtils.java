@@ -230,4 +230,75 @@ public final class StateMachineUtils {
     int my = (start[1] + end[1]) / 2;
     return horizontal ? new int[] {mx - w / 2, my - h - 4} : new int[] {mx + 6, my - h / 2};
   }
+
+  /**
+   * Layers of a state flow, top to bottom: every state one layer below the lowest state that leads
+   * to it, transitions that loop back (to a state still on the path being followed) ignored, so a
+   * screen flow with "back" transitions reads from the top to the bottom. States are reached from
+   * {@code roots} first (depth first, in edge order), then from the states still unvisited.
+   *
+   * @param n number of states
+   * @param edges transitions {from, to} between different states
+   * @param roots the states the flow starts at (the initial states), may be empty
+   * @return the layer of each state, 0 for the start
+   */
+  public static int[] flowLayers(int n, int[][] edges, int[] roots) {
+    java.util.List<java.util.List<Integer>> next = new java.util.ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      next.add(new java.util.ArrayList<>());
+    }
+    for (int[] e : edges) {
+      next.get(e[0]).add(e[1]);
+    }
+    int[] state = new int[n]; // 0 unvisited, 1 on the path, 2 done
+    java.util.List<Integer> order = new java.util.ArrayList<>(); // reverse postorder
+    java.util.List<int[]> kept = new java.util.ArrayList<>();
+    java.util.List<Integer> starts = new java.util.ArrayList<>();
+    for (int r : roots) {
+      starts.add(r);
+    }
+    for (int i = 0; i < n; i++) {
+      starts.add(i);
+    }
+    for (int start : starts) {
+      if (state[start] == 0) {
+        visit(start, next, state, order, kept);
+      }
+    }
+    java.util.Collections.reverse(order);
+    int[] layer = new int[n];
+    java.util.List<java.util.List<Integer>> into = new java.util.ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      into.add(new java.util.ArrayList<>());
+    }
+    for (int[] e : kept) {
+      into.get(e[1]).add(e[0]);
+    }
+    for (int v : order) {
+      for (int u : into.get(v)) {
+        layer[v] = Math.max(layer[v], layer[u] + 1);
+      }
+    }
+    return layer;
+  }
+
+  private static void visit(
+      int node,
+      java.util.List<java.util.List<Integer>> next,
+      int[] state,
+      java.util.List<Integer> order,
+      java.util.List<int[]> kept) {
+    state[node] = 1;
+    for (int to : next.get(node)) {
+      if (state[to] == 1) {
+        continue; // a loop back: not part of the top-to-bottom flow
+      }
+      kept.add(new int[] {node, to});
+      if (state[to] == 0) {
+        visit(to, next, state, order, kept);
+      }
+    }
+    state[node] = 2;
+    order.add(node);
+  }
 }

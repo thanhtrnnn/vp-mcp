@@ -324,6 +324,97 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   @Tool(
+      name = "removeAttribute",
+      description =
+          "Remove an attribute from a class shown on a class diagram (by name; every attribute of"
+              + " that name). The class box is fitted again. A wrong attribute is fixed with"
+              + " removeAttribute and addAttribute")
+  public String removeAttribute(String diagramName, String className, String attributeName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return diagramNotFound(diagramName);
+            }
+            IClass cls = findClassOnDiagram(diagram, className);
+            if (cls == null) {
+              return "Class not on diagram: " + className;
+            }
+            if (!isSet(attributeName)) {
+              return "Attribute name must not be empty";
+            }
+            int removed = 0;
+            for (IAttribute attr : cls.toAttributeArray()) {
+              if (attributeName.trim().equals(attr.getName())) {
+                attr.delete();
+                removed++;
+              }
+            }
+            if (removed == 0) {
+              return "Class '" + className + "' has no attribute '" + attributeName.trim() + "'";
+            }
+            refitClass(cls);
+            return "Removed attribute '"
+                + attributeName.trim()
+                + "' from class '"
+                + className
+                + "'";
+          });
+    } catch (Exception e) {
+      return "Error removing attribute: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "removeOperation",
+      description =
+          "Remove an operation from a class shown on a class diagram (by name, whatever its"
+              + " parameters: every operation of that name). The class box is fitted again")
+  public String removeOperation(String diagramName, String className, String operationName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IClassDiagramUIModel diagram =
+                (IClassDiagramUIModel)
+                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
+            if (diagram == null) {
+              return diagramNotFound(diagramName);
+            }
+            IClass cls = findClassOnDiagram(diagram, className);
+            if (cls == null) {
+              return "Class not on diagram: " + className;
+            }
+            if (!isSet(operationName)) {
+              return "Operation name must not be empty";
+            }
+            int removed = 0;
+            for (IOperation op : cls.toOperationArray()) {
+              if (operationName.trim().equals(op.getName())) {
+                op.delete();
+                removed++;
+              }
+            }
+            if (removed == 0) {
+              return "Class '" + className + "' has no operation '" + operationName.trim() + "'";
+            }
+            refitClass(cls);
+            return "Removed "
+                + removed
+                + " operation(s) '"
+                + operationName.trim()
+                + "' from class '"
+                + className
+                + "'";
+          });
+    } catch (Exception e) {
+      return "Error removing operation: " + e.getMessage();
+    }
+  }
+
+  @Tool(
       name = "addOperation",
       description =
           "Add an operation/method to a class. params is 'name: Type, ...'. visibility is"
@@ -1234,12 +1325,15 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "setElementBounds",
       description =
-          "Move/resize a shape on a diagram. width or height <= 0 fits the shape to its content"
+          "Move/resize a shape on a diagram. x or y <= 0 keeps the shape's current coordinate (a"
+              + " resize-only call is setElementBounds(name, 0, 0, w, h)); width or height <= 0"
+              + " fits the shape to its content"
               + " (a container such as a package, node or component keeps its size, and always"
               + " stays big enough for what it holds). A container takes the shapes nested in it"
               + " along (ports, artifacts, classes...); a lifeline of a sequence diagram takes its"
               + " messages and activation bar along; control nodes, pseudo-states and"
-              + " BPMN/flowchart/DFD symbols keep their notation sizes")
+              + " BPMN/flowchart/DFD symbols keep their notation sizes. The labels of the"
+              + " connectors of a moved shape are put beside their lines again")
   public String setElementBounds(
       String diagramName, String elementName, int x, int y, int width, int height) {
     try {
@@ -1253,20 +1347,28 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (de == null) {
               return "Element not on diagram: " + elementName;
             }
+            // 0 is "not given": a resize-only call must not send the shape to the origin
+            int left = x > 0 ? x : de.getX();
+            int top = y > 0 ? y : de.getY();
             // a family that lays out its own diagram type knows what a moved shape drags along
             for (AbstractDiagramMcpTools family : families()) {
-              String done = family.moveOwnShape(diagram, de, elementName, x, y, width, height);
+              String done = family.moveOwnShape(diagram, de, elementName, left, top, width, height);
               if (done != null) {
                 return done;
               }
             }
-            String note = applyBounds(de, x, y, width, height);
+            String note = applyBounds(de, left, top, width, height);
             if (de.getModelElement() instanceof com.vp.plugin.model.IActor) {
               // An actor's name is a detached label that stays behind when the figure moves.
               de.resetCaption();
             }
             // VP does not reroute connectors when bounds change through the API
             recenterTree(de);
+            if (diagram instanceof IClassDiagramUIModel) {
+              layoutAssociationLabels(diagram, false);
+            } else {
+              resetCaptionsOfTree(de);
+            }
             return boundsResult(elementName, de) + note;
           });
     } catch (Exception e) {
@@ -1355,22 +1457,29 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "removeRelationship",
       description =
-          "Delete relationships between two classes on a diagram from the MODEL (shape and model"
-              + " element). relationshipType: Generalization (fromClass = child, toClass ="
-              + " parent), Association"
-              + " (any kind), Aggregation, Composition, Dependency or Realization. Associations"
-              + " match either direction")
+          "Delete relationships between two elements on a diagram from the MODEL (connector and"
+              + " model element). Class diagrams: relationshipType Generalization (fromClass ="
+              + " child, toClass = parent), Association (any kind), Aggregation, Composition,"
+              + " Dependency or Realization; associations match either direction. Every other"
+              + " diagram type (use case, activity, state, flowchart, DFD, BPMN, component,"
+              + " deployment, package...): fromClass and toClass are the names of the two shapes,"
+              + " relationshipType (\"\" or * = any) narrows by the kind of connector (Include,"
+              + " Extend, ControlFlow, Transition, BPSequenceFlow...), its stereotype or its"
+              + " label, and every connector between the two shapes in either direction that"
+              + " matches is removed (this is how an unnamed connector is deleted)")
   public String removeRelationship(
       String diagramName, String fromClass, String toClass, String relationshipType) {
     try {
       return runOnEdt(
           () -> {
-            IClassDiagramUIModel diagram =
-                (IClassDiagramUIModel)
-                    DiagramUtils.findDiagramByName(diagramName, IClassDiagramUIModel.class);
-            if (diagram == null) {
+            IDiagramUIModel any = DiagramUtils.findDiagramByName(diagramName);
+            if (any == null) {
               return diagramNotFound(diagramName);
             }
+            if (!(any instanceof IClassDiagramUIModel)) {
+              return removeConnectorsBetween(any, fromClass, toClass, relationshipType);
+            }
+            IClassDiagramUIModel diagram = (IClassDiagramUIModel) any;
             List<IRelationship> matches =
                 findRelationships(diagram, fromClass, toClass, relationshipType);
             if (matches.isEmpty()) {

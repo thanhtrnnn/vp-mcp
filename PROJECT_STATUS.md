@@ -13,7 +13,7 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (117 tools total)
+### MCP Tool Services (121 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
@@ -42,6 +42,70 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   labeled system rectangle (the module box). Call it AFTER `autoLayoutDiagram` so the box encloses
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
+
+### Round-4 audit fixes (server version 1.32.4.x)
+
+Graded against the course notation brief, verified live in VP 18.1 on F4_* diagrams (exported PNGs,
+`getDiagramGeometry` dumps). 121 tools now (new: `renameElement`, `removeAttribute`,
+`removeOperation`, `setObjectSlot`; `removeRelationship` works on every diagram type). What changed
+and the VP quirks behind it:
+
+- **Pins make explicit connector ends stick.** With the diagram's "center" connection points VP
+  re-anchors a fresh connector at the shapes' centers (or at a package's bounding box, tab
+  included) after the tool returns, whatever points were set. `setFromPinType/setToPinType(
+  PINTYPE_RATIO)` + `setFromPinRatio/setToPinRatio` (a ratio of the shape's bounds) keeps an end
+  where the tool put it: package ends on the border of the body, parallel DFD flows, nothing else
+  needed. `afterVpSettles` (a later event) did NOT help for connectors.
+- **VP shrinks shapes after the call.** A component is fitted to its caption again on the next
+  repaint (ports and `setBounds` do not matter: `setRequestFitSize(false)` does not stop it), a
+  container with children keeps a size set from `afterVpSettles`. Ports therefore sit tight
+  (6 px top/gap, 12 px squares: four fit the 40 px of a component) instead of growing the box;
+  node/frame sizes asked for are minimums restored by `restoreMinimum` / `encloseUpwards`.
+- **obstaclesBetween** skipped the end shapes but not what they hold (the shape list is flat): a
+  node with nested nodes, a package with classes got detours around its own children (vanished
+  paths, flat bridges above frames). Descendants of both ends are no obstacles now.
+- **Sequence / communication reroute**: `rerouteConnectors` redraws the messages from the lifeline
+  centers (sequence) or re-lays links, loops and message slots (communication); `addNote` on a
+  communication diagram repairs the layout through the `afterNoteAdded` hook (VP collapses the
+  messages onto their links when a shape is added). Message labels of a communication diagram are
+  placed by a global pass (`declutterMessages`: middle of the own link first, other side, further
+  out; keeps off participants, names, other messages and other links) with a text-based label width.
+- **addNote**: hard-wrapped text (30 columns), first free spot right/left/below/above the target
+  (no shape, caption or line, inside the lane of a lane node), reports the box it asked for (VP
+  auto-fits notes to their text a moment later).
+- **Activity**: a fork/join bar's flows leave through their own port and run down along a free
+  channel between the rows (`orthogonalBarRoute`), cross-lane action flows go down, across, down
+  (`orthogonalLaneRoute`); branches of a fork/decision start below the whole row of the source;
+  `addActivityFrame` moves an unlisted box out to a spot clear of other frames; an explicit x/y
+  that was clamped warns about the box it overlaps; "End #2" is a handle that shows "End"
+  (`handleOf` hook, found by every tool).
+- **State**: `autoLayoutDiagram` lays the flow out top to bottom (`StateMachineUtils.flowLayers`,
+  back transitions ignored, end at the bottom, branches side by side), self loops follow moved
+  states, name-only states are 30 px high.
+- **BPMN**: a node moved next to its source keeps clear of every other element (unconnected
+  auto-placed ones included, names of events/gateways too) and the flow always runs left to right
+  (the lane grows past the old 900 px row); names are fitted again after the lane grew; message
+  flows of different pairs take different gap lines (`gapLegs`, three lines in the 90 px pool gap),
+  a request/response pair differs in the blocked-leg fallback too; labels are placed clear of
+  shapes, names, other labels and other flows; duplicate sequence/message flows and data
+  associations are refused; a pool of height <= 60 is a black box (`setBlackBox`, its name is drawn
+  horizontally); flows keep out of the names of their own ends.
+- **Flowchart / DFD**: DFD `autoLayoutDiagram` activates the diagram first (a background diagram
+  keeps the lines center to center), opposite DFD flows are two parallel straight arrows (pinned),
+  data flow labels keep off every line, the third branch of a decision goes on the next row, the
+  letter of a connector symbol is inside its circle.
+- **Use case**: `autoLayoutDiagram` fits an existing system boundary around the laid-out use cases;
+  keyword labels (<<Include>>, <<use>>...) of bent connectors are put beside the longest leg.
+- **Deployment / component / package**: setElementBounds resets the captions of the connectors of a
+  moved shape (class diagrams re-lay their association labels); path labels get room between nodes;
+  artifacts and components of a node are reused on a second diagram; frames and nodes keep the
+  size asked for; layer frames of a component diagram are stacked; nested components are 90 px
+  apart; connectors with a port at one end leave it outwards and go around its component.
+- **Shared**: `setElementBounds` treats x/y <= 0 as "keep"; `removeRelationship` and
+  `removeDiagramElement` also delete activity flows and state transitions (models that exist on
+  their diagram only); `routeBends` keeps bends 30 px inside the canvas; `autoLayoutDiagram` says
+  what it does per family and does not touch diagrams that are laid out while elements are added.
+- **ERD**: `generateDdl` / report write UNIQUE; `addForeignKey` creates a missing `fromColumn`.
 
 ### Round-3 audit fixes (server version 1.32.3.x)
 

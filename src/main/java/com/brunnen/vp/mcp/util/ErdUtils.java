@@ -67,6 +67,9 @@ public final class ErdUtils {
         if (!col.isNullable()) {
           sql.append(" NOT NULL");
         }
+        if (col.isUnique() && !col.isPrimaryKey()) {
+          sql.append(" UNIQUE");
+        }
         if (col.isPrimaryKey()) {
           primaryKeys.add(col.getName());
         }

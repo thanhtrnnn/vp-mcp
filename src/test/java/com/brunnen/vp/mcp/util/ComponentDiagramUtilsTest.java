@@ -243,24 +243,28 @@ public class ComponentDiagramUtilsTest {
     int[] component = {100, 100, 160, 80};
     assertArrayEquals(
         "First port straddles the left edge",
-        new int[] {92, 112},
+        new int[] {92, 106},
         ComponentDiagramUtils.portPosition(component, 0, 16));
     assertArrayEquals(
         "Second port straddles the right edge",
-        new int[] {252, 112},
+        new int[] {252, 106},
         ComponentDiagramUtils.portPosition(component, 1, 16));
     assertArrayEquals(
         "Third port stacks below the first",
-        new int[] {92, 138},
+        new int[] {92, 128},
         ComponentDiagramUtils.portPosition(component, 2, 16));
   }
 
   @Test
   public void testMinHeightForPorts() {
     assertEquals(0, ComponentDiagramUtils.minHeightForPorts(0, 16));
-    assertEquals("One slot", 40, ComponentDiagramUtils.minHeightForPorts(1, 16));
-    assertEquals("Two ports share a slot", 40, ComponentDiagramUtils.minHeightForPorts(2, 16));
-    assertEquals("Three ports need two slots", 66, ComponentDiagramUtils.minHeightForPorts(3, 16));
+    assertEquals("One slot", 26, ComponentDiagramUtils.minHeightForPorts(1, 16));
+    assertEquals("Two ports share a slot", 26, ComponentDiagramUtils.minHeightForPorts(2, 16));
+    assertEquals("Three ports need two slots", 48, ComponentDiagramUtils.minHeightForPorts(3, 16));
+    assertEquals(
+        "Three 12 px ports fit the 40 px of a component",
+        40,
+        ComponentDiagramUtils.minHeightForPorts(3, 12));
   }
 
   @Test

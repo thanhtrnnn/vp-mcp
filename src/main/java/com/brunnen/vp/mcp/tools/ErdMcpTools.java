@@ -183,7 +183,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
           "Add a foreign key: fromTable (the child) holds fromColumn, which references toColumn"
               + " of toTable (the parent; empty toColumn = its primary key). The relationship is"
               + " drawn with the crow's foot at the child. An existing fromColumn becomes the FK"
-              + " column; when it is empty, Visual Paradigm adds a column named after the parent")
+              + " column; a fromColumn that does not exist yet is created with that name; when it"
+              + " is empty, Visual Paradigm adds a column named after the parent")
   public String addForeignKey(
       String diagramName,
       String fromTable,
@@ -203,10 +204,14 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             IDiagramElement childShape = findDiagramElementByModel(diagram, child);
             IDiagramElement parentShape = findDiagramElementByModel(diagram, parent);
             IDBColumn childCol = null;
+            String newColumnName = null; // a name for the column Visual Paradigm adds
             if (isSet(fromColumn)) {
               childCol = findColumnByName(child, fromColumn.trim());
               if (childCol == null) {
-                return "Column '" + fromColumn + "' not found in table '" + fromTable + "'";
+                if (!ErdUtils.isSqlIdentifier(fromColumn.trim())) {
+                  return notAnIdentifier("Column", fromColumn.trim());
+                }
+                newColumnName = fromColumn.trim();
               }
             }
             IDBColumn refCol = null;
@@ -226,7 +231,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                   + fromTable
                   + "' already is a foreign key";
             }
-            if (childCol == null && findForeignKey(diagram, parent, child) != null) {
+            if (childCol == null
+                && newColumnName == null
+                && findForeignKey(diagram, parent, child) != null) {
               return "A foreign key from '"
                   + fromTable
                   + "' to '"
@@ -249,7 +256,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             fk.setTo(child);
             fk.setFromMultiplicity(IDBForeignKey.FROM_MULTIPLICITY_ONE);
             fk.setToMultiplicity(IDBForeignKey.TO_MULTIPLICITY_ZERO_TO_MANY);
-            String columnNote = adoptForeignKeyColumn(fk, child, childCol, refCol);
+            String columnNote = adoptForeignKeyColumn(fk, child, childCol, refCol, newColumnName);
             IDiagramElement connector = connectCentered(diagram, fk, parentShape, childShape);
             if (connector == null) {
               fk.delete();
@@ -368,7 +375,11 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
    * @return the name of the child's FK column
    */
   private static String adoptForeignKeyColumn(
-      IDBForeignKey fk, IDBTable child, IDBColumn childCol, IDBColumn refCol) {
+      IDBForeignKey fk,
+      IDBTable child,
+      IDBColumn childCol,
+      IDBColumn refCol,
+      String newColumnName) {
     IDBColumn generated = null;
     Iterator<?> cols = fk.foreignKeyColumnsIterator();
     if (cols.hasNext()) {
@@ -384,6 +395,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       for (IDBForeignKeyConstraint constraint : generated.toForeignKeyConstraintArray()) {
         constraint.setRefColumn(refCol);
       }
+    }
+    if (childCol == null && newColumnName != null) {
+      generated.setName(newColumnName); // the FK column of the requested name
     }
     if (childCol != null && childCol != generated) {
       String name = childCol.getName();
@@ -816,6 +830,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                     colStr.append(" PK");
                   } else if (!col.isNullable()) {
                     colStr.append(" NOT NULL");
+                  }
+                  if (col.isUnique() && !col.isPrimaryKey()) {
+                    colStr.append(" UNIQUE");
                   }
                   cols.add(colStr.toString());
                 }

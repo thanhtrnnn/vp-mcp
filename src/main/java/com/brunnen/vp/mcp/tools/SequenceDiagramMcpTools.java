@@ -499,7 +499,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 for (IShapeUIModel outer :
                     enclosingFrames(
                         diagram, coveredLeft, coveredRight, firstRow.arrowY, rangeBottom)) {
-                  above = Math.max(above, frameContentTop(outer));
+                  above = Math.max(above, frameContentTopAt(outer, firstRow.arrowY));
                 }
               }
               int missing = above + need - firstRow.arrowY;
@@ -569,6 +569,33 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 enclosingFrames(diagram, coveredLeft, coveredRight, frameTop, lastBottom)) {
               left = Math.max(left, outer.getX() + NEST_INSET);
               right = Math.min(right, outer.getX() + outer.getWidth() - NEST_INSET);
+            }
+
+            // a frame around this one ends a little below it, not on its bottom border
+            for (IShapeUIModel outer :
+                enclosingFrames(diagram, coveredLeft, coveredRight, frameTop, lastBottom)) {
+              int wantedBottom = layout[1] + NEST_INSET;
+              int growth = wantedBottom - (outer.getY() + outer.getHeight());
+              if (growth > 0) {
+                outer.setBounds(
+                    outer.getX(), outer.getY(), outer.getWidth(), outer.getHeight() + growth);
+                IShapeUIModel[] outerOperands = outer.toChildArray();
+                IShapeUIModel lastOperand = null;
+                for (IShapeUIModel candidate :
+                    outerOperands == null ? new IShapeUIModel[0] : outerOperands) {
+                  if (candidate.getModelElement() instanceof IInteractionOperand
+                      && (lastOperand == null || candidate.getY() > lastOperand.getY())) {
+                    lastOperand = candidate;
+                  }
+                }
+                if (lastOperand != null) {
+                  lastOperand.setBounds(
+                      lastOperand.getX(),
+                      lastOperand.getY(),
+                      lastOperand.getWidth(),
+                      lastOperand.getHeight() + growth);
+                }
+              }
             }
 
             IDiagramElement created = getDiagramManager().createDiagramElement(diagram, fragment);
@@ -645,6 +672,32 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return frames;
+  }
+
+  /**
+   * The height below the operator tab or divider and the guard of the operand of {@code frame} that
+   * holds the height {@code y}: where its messages start. A fragment nested in the second operand
+   * of an alt must start below the divider and guard of that operand, not below the frame's tab.
+   */
+  private static int frameContentTopAt(IShapeUIModel frame, int y) {
+    IShapeUIModel[] shapes = frame.toChildArray();
+    IShapeUIModel operand = null;
+    for (IShapeUIModel candidate : shapes == null ? new IShapeUIModel[0] : shapes) {
+      if (candidate.getModelElement() instanceof IInteractionOperand
+          && candidate.getY() <= y
+          && (operand == null || candidate.getY() > operand.getY())) {
+        operand = candidate;
+      }
+    }
+    if (operand == null) {
+      return frameContentTop(frame);
+    }
+    IInteractionOperand model = (IInteractionOperand) operand.getModelElement();
+    boolean guarded =
+        model.getGuard() != null
+            && model.getGuard().getConstraint() != null
+            && !model.getGuard().getConstraint().trim().isEmpty();
+    return operand.getY() + (guarded ? GUARD_ROW : 0);
   }
 
   /** The height below a frame's operator tab and first guard, where its messages start. */
@@ -911,6 +964,33 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return boundsResult(name, head);
   }
 
+  @Override
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    return diagram instanceof IInteractionDiagramUIModel
+        ? laidOutWhileAdding(diagram, "sequence diagram")
+        : null;
+  }
+
+  @Override
+  protected int rerouteOwnConnectors(IDiagramUIModel diagram) {
+    if (!(diagram instanceof IInteractionDiagramUIModel)) {
+      return -1;
+    }
+    // A message is anchored to its lifelines, not to the center of a shape: the generic center
+    // routing would turn the arrows diagonal. The arrows are drawn again from the lifeline centers
+    // at their heights, which repairs a diagram whose lifelines or bars moved.
+    IInteractionDiagramUIModel sequence = (IInteractionDiagramUIModel) diagram;
+    List<MessageRow> rows = messageRows(sequence);
+    java.util.Set<String> heads = new java.util.HashSet<>();
+    for (IDiagramElement de : getDiagramElementsList(sequence)) {
+      if (de instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel) {
+        heads.add(de.getId());
+      }
+    }
+    redrawMessages(sequence, rows, heads);
+    return rows.size();
+  }
+
   /**
    * Draw the arrows of the given messages again from the current lifeline centers, at the heights
    * they had before the lifelines moved. Visual Paradigm re-anchors the ends of the messages
@@ -1050,7 +1130,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // Space kept between a message label and the lifelines at the ends of its arrow, and between a
   // nested combined fragment and the one around it.
   private static final int LABEL_MARGIN = 30;
-  private static final int NEST_INSET = 10;
+  private static final int NEST_INSET = 12;
   // Horizontal lifeline layout (tighter than the default 250px spread).
   private static final int LIFELINE_X0 = 40;
   private static final int LIFELINE_DX = 150;
@@ -1086,6 +1166,10 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       boolean async,
       boolean isReturn,
       String special) {
+    if (stripLeadingNumber(messageName).trim().isEmpty()) {
+      return "Message name must not be empty: a message without a label reads as a bare number"
+          + " (the book labels every message, e.g. \"goi\" or \"tra ve\")";
+    }
     // All participants are real lifelines (boundary/entity/control + actor-as-box).
     IInteractionLifeLine from = SequenceDiagramUtils.findLifelineByName(diagram, fromLifeline);
     IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);

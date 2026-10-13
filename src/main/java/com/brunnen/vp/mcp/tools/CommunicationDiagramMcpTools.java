@@ -302,6 +302,13 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Lifeline not on diagram: " + toLifeline;
             }
 
+            if (seq != null && collectSequenceNumbers(diagram).contains(seq)) {
+              return "Sequence number "
+                  + seq
+                  + " is already used on diagram '"
+                  + diagram.getName()
+                  + "'; every message has its own number (pass \"\" for the next free one)";
+            }
             IConnectorUIModel link = findCommunicationLink(diagram, from, to);
             boolean linkCreated = false;
             if (link == null) {
@@ -388,6 +395,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
             if (linkCreated) {
               layoutByLinks(diagram);
             }
+            declutterMessages(diagram);
 
             return "Added message '"
                 + CommunicationDiagramUtils.formatMessageLabel(seq, text)
@@ -497,6 +505,46 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
     diagram.realCloseDiagram();
     getDiagramManager().openDiagram(diagram);
     relayoutSelfLinks(diagram);
+    declutterMessages(diagram);
+  }
+
+  @Override
+  protected int rerouteOwnConnectors(IDiagramUIModel diagram) {
+    if (!(diagram instanceof ICommunicationDiagramUIModel)) {
+      return -1;
+    }
+    return repairLayout((ICommunicationDiagramUIModel) diagram);
+  }
+
+  @Override
+  protected void afterNoteAdded(IDiagramUIModel diagram) {
+    // a new shape or anchor makes VP re-lay out the links: every message collapses onto its link
+    if (diagram instanceof ICommunicationDiagramUIModel) {
+      repairLayout((ICommunicationDiagramUIModel) diagram);
+    }
+  }
+
+  /**
+   * Draw every link between the current centers of its participants again, the message arrows
+   * beside them, and every self loop on its free side.
+   *
+   * @return the number of links
+   */
+  private int repairLayout(ICommunicationDiagramUIModel diagram) {
+    activate(diagram);
+    reanchorLinks(diagram, null);
+    diagram.realCloseDiagram();
+    getDiagramManager().openDiagram(diagram);
+    relayoutSelfLinks(diagram);
+    declutterMessages(diagram);
+    int links = 0;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel
+          && de.getModelElement() instanceof IInteractionLifeLineLink) {
+        links++;
+      }
+    }
+    return links;
   }
 
   /**
@@ -629,6 +677,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
     diagram.realCloseDiagram();
     getDiagramManager().openDiagram(diagram);
     relayoutSelfLinks(diagram);
+    declutterMessages(diagram);
     return rowYs.size();
   }
 
@@ -655,6 +704,182 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
         caption.setBounds(spot[2], spot[3], caption.getWidth(), caption.getHeight());
       }
     }
+  }
+
+  /** Half the side of the box an arrow occupies, and the space kept around boxes. */
+  private static final int ARROW_BOX_HALF = 12;
+
+  private static final int LABEL_CLEARANCE = 3;
+
+  /**
+   * Put each message arrow and its label where they touch no participant (box or name), no arrow or
+   * label of another message and no line of another link: the first clear spot beside its own link
+   * (middle first, then towards the ends, its own side first, then the other one, then further
+   * out). The slots of a link are computed on their own and collide where links meet at a
+   * participant; this pass sees them all.
+   */
+  private void declutterMessages(ICommunicationDiagramUIModel diagram) {
+    List<int[]> fixed = new ArrayList<>();
+    List<int[]> segments = new ArrayList<>();
+    List<IConnectorUIModel> links = new ArrayList<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IShapeUIModel && isParticipant(de.getModelElement())) {
+        fixed.add(new int[] {de.getX(), de.getY(), de.getWidth(), de.getHeight()});
+        ICaptionUIModel cap = ((IShapeUIModel) de).getCaptionUIModel();
+        if (cap != null
+            && cap.isVisible()
+            && cap.getWidth() > 0
+            && (cap.getX() != 0 || cap.getY() != 0)) {
+          // a participant's name is a detached label with diagram coordinates
+          fixed.add(new int[] {cap.getX(), cap.getY(), cap.getWidth(), cap.getHeight()});
+        }
+      } else if (de instanceof IConnectorUIModel
+          && de.getModelElement() instanceof IInteractionLifeLineLink) {
+        links.add((IConnectorUIModel) de);
+      }
+    }
+    for (int i = 0; i < links.size(); i++) {
+      Point[] points = links.get(i).getPoints();
+      for (int k = 0; points != null && k + 1 < points.length; k++) {
+        segments.add(new int[] {points[k].x, points[k].y, points[k + 1].x, points[k + 1].y, i});
+      }
+    }
+    // messages on self links keep the place relayoutSelfLinks gave them
+    List<int[]> placed = new ArrayList<>();
+    for (IConnectorUIModel link : links) {
+      if (isSameElement(link.getFromShape(), link.getToShape())) {
+        for (IShapeUIModel child : messagesOf(link)) {
+          placed.add(arrowBox(child));
+          placed.add(captionBox(child));
+        }
+      }
+    }
+    int box = CommunicationDiagramUtils.MESSAGE_BOX;
+    for (int i = 0; i < links.size(); i++) {
+      IConnectorUIModel link = links.get(i);
+      Point[] points = link.getPoints();
+      IShapeUIModel a = link.getFromShape();
+      IShapeUIModel b = link.getToShape();
+      if (points == null || points.length < 2 || a == null || b == null || isSameElement(a, b)) {
+        continue;
+      }
+      Point start = points[0];
+      Point end = points[points.length - 1];
+      double[] normal =
+          CommunicationDiagramUtils.unitNormal(
+              a.getX() + a.getWidth() / 2.0,
+              a.getY() + a.getHeight() / 2.0,
+              b.getX() + b.getWidth() / 2.0,
+              b.getY() + b.getHeight() / 2.0);
+      for (IShapeUIModel child : messagesOf(link)) {
+        ICaptionUIModel caption = child.getCaptionUIModel();
+        if (caption == null) {
+          continue;
+        }
+        int capW = labelWidth(child);
+        int capH = caption.getHeight() > 0 ? caption.getHeight() : 14;
+        double preferred = isReverseMessage(child) ? -1 : 1;
+        int[] best = null;
+        int bestScore = Integer.MAX_VALUE;
+        for (double t : new double[] {0.5, 0.38, 0.62, 0.26, 0.74}) {
+          double mx = start.x + (end.x - start.x) * t;
+          double my = start.y + (end.y - start.y) * t;
+          for (int pass = 0; pass < 2; pass++) {
+            double side = pass == 0 ? preferred : -preferred;
+            for (int stack = 0; stack < 3; stack++) {
+              int[] spot =
+                  CommunicationDiagramUtils.messageSlot(
+                      mx, my, normal[0] * side, normal[1] * side, stack, capW, capH);
+              int[] arrow = {
+                spot[0] - ARROW_BOX_HALF,
+                spot[1] - ARROW_BOX_HALF,
+                2 * ARROW_BOX_HALF,
+                2 * ARROW_BOX_HALF
+              };
+              int[] label = {spot[2], spot[3], capW, capH};
+              int cost = (int) Math.round(Math.abs(t - 0.5) * 100) + pass * 60 + stack * 45;
+              int hits = hitCount(arrow, label, i, fixed, placed, segments);
+              int score = hits * 1000 + cost;
+              if (score < bestScore) {
+                bestScore = score;
+                best = spot;
+              }
+            }
+          }
+        }
+        if (best == null) {
+          continue;
+        }
+        child.setBounds(best[0] - box / 2, best[1] - box / 2, box, box);
+        caption.setBounds(best[2], best[3], capW, capH);
+        placed.add(arrowBox(child));
+        placed.add(captionBox(child));
+      }
+    }
+  }
+
+  /** Number of things an arrow and its label touch: boxes, other messages, other links. */
+  private static int hitCount(
+      int[] arrow,
+      int[] label,
+      int ownLink,
+      List<int[]> fixed,
+      List<int[]> placed,
+      List<int[]> segments) {
+    int hits = 0;
+    for (List<int[]> group : java.util.Arrays.asList(fixed, placed)) {
+      for (int[] r : group) {
+        hits += overlaps(arrow, r) ? 1 : 0;
+        hits += overlaps(label, r) ? 1 : 0;
+      }
+    }
+    hits += overlaps(label, arrow) ? 1 : 0;
+    for (int[] seg : segments) {
+      if (seg[4] != ownLink
+          && DiagramUtils.segmentHitsRect(seg[0], seg[1], seg[2], seg[3], arrow, 0)) {
+        hits++;
+      }
+      if (DiagramUtils.segmentHitsRect(seg[0], seg[1], seg[2], seg[3], label, 1)) {
+        hits++;
+      }
+    }
+    if (arrow[0] < 0 || arrow[1] < 0 || label[0] < 0 || label[1] < 0) {
+      hits++;
+    }
+    return hits;
+  }
+
+  private static boolean overlaps(int[] a, int[] b) {
+    return a[0] < b[0] + b[2] + LABEL_CLEARANCE
+        && b[0] < a[0] + a[2] + LABEL_CLEARANCE
+        && a[1] < b[1] + b[3] + LABEL_CLEARANCE
+        && b[1] < a[1] + a[3] + LABEL_CLEARANCE;
+  }
+
+  private static List<IShapeUIModel> messagesOf(IConnectorUIModel link) {
+    List<IShapeUIModel> messages = new ArrayList<>();
+    IShapeUIModel[] children = link.toChildArray();
+    for (IShapeUIModel child : children == null ? new IShapeUIModel[0] : children) {
+      if (child instanceof IBaseCommunicationMessageUIModel) {
+        messages.add(child);
+      }
+    }
+    return messages;
+  }
+
+  private static int[] arrowBox(IShapeUIModel message) {
+    int cx = message.getX() + message.getWidth() / 2;
+    int cy = message.getY() + message.getHeight() / 2;
+    return new int[] {
+      cx - ARROW_BOX_HALF, cy - ARROW_BOX_HALF, 2 * ARROW_BOX_HALF, 2 * ARROW_BOX_HALF
+    };
+  }
+
+  private static int[] captionBox(IShapeUIModel message) {
+    ICaptionUIModel cap = message.getCaptionUIModel();
+    return cap == null
+        ? new int[] {0, 0, 0, 0}
+        : new int[] {cap.getX(), cap.getY(), labelWidth(message), Math.max(cap.getHeight(), 14)};
   }
 
   // --- Participants ---
@@ -899,7 +1124,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
     IShapeUIModel a = link.getFromShape();
     IShapeUIModel b = link.getToShape();
     ICaptionUIModel caption = shape.getCaptionUIModel();
-    int capWidth = caption != null && caption.getWidth() > 0 ? caption.getWidth() : 100;
+    int capWidth = labelWidth(shape);
     int capHeight = caption != null && caption.getHeight() > 0 ? caption.getHeight() : 14;
     if (self) {
       int side = selfLoopSide(a);
@@ -922,6 +1147,25 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     return CommunicationDiagramUtils.messageSlot(
         mx, my, normal[0] * side, normal[1] * side, slot, capWidth, capHeight);
+  }
+
+  /**
+   * Width of the label of a message: Visual Paradigm's caption box can be narrower than its text
+   * (long Vietnamese labels), so the text length decides when it is the larger.
+   */
+  private static int labelWidth(IShapeUIModel message) {
+    ICaptionUIModel caption = message.getCaptionUIModel();
+    int measured = caption != null && caption.getWidth() > 0 ? caption.getWidth() : 0;
+    IModelElement model = message.getModelElement();
+    int estimate = 0;
+    if (model instanceof IMessage && model.getName() != null) {
+      String label =
+          CommunicationDiagramUtils.formatMessageLabel(
+              ((IMessage) model).getSequenceNumber(), model.getName());
+      estimate = (int) Math.round(label.length() * 6.3) + 4;
+    }
+    int width = Math.max(measured, estimate);
+    return width > 0 ? width : 100;
   }
 
   /** The loop of a self link on {@code shape}, on the free side computed now. */
@@ -1003,7 +1247,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
           continue;
         }
         ICaptionUIModel caption = child.getCaptionUIModel();
-        int capWidth = caption != null && caption.getWidth() > 0 ? caption.getWidth() : 100;
+        int capWidth = labelWidth(child);
         int capHeight = caption != null && caption.getHeight() > 0 ? caption.getHeight() : 14;
         int[] spot =
             CommunicationDiagramUtils.selfMessageSlot(loop, side, slot++, capWidth, capHeight);

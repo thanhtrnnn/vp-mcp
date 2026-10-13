@@ -38,6 +38,9 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
 
   private static final int STATE_MIN_HEIGHT = 30;
 
+  /** Height of a state that shows only its name. */
+  private static final int NAME_ONLY_HEIGHT = 30;
+
   /** Default size of the initial/final pseudo state circles. */
   private static final int PSEUDO_SIZE = 30;
 
@@ -125,7 +128,19 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
             fitShape(de);
             int width = Math.max(de.getWidth(), STATE_MIN_WIDTH);
             int height = Math.max(de.getHeight(), STATE_MIN_HEIGHT);
+            boolean nameOnly =
+                state.getEntry() == null
+                    && state.getDoActivity() == null
+                    && state.getExit() == null;
+            if (nameOnly) {
+              // the name sits at the top of the box: a box hardly taller than the name reads as
+              // centered, as in the book (Visual Paradigm's fit leaves an empty lower half)
+              height = NAME_ONLY_HEIGHT;
+            }
             de.setBounds(de.getX(), de.getY(), width, height);
+            if (nameOnly && de instanceof IShapeUIModel) {
+              keepSize((IShapeUIModel) de);
+            }
             place(diagram, de, x, y);
             // the name is a detached label laid out where the caption was last reset
             de.resetCaption();
@@ -294,12 +309,7 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
       IDiagramUIModel diagram, ITransition2 transition, IDiagramElement state) {
     activate(diagram);
     int[] box = rect(state);
-    int labelWidth = transition.getName() == null ? 0 : transition.getName().length() * 7 + 10;
-    List<int[]> others = obstacles(diagram, state);
-    boolean left =
-        hitsAny(StateMachineUtils.selfLoopArea(box, labelWidth, false), others)
-            && !hitsAny(StateMachineUtils.selfLoopArea(box, labelWidth, true), others)
-            && box[0] - StateMachineUtils.SELF_LOOP_WIDTH - labelWidth > 0;
+    boolean left = selfLoopOnLeft(diagram, state, transition.getName());
     int[][] loop = StateMachineUtils.selfLoopPoints(box[0], box[1], box[2], box[3], left);
     Point[] points = new Point[loop.length];
     for (int i = 0; i < loop.length; i++) {
@@ -312,19 +322,50 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     connector.resetCaption();
     if (connector instanceof IConnectorUIModel) {
-      IConnectorUIModel c = (IConnectorUIModel) connector;
-      c.clearPoints();
-      for (Point p : points) {
-        c.addPoint(p);
-      }
-      ICaptionUIModel cap = c.getCaptionUIModel();
-      if (cap != null) {
-        int capX = left ? loop[1][0] - 6 - cap.getWidth() : loop[1][0] + 6;
-        int capY = (loop[1][1] + loop[2][1]) / 2 - Math.max(cap.getHeight(), 14) / 2;
-        cap.setBounds(capX, capY, cap.getWidth(), cap.getHeight());
-      }
+      drawSelfLoop((IConnectorUIModel) connector, box, left);
     }
     return connector;
+  }
+
+  /** Whether the loop of a self-transition (and its label) goes on the left edge of the state. */
+  private boolean selfLoopOnLeft(IDiagramUIModel diagram, IDiagramElement state, String label) {
+    int[] box = rect(state);
+    int labelWidth = label == null ? 0 : label.length() * 7 + 10;
+    List<int[]> others = obstacles(diagram, state);
+    return hitsAny(StateMachineUtils.selfLoopArea(box, labelWidth, false), others)
+        && !hitsAny(StateMachineUtils.selfLoopArea(box, labelWidth, true), others)
+        && box[0] - StateMachineUtils.SELF_LOOP_WIDTH - labelWidth > 0;
+  }
+
+  /** Put the points of a self-transition on its loop and its label beside the loop. */
+  private static void drawSelfLoop(IConnectorUIModel c, int[] box, boolean left) {
+    int[][] loop = StateMachineUtils.selfLoopPoints(box[0], box[1], box[2], box[3], left);
+    c.clearPoints();
+    for (int[] p : loop) {
+      c.addPoint(new Point(p[0], p[1]));
+    }
+    c.setRequestRebuild(false);
+    ICaptionUIModel cap = c.getCaptionUIModel();
+    if (cap != null) {
+      int capX = left ? loop[1][0] - 6 - cap.getWidth() : loop[1][0] + 6;
+      int capY = (loop[1][1] + loop[2][1]) / 2 - Math.max(cap.getHeight(), 14) / 2;
+      cap.setBounds(capX, capY, cap.getWidth(), cap.getHeight());
+    }
+  }
+
+  /** Draw the self-transitions of the diagram (of one state when given) on their loops again. */
+  private void relayoutSelfLoops(IDiagramUIModel diagram, IDiagramElement only) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel
+          && hasSelfLoop((IConnectorUIModel) de)
+          && (only == null
+              || ((IConnectorUIModel) de).getFromShape().getId().equals(only.getId()))) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        IShapeUIModel state = c.getFromShape();
+        String label = c.getModelElement() == null ? null : c.getModelElement().getName();
+        drawSelfLoop(c, rect(state), selfLoopOnLeft(diagram, state, label));
+      }
+    }
   }
 
   /** Whether the rectangle comes within 10 px of any of the others. */
@@ -792,6 +833,7 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
     // the name is a detached label, the transitions and their labels follow the state
     shape.resetCaption();
     recenterConnectorsOf(shape);
+    relayoutSelfLoops(diagram, shape);
     placeLabels(shape);
     placePseudoCaptions(diagram);
     return boundsResult(name, shape) + note;
@@ -814,6 +856,136 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     placePseudoCaptions(diagram);
     return count;
+  }
+
+  @Override
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    if (!(diagram instanceof IStateDiagramUIModel)) {
+      return null;
+    }
+    // the book's screen flow: top to bottom, transitions that go back run upwards beside the
+    // forward ones, branches side by side
+    List<IShapeUIModel> states = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getParent() == null
+          && s.getWidth() > 0
+          && (s.getModelElement() instanceof IState2
+              || s.getModelElement() instanceof IInitialPseudoState
+              || s.getModelElement() instanceof IFinalState2)) {
+        states.add(s);
+      }
+    }
+    if (states.isEmpty()) {
+      return "Diagram '" + diagram.getName() + "' has no states to lay out";
+    }
+    java.util.Map<String, Integer> index = new java.util.HashMap<>();
+    for (int i = 0; i < states.size(); i++) {
+      index.put(states.get(i).getId(), i);
+    }
+    List<int[]> edges = new ArrayList<>();
+    int[] labelNeed = new int[states.size()]; // the widest label of a transition at each state
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel && !hasSelfLoop((IConnectorUIModel) de)) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        Integer a = c.getFromShape() == null ? null : index.get(c.getFromShape().getId());
+        Integer b = c.getToShape() == null ? null : index.get(c.getToShape().getId());
+        if (a != null && b != null) {
+          edges.add(new int[] {a, b});
+          String text = c.getModelElement() == null ? null : c.getModelElement().getName();
+          int need = text == null ? 0 : text.length() * 7 + 14;
+          labelNeed[a] = Math.max(labelNeed[a], need);
+          labelNeed[b] = Math.max(labelNeed[b], need);
+        }
+      }
+    }
+    List<Integer> roots = new ArrayList<>();
+    for (int i = 0; i < states.size(); i++) {
+      if (states.get(i).getModelElement() instanceof IInitialPseudoState) {
+        roots.add(i);
+      }
+    }
+    int[] rootArray = new int[roots.size()];
+    for (int i = 0; i < rootArray.length; i++) {
+      rootArray[i] = roots.get(i);
+    }
+    int[] layer =
+        StateMachineUtils.flowLayers(states.size(), edges.toArray(new int[0][]), rootArray);
+    int last = 0;
+    for (int l : layer) {
+      last = Math.max(last, l);
+    }
+    // the end of the flow goes at the bottom, whichever state leads to it
+    for (int i = 0; i < states.size(); i++) {
+      if (states.get(i).getModelElement() instanceof IFinalState2 && last > 0 && layer[i] < last) {
+        boolean othersAtBottom = false;
+        for (int j = 0; j < states.size(); j++) {
+          othersAtBottom |=
+              j != i
+                  && layer[j] == last
+                  && !(states.get(j).getModelElement() instanceof IFinalState2);
+        }
+        layer[i] = othersAtBottom ? last + 1 : last;
+      }
+    }
+    int rows = 0;
+    for (int l : layer) {
+      rows = Math.max(rows, l + 1);
+    }
+    // width of each row and the column axis the rows are centered on
+    int[] rowWidth = new int[rows];
+    int[] rowHeight = new int[rows];
+    int[] inRow = new int[rows];
+    for (int i = 0; i < states.size(); i++) {
+      int l = layer[i];
+      int gap = Math.max(GRID_GAP, labelNeed[i] + 50);
+      rowWidth[l] += states.get(i).getWidth() + (inRow[l]++ > 0 ? gap : 0);
+      rowHeight[l] = Math.max(rowHeight[l], states.get(i).getHeight());
+    }
+    int widest = 0;
+    for (int w : rowWidth) {
+      widest = Math.max(widest, w);
+    }
+    int axis = GRID_X0 + widest / 2;
+    int[] cursor = new int[rows];
+    for (int l = 0; l < rows; l++) {
+      cursor[l] = axis - rowWidth[l] / 2;
+    }
+    int[] rowTop = new int[rows];
+    int y = GRID_Y0;
+    for (int l = 0; l < rows; l++) {
+      rowTop[l] = y;
+      y += rowHeight[l] + GRID_VGAP;
+    }
+    int[] placedInRow = new int[rows];
+    for (int i = 0; i < states.size(); i++) {
+      IShapeUIModel s = states.get(i);
+      int l = layer[i];
+      int gap = Math.max(GRID_GAP, labelNeed[i] + 50);
+      if (placedInRow[l]++ > 0) {
+        cursor[l] += gap;
+      }
+      s.setBounds(
+          cursor[l], rowTop[l] + (rowHeight[l] - s.getHeight()) / 2, s.getWidth(), s.getHeight());
+      cursor[l] += s.getWidth();
+      s.resetCaption();
+    }
+    for (IShapeUIModel s : states) {
+      recenterConnectorsOf(s);
+    }
+    relayoutSelfLoops(diagram, null);
+    for (IShapeUIModel s : states) {
+      placeLabels(s);
+    }
+    makeRoomLeft(diagram);
+    placePseudoCaptions(diagram);
+    return "Laid out "
+        + states.size()
+        + " state(s) of '"
+        + diagram.getName()
+        + "' top to bottom in "
+        + rows
+        + " row(s): the flow runs down from the start, branches side by side, the end at the"
+        + " bottom, transitions back run upwards beside the forward ones";
   }
 
   /** Whether a state already has an incoming transition from another state. */

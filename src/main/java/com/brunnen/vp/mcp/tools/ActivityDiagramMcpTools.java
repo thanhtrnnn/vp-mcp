@@ -85,6 +85,23 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
   /** Ids of node shapes placed automatically (no x/y), which flows may move next to a source. */
   private final java.util.Set<String> autoPlaced = new java.util.HashSet<>();
 
+  /**
+   * Handles of nodes whose handle differs from the label they show: a second final node called "End
+   * #2" shows "End" (shape id -> handle).
+   */
+  private final java.util.Map<String, String> handles = new java.util.HashMap<>();
+
+  @Override
+  protected String handleOf(IDiagramElement de) {
+    return handles.get(de.getId());
+  }
+
+  /** A handle's displayed label: the text without a trailing " #2" style number. */
+  private static String labelOf(String handle) {
+    String label = handle.replaceAll("\\s*#\\d+$", "").trim();
+    return label.isEmpty() ? handle : label;
+  }
+
   /** Lane body height requested per diagram id (addActivityPartition height or default). */
   private final Map<String, Integer> laneHeights = new java.util.HashMap<>();
 
@@ -316,7 +333,8 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                 + "'"
                 + laneSuffix(lane)
                 + " at "
-                + bounds(shape);
+                + bounds(shape)
+                + (x > 0 || y > 0 ? overlapWarning(diagram, shape) : "");
           });
     } catch (Exception e) {
       return "Error adding action: " + e.getMessage();
@@ -341,7 +359,9 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
               + " decision | merge | fork | join (fork/join are horizontal bars, decision/merge"
               + " diamonds). nodeName is the handle used by addActivityFlow and must be unique on"
               + " the diagram; a decision shows its question (e.g. \"Valid?\"), an initial or final"
-              + " node its name beside it (\"Start\"/\"End\"), the others none. partitionName"
+              + " node its name beside it (\"Start\"/\"End\"), the others none; a trailing number"
+              + " (\"End #2\") is only part of the handle, so a second final node or a second"
+              + " decision with the same text is added as \"End #2\" and shows \"End\". partitionName"
               + " puts it in that swimlane lane (\"\" = no lane). x/y (>0) place its top-left"
               + " corner explicitly; otherwise it goes one row below the lowest node, centered")
   public String addActivityControlNode(
@@ -373,10 +393,15 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IModelElement node = createControlNodeModel(nodeKind);
-            IShapeUIModel shape = createNodeShape(diagram, node, name, lane);
+            // "End #2" is the handle of a second node that shows "End"
+            String label = ActivityDiagramUtils.showsLabel(nodeKind) ? labelOf(name) : name;
+            IShapeUIModel shape = createNodeShape(diagram, node, label, lane);
             if (shape == null) {
               return "Error adding control node: Visual Paradigm did not create a shape for "
                   + name;
+            }
+            if (!label.equals(name)) {
+              handles.put(shape.getId(), name);
             }
             if (ActivityDiagramUtils.isBar(nodeKind)) {
               // orientation 1 is what Visual Paradigm saves for a horizontal fork/join bar
@@ -755,13 +780,7 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                   continue;
                 }
                 boolean rightSide = other.getX() + other.getWidth() / 2 >= box[0] + box[2] / 2;
-                int outX =
-                    rightSide
-                        ? box[0] + box[2] + FRAME_OUT_GAP
-                        : box[0] - FRAME_OUT_GAP - other.getWidth();
-                if (outX < ActivityDiagramUtils.MIN_X) {
-                  outX = box[0] + box[2] + FRAME_OUT_GAP;
-                }
+                int outX = outsideX(diagram, name, other, box, rightSide);
                 other.setBounds(outX, other.getY(), other.getWidth(), other.getHeight());
                 movedOut.add(other.getModelElement().getName());
               }
@@ -839,6 +858,80 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  /** "; WARNING: overlaps X" when an explicitly placed (clamped) node touches another node. */
+  private String overlapWarning(IActivityDiagramUIModel diagram, IShapeUIModel shape) {
+    List<String> overlapping = new ArrayList<>();
+    for (IShapeUIModel other : nodeShapes(diagram)) {
+      if (!sameShape(other, shape)
+          && other.getX() < shape.getX() + shape.getWidth()
+          && shape.getX() < other.getX() + other.getWidth()
+          && other.getY() < shape.getY() + shape.getHeight()
+          && shape.getY() < other.getY() + other.getHeight()) {
+        overlapping.add(other.getModelElement().getName());
+      }
+    }
+    return overlapping.isEmpty()
+        ? ""
+        : "; WARNING: overlaps "
+            + String.join(", ", overlapping)
+            + " (the position was kept inside the lane: give another x/y)";
+  }
+
+  /**
+   * Left edge for a node that has to leave a frame: beside the frame on the side it is nearer to,
+   * then the other side, then further out, at the first spot that touches neither another page
+   * frame nor another node (a box dropped on the border of the frame next to it is as wrong as one
+   * inside the frame it does not belong to).
+   */
+  private int outsideX(
+      IActivityDiagramUIModel diagram, String title, IShapeUIModel node, int[] box, boolean right) {
+    List<int[]> taken = new ArrayList<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IShapeUIModel
+          && de.getModelElement() instanceof com.vp.plugin.model.IActivity
+          && !title.equals(de.getModelElement().getName())) {
+        taken.add(rect(de));
+      }
+    }
+    for (IShapeUIModel other : nodeShapes(diagram)) {
+      if (!sameShape(other, node)) {
+        taken.add(rect(other));
+      }
+    }
+    int w = node.getWidth();
+    int h = node.getHeight();
+    for (int step = 0; step < 6; step++) {
+      int extra = step * 40;
+      int[] xs =
+          right
+              ? new int[] {
+                box[0] + box[2] + FRAME_OUT_GAP + extra, box[0] - FRAME_OUT_GAP - w - extra
+              }
+              : new int[] {
+                box[0] - FRAME_OUT_GAP - w - extra, box[0] + box[2] + FRAME_OUT_GAP + extra
+              };
+      for (int x : xs) {
+        if (x < ActivityDiagramUtils.MIN_X) {
+          continue;
+        }
+        boolean free = true;
+        for (int[] r : taken) {
+          if (x < r[0] + r[2] + FRAME_OUT_GAP / 2
+              && r[0] < x + w + FRAME_OUT_GAP / 2
+              && node.getY() < r[1] + r[3]
+              && r[1] < node.getY() + h) {
+            free = false;
+            break;
+          }
+        }
+        if (free) {
+          return x;
+        }
+      }
+    }
+    return box[0] + box[2] + FRAME_OUT_GAP;
+  }
+
   @Override
   protected String moveOwnShape(
       IDiagramUIModel diagram,
@@ -871,6 +964,13 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     refreshControlNodeCaption(shape);
     rerouteFlows(activity);
     return boundsResult(name, shape) + note;
+  }
+
+  @Override
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    return diagram instanceof IActivityDiagramUIModel
+        ? laidOutWhileAdding(diagram, "activity diagram")
+        : null;
   }
 
   @Override
@@ -1094,12 +1194,21 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       centerX = count > 0 ? sum / count : laneCenter(lane, to);
       row.add(to);
     } else {
-      // a guarded flow needs room for its [guard] between the two boxes
-      top =
-          from.getY()
-              + from.getHeight()
-              + ActivityDiagramUtils.ROW_GAP
-              + (guarded ? GUARD_ROW_EXTRA : 0);
+      // a guarded flow needs room for its [guard] between the two boxes; the branches of a
+      // fork/decision go below everything on the source's row (a taller neighbour would
+      // otherwise leave no channel for the flows leaving a bar)
+      int rowBottom = from.getY() + from.getHeight();
+      if (ActivityDiagramUtils.isBar(kindOf(from.getModelElement()))
+          || ActivityDiagramUtils.KIND_DECISION.equals(kindOf(from.getModelElement()))) {
+        for (IShapeUIModel neighbour : nodeShapes(diagram)) {
+          if (!sameShape(neighbour, from)
+              && neighbour.getY() < from.getY() + from.getHeight()
+              && from.getY() < neighbour.getY() + neighbour.getHeight()) {
+            rowBottom = Math.max(rowBottom, neighbour.getY() + neighbour.getHeight());
+          }
+        }
+      }
+      top = rowBottom + ActivityDiagramUtils.ROW_GAP + (guarded ? GUARD_ROW_EXTRA : 0);
       centerX = lane != null ? laneCenter(lane, to) : from.getX() + from.getWidth() / 2;
       for (IShapeUIModel sibling : flowEnds(from, true)) {
         if (!sameShape(sibling, to)
@@ -1728,6 +1837,12 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     boolean fromBar = ActivityDiagramUtils.isBar(kindOf(from.getModelElement()));
     boolean toBar = ActivityDiagramUtils.isBar(kindOf(to.getModelElement()));
+    if ((fromBar || toBar) && orthogonalBarRoute(flow, from, to, fromBar)) {
+      return;
+    }
+    if (!fromBar && !toBar && orthogonalLaneRoute(flow, from, to)) {
+      return;
+    }
     Point[] points = flow.getPoints();
     if ((!fromBar && !toBar) || (points != null && points.length > 2)) {
       return;
@@ -1743,6 +1858,172 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     flow.setUseToShapeCenter(!toBar);
     // a rebuild would anchor the bar end at the bar's center or corner again
     flow.setRequestRebuild(false);
+  }
+
+  /**
+   * Route a flow between a horizontal fork/join bar and a node below (leaving the bar) or above
+   * (entering it) as the notation draws it: straight down when the node stands within the bar's
+   * span, otherwise out of its own port of the bar, along a free channel between the two rows and
+   * down into the node. Each flow of a bar has its own port, spread along it in the order of the
+   * nodes at the other end, so the exits of a fork never share a point or run as a V over the nodes
+   * beside it.
+   *
+   * @return whether the route was drawn (false: the other end is not below/above, keep the route)
+   */
+  private boolean orthogonalBarRoute(
+      IConnectorUIModel flow, IShapeUIModel from, IShapeUIModel to, boolean fromBar) {
+    IShapeUIModel bar = fromBar ? from : to;
+    IShapeUIModel other = fromBar ? to : from;
+    if (bar.getWidth() < bar.getHeight()) {
+      return false; // a vertical bar is reached sideways: the generic anchors do
+    }
+    boolean otherBelow = other.getY() >= bar.getY() + bar.getHeight();
+    boolean otherAbove = other.getY() + other.getHeight() <= bar.getY();
+    if ((fromBar && !otherBelow) || (!fromBar && !otherAbove)) {
+      return false;
+    }
+    // the ports of the bar: the flows meeting it on this side, ordered by the other end's x
+    List<IShapeUIModel> ends = new ArrayList<>();
+    for (IShapeUIModel end : flowEnds(bar, fromBar)) {
+      if (fromBar
+          ? end.getY() >= bar.getY() + bar.getHeight()
+          : end.getY() + end.getHeight() <= bar.getY()) {
+        ends.add(end);
+      }
+    }
+    if (!containsShape(ends, other)) {
+      ends.add(other);
+    }
+    ends.sort((a, b) -> Integer.compare(a.getX() + a.getWidth() / 2, b.getX() + b.getWidth() / 2));
+    int inset = Math.min(ActivityDiagramUtils.BAR_INSET, bar.getWidth() / 2);
+    int span = bar.getWidth() - 2 * inset;
+    int index = 0;
+    for (int i = 0; i < ends.size(); i++) {
+      if (sameShape(ends.get(i), other)) {
+        index = i;
+      }
+    }
+    int portX = bar.getX() + inset + (int) Math.round(span * (index + 0.5) / ends.size());
+    int otherX = other.getX() + other.getWidth() / 2;
+    int barEdge = fromBar ? bar.getY() + bar.getHeight() : bar.getY();
+    int otherEdge = fromBar ? other.getY() : other.getY() + other.getHeight();
+    List<Point> route = new ArrayList<>();
+    if (otherX >= bar.getX() + inset
+        && otherX <= bar.getX() + bar.getWidth() - inset
+        && ends.size() == 1) {
+      route.add(new Point(otherX, barEdge));
+      route.add(new Point(otherX, otherEdge));
+    } else {
+      int lo = Math.min(barEdge, otherEdge) + 6;
+      int hi = Math.max(barEdge, otherEdge) - 6;
+      if (hi < lo) {
+        return false;
+      }
+      int channel = -1;
+      int mid = (lo + hi) / 2;
+      for (int step = 0; step <= hi - lo && channel < 0; step += 4) {
+        for (int sign : new int[] {1, -1}) {
+          int y = mid + sign * step;
+          if (y >= lo && y <= hi && channelClear(from, to, portX, otherX, y)) {
+            channel = y;
+            break;
+          }
+        }
+      }
+      if (channel < 0) {
+        return false;
+      }
+      route.add(new Point(portX, barEdge));
+      route.add(new Point(portX, channel));
+      route.add(new Point(otherX, channel));
+      route.add(new Point(otherX, otherEdge));
+    }
+    if (!fromBar) {
+      java.util.Collections.reverse(route);
+    }
+    flow.clearPoints();
+    for (Point p : route) {
+      flow.addPoint(p);
+    }
+    flow.setUseFromShapeCenter(false);
+    flow.setUseToShapeCenter(false);
+    flow.setRequestRebuild(false);
+    return true;
+  }
+
+  /**
+   * Route a flow from an action or object to a node below it in another lane as down, across, down:
+   * out of the bottom of the source, along a free channel between the two rows and into the top of
+   * the target. A slanted flow aims at the target's center and ends on its rounded corner.
+   *
+   * @return whether the route was drawn
+   */
+  private boolean orthogonalLaneRoute(
+      IConnectorUIModel flow, IShapeUIModel from, IShapeUIModel to) {
+    String fromKind = kindOf(from.getModelElement());
+    if (!ActivityDiagramUtils.KIND_ACTION.equals(fromKind)
+        && !ActivityDiagramUtils.KIND_OBJECT.equals(fromKind)) {
+      return false;
+    }
+    IDiagramUIModel diagram = from.getDiagramUIModel();
+    if (!(diagram instanceof IActivityDiagramUIModel)) {
+      return false;
+    }
+    Lane fromLane = laneOf((IActivityDiagramUIModel) diagram, from);
+    Lane toLane = laneOf((IActivityDiagramUIModel) diagram, to);
+    int fromX = from.getX() + from.getWidth() / 2;
+    int toX = to.getX() + to.getWidth() / 2;
+    int lo = from.getY() + from.getHeight() + 8;
+    int hi = to.getY() - 8;
+    if (fromLane == null
+        || toLane == null
+        || sameLane((IActivityDiagramUIModel) diagram, to, fromLane)
+        || Math.abs(fromX - toX) <= 12
+        || hi < lo) {
+      return false;
+    }
+    int mid = (lo + hi) / 2;
+    int channel = -1;
+    for (int step = 0; step <= hi - lo && channel < 0; step += 4) {
+      for (int sign : new int[] {1, -1}) {
+        int y = mid + sign * step;
+        if (y >= lo && y <= hi && channelClear(from, to, fromX, toX, y)) {
+          channel = y;
+          break;
+        }
+      }
+    }
+    if (channel < 0) {
+      return false;
+    }
+    flow.clearPoints();
+    flow.addPoint(new Point(fromX, from.getY() + from.getHeight()));
+    flow.addPoint(new Point(fromX, channel));
+    flow.addPoint(new Point(toX, channel));
+    flow.addPoint(new Point(toX, to.getY()));
+    flow.setUseFromShapeCenter(false);
+    flow.setUseToShapeCenter(false);
+    flow.setRequestRebuild(false);
+    return true;
+  }
+
+  /** Whether the horizontal run at {@code y} between the two x touches no node but the ends. */
+  private boolean channelClear(IShapeUIModel from, IShapeUIModel to, int x1, int x2, int y) {
+    int left = Math.min(x1, x2);
+    int width = Math.abs(x2 - x1);
+    int[] run = {left, y - 1, width, 2};
+    for (IShapeUIModel node : nodeShapes(from.getDiagramUIModel())) {
+      if (sameShape(node, from) || sameShape(node, to)) {
+        continue;
+      }
+      if (run[0] < node.getX() + node.getWidth() + 4
+          && node.getX() - 4 < run[0] + run[2]
+          && run[1] < node.getY() + node.getHeight() + 4
+          && node.getY() - 4 < run[1] + run[3]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -1953,7 +2234,8 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
   /** The activity node shape whose model is named {@code name}; partitions never match. */
   private IShapeUIModel findNodeShape(IDiagramUIModel diagram, String name) {
     for (IShapeUIModel shape : nodeShapes(diagram)) {
-      if (name.equals(shape.getModelElement().getName())) {
+      String handle = handles.get(shape.getId());
+      if (handle != null ? name.equals(handle) : name.equals(shape.getModelElement().getName())) {
         return shape;
       }
     }

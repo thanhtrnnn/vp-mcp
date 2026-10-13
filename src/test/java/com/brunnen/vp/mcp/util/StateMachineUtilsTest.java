@@ -1,5 +1,6 @@
 package com.brunnen.vp.mcp.util;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -132,5 +133,29 @@ public class StateMachineUtilsTest {
     assertTrue(StateMachineUtils.sameLabel("a [b]", " a [b] "));
     assertFalse(StateMachineUtils.sameLabel("a", "b"));
     assertFalse(StateMachineUtils.sameLabel("a", null));
+  }
+
+  @Test
+  public void flowLayersStackTheScreenFlowAndIgnoreBackTransitions() {
+    // 0 start -> 1 -> 2 -> 3 end, 2 -> 1 (back), 1 -> 3 (skip)
+    int[] layers =
+        StateMachineUtils.flowLayers(
+            4, new int[][] {{0, 1}, {1, 2}, {2, 3}, {2, 1}, {1, 3}}, new int[] {0});
+    assertArrayEquals(new int[] {0, 1, 2, 3}, layers);
+  }
+
+  @Test
+  public void flowLayersPutBranchesSideBySide() {
+    // 0 -> 1, 0 -> 2, 1 -> 3, 2 -> 3
+    int[] layers =
+        StateMachineUtils.flowLayers(
+            4, new int[][] {{0, 1}, {0, 2}, {1, 3}, {2, 3}}, new int[] {0});
+    assertArrayEquals(new int[] {0, 1, 1, 2}, layers);
+  }
+
+  @Test
+  public void flowLayersStartUnreachedStatesAtTheTop() {
+    int[] layers = StateMachineUtils.flowLayers(3, new int[][] {{0, 1}}, new int[] {0});
+    assertArrayEquals(new int[] {0, 1, 0}, layers);
   }
 }

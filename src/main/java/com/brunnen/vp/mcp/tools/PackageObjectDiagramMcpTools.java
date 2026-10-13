@@ -609,6 +609,94 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   @Tool(
+      name = "setObjectSlot",
+      description =
+          "Set, change or clear a slot of an object on an object diagram: attribute is an"
+              + " attribute of the object's class or of a superclass; value \"\" removes the slot."
+              + " The box is fitted again. A wrong slot value is fixed with setObjectSlot instead"
+              + " of removing and re-adding the object")
+  public String setObjectSlot(
+      String diagramName, String objectName, String attribute, String value) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram =
+                findDiagramOfType(diagramName, IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM);
+            if (diagram == null) {
+              return diagramNotFound(diagramName, "object");
+            }
+            IShapeUIModel shape = findShape(diagram, objectName, IInstanceSpecification.class);
+            if (shape == null) {
+              return "Object not on diagram: " + objectName;
+            }
+            if (!PackageObjectDiagramUtils.isValidName(attribute)) {
+              return "Attribute name must not be empty";
+            }
+            String attr = attribute.trim();
+            IInstanceSpecification instance = (IInstanceSpecification) shape.getModelElement();
+            ISlot existing = null;
+            for (ISlot slot : instance.toSlotArray()) {
+              if (slot.getFeature() != null && attr.equals(slot.getFeature().getName())) {
+                existing = slot;
+              }
+            }
+            String text = value == null ? "" : value.trim();
+            if (text.isEmpty()) {
+              if (existing == null) {
+                return "Object '" + objectName + "' has no slot '" + attr + "'";
+              }
+              existing.delete();
+              fitShape(shape);
+              recenterConnectorsOf(shape);
+              return "Removed slot '" + attr + "' of object '" + objectName + "'";
+            }
+            if (existing == null) {
+              IModelElement[] classifiers = instance.toClassifierArray();
+              IAttribute feature =
+                  classifiers != null && classifiers.length > 0 && classifiers[0] instanceof IClass
+                      ? findAttribute((IClass) classifiers[0], attr)
+                      : null;
+              if (feature == null) {
+                return "The class of object '"
+                    + objectName
+                    + "' has no attribute '"
+                    + attr
+                    + "' (attributes: "
+                    + (classifiers != null
+                            && classifiers.length > 0
+                            && classifiers[0] instanceof IClass
+                        ? attributeNames((IClass) classifiers[0])
+                        : "none, the object is untyped")
+                    + ")";
+              }
+              existing = getModelElementFactory().createSlot();
+              instance.addSlot(existing);
+              existing.setFeature(feature);
+            }
+            ICompositeValueSpecification[] specs = existing.toValueArray();
+            if (specs != null && specs.length > 0) {
+              specs[0].setValue(text);
+            } else {
+              ICompositeValueSpecification spec =
+                  getModelElementFactory().createCompositeValueSpecification();
+              spec.setValue(text);
+              existing.addValue(spec);
+            }
+            shape.resetCaption();
+            fitShape(shape);
+            recenterConnectorsOf(shape);
+            return "Set slot "
+                + PackageObjectDiagramUtils.formatSlot(attr, text)
+                + " of object '"
+                + objectName
+                + "'";
+          });
+    } catch (Exception e) {
+      return "Error setting object slot: " + e.getMessage();
+    }
+  }
+
+  @Tool(
       name = "addObjectLink",
       description =
           "Add a link (solid line) between two objects of an object diagram. label is shown on "
@@ -1007,6 +1095,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
       int[] grown = PackageObjectDiagramUtils.encloseChildren(old, children, INNER_PAD);
       if (grown[2] != old[2] || grown[3] != old[3]) {
         current.setBounds(grown[0], grown[1], grown[2], grown[3]);
+        keepSize(current);
         // the frames beside it move away (with what they hold): a dependency between two of them
         // needs room for its <<keyword>> between the boxes
         pushApart(current, PACKAGE_PUSH_GAP);

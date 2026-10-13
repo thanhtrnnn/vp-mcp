@@ -42,6 +42,9 @@ import java.util.Set;
  */
 public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
 
+  /** Width and height asked for with addDeploymentNode, by shape id: nodes never get smaller. */
+  private final java.util.Map<String, int[]> minimumSize = new java.util.HashMap<>();
+
   /** Free artifacts placed automatically; a deploy arrow moves them next to their node. */
   private final java.util.Set<String> freeAutoPlaced = new java.util.HashSet<>();
 
@@ -114,9 +117,10 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               + " (\"\" = top level) nests it inside a node already on the diagram, e.g. Tomcat"
               + " (executionEnvironment) inside AppServer (device). x/y (>0, diagram coordinates)"
               + " place it explicitly, otherwise it is auto-placed (inside the parent when nested)."
-              + " width/height (>0) fix the size, otherwise the box is fitted to its caption; a"
-              + " node grows automatically to enclose what is added into it. Node names must be"
-              + " unique on the diagram")
+              + " width/height (>0) are minimum sizes, otherwise the box is fitted to its caption; a"
+              + " node grows automatically to enclose what is added into it and never shrinks"
+              + " below the size asked for. A node of that name already in the project is drawn"
+              + " again with the kind it has. Node names must be unique on the diagram")
   public String addDeploymentNode(
       String diagramName,
       String nodeName,
@@ -170,9 +174,17 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             Placement placed =
                 placeShape(
                     diagram, node, parentShape, x, y, width, height, NODE_WIDTH, NODE_HEIGHT);
+            if (width > 0 && height > 0) {
+              minimumSize.put(placed.shape.getId(), new int[] {width, height});
+            }
 
             return "Added "
-                + (reused ? "existing node of the project (drawn again)" : describeNode(nodeKind))
+                + (reused
+                    ? "existing node of the project (drawn again; its kind and stereotypes are"
+                        + " those of the model, not '"
+                        + (kind == null || kind.trim().isEmpty() ? "node" : kind.trim())
+                        + "')"
+                    : describeNode(nodeKind))
                 + " '"
                 + name
                 + "'"
@@ -263,6 +275,28 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     return null;
   }
 
+  /** The artifact called {@code name} owned by {@code node}, or null. */
+  private static IArtifact ownedArtifact(INode node, String name) {
+    IArtifact[] owned = node.toArtifactArray();
+    for (IArtifact a : owned == null ? new IArtifact[0] : owned) {
+      if (name.equals(a.getName())) {
+        return a;
+      }
+    }
+    return null;
+  }
+
+  /** The component called {@code name} owned by {@code node}, or null. */
+  private static IComponent ownedComponent(INode node, String name) {
+    IComponent[] owned = node.toComponentArray();
+    for (IComponent c : owned == null ? new IComponent[0] : owned) {
+      if (name.equals(c.getName())) {
+        return c;
+      }
+    }
+    return null;
+  }
+
   @Tool(
       name = "addDeploymentArtifact",
       description =
@@ -301,7 +335,13 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             // would rename it when the root already has an artifact of that name); a free
             // artifact of a taken name is the same artifact, shown again.
             boolean inNode = hostShape != null && hostShape.getModelElement() instanceof INode;
-            IArtifact artifact = !inNode ? findRootElement(name, IArtifact.class) : null;
+            // the same artifact drawn on a second diagram (overview and detail) is one element of
+            // the project: the one the node already owns, or the free one of that name, is reused
+            IArtifact artifact =
+                inNode
+                    ? ownedArtifact((INode) hostShape.getModelElement(), name)
+                    : findRootElement(name, IArtifact.class);
+            boolean reused = artifact != null;
             if (artifact == null) {
               artifact = getModelElementFactory().createArtifact();
               if (inNode) {
@@ -315,7 +355,8 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               freeAutoPlaced.add(placed.shape.getId());
             }
 
-            return "Added artifact '"
+            return "Added "
+                + (reused ? "existing artifact of the project (drawn again) '" : "artifact '")
                 + name
                 + "'"
                 + (hostShape != null ? " in '" + hostName + "'" : "")
@@ -363,7 +404,11 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             boolean inNode = hostShape != null && hostShape.getModelElement() instanceof INode;
-            IComponent component = !inNode ? findRootElement(name, IComponent.class) : null;
+            IComponent component =
+                inNode
+                    ? ownedComponent((INode) hostShape.getModelElement(), name)
+                    : findRootElement(name, IComponent.class);
+            boolean reused = component != null;
             if (component == null) {
               component = getModelElementFactory().createComponent();
               if (inNode) {
@@ -374,7 +419,8 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             Placement placed =
                 placeShape(diagram, component, hostShape, x, y, 0, 0, LEAF_WIDTH, LEAF_HEIGHT);
 
-            return "Added component '"
+            return "Added "
+                + (reused ? "existing component of the project (drawn again) '" : "component '")
                 + name
                 + "'"
                 + (hostShape != null ? " in '" + hostName + "'" : "")
@@ -421,6 +467,12 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             if (parsed.getStereotype() != null) {
               path.addStereotype(parsed.getStereotype());
+            }
+            // the label has to fit between the two nodes: a label wider than the gap is drawn
+            // across their borders
+            String wanted = labelText(parsed);
+            if (!wanted.isEmpty()) {
+              makeRoomBetween(from, to, Math.max(TOP_GAP, wanted.length() * 7 + 40), 50);
             }
             IDiagramElement connector = connectCentered(diagram, path, from, to);
             if (connector == null) {
@@ -682,6 +734,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       targetY = clamped[1];
     }
     shape.setBounds(targetX, targetY, w, h);
+    keepSize(shape);
     if (parent != null) {
       shape.bringToFront(); // a container drawn later must not hide its child
     }
@@ -691,6 +744,12 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       pushed = growContainers(diagram, shape, parent);
       // Grown or pushed shapes moved their centers: keep every line on the shape centers.
       recenterConnectors(diagram);
+      // Visual Paradigm fits a node around its new child once this call is over: a size asked for
+      // is put back then
+      for (IShapeUIModel up = parent; up != null; up = parentShapeOf(up)) {
+        IShapeUIModel container = up;
+        afterVpSettles(() -> restoreMinimum(diagram, container));
+      }
     }
     return new Placement(shape, parent != null, refused, pushed);
   }
@@ -721,6 +780,13 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   @Override
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    return diagram instanceof IDeploymentDiagramUIModel
+        ? laidOutWhileAdding(diagram, "deployment diagram")
+        : null;
+  }
+
+  @Override
   protected String moveOwnShape(
       IDiagramUIModel diagram,
       IDiagramElement de,
@@ -740,7 +806,31 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       growContainers(diagram, shape, parent);
     }
     recenterTree(shape);
+    // the labels stay where the old lines were: reset them and put them beside the new routes
+    for (IConnectorUIModel c : connectorsOfTree(shape)) {
+      c.resetCaption();
+      placeLabelClear(diagram, c);
+    }
     return boundsResult(name, shape) + note;
+  }
+
+  /** Give a node back the size that was asked for when Visual Paradigm fitted it to its content. */
+  private void restoreMinimum(IDiagramUIModel diagram, IShapeUIModel node) {
+    int[] minimum = minimumSize.get(node.getId());
+    if (minimum == null || (node.getWidth() >= minimum[0] && node.getHeight() >= minimum[1])) {
+      return;
+    }
+    IShapeUIModel parent = parentShapeOf(node);
+    node.setBounds(
+        node.getX(),
+        node.getY(),
+        Math.max(node.getWidth(), minimum[0]),
+        Math.max(node.getHeight(), minimum[1]));
+    keepSize(node);
+    if (parent != null) {
+      growContainers(diagram, node, parent);
+    }
+    recenterConnectors(diagram);
   }
 
   /**
@@ -761,12 +851,24 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       if (!containsShape(children, inner)) {
         children.add(inner); // VP refused the child shape: still enclose it geometrically
       }
+      // a size asked for is a minimum: Visual Paradigm shrinks a node around its children
+      int[] minimum = minimumSize.get(container.getId());
+      int[] wanted =
+          minimum == null
+              ? before
+              : new int[] {
+                before[0],
+                before[1],
+                Math.max(before[2], minimum[0]),
+                Math.max(before[3], minimum[1])
+              };
       int[] after =
-          DeploymentDiagramUtils.encloseChildren(before, boundsList(children), PAD_RIGHT, PAD);
+          DeploymentDiagramUtils.encloseChildren(wanted, boundsList(children), PAD_RIGHT, PAD);
       if (Arrays.equals(before, after)) {
         break;
       }
       container.setBounds(after[0], after[1], after[2], after[3]);
+      keepSize(container);
       IShapeUIModel outer = parentShapeOf(container);
       List<IShapeUIModel> siblings =
           content(without(outer != null ? childrenOf(outer) : topLevelShapes(diagram), container));

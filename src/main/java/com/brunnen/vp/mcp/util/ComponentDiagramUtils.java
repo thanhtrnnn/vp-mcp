@@ -71,10 +71,17 @@ public final class ComponentDiagramUtils {
   /** Nested components placed per row before wrapping. */
   public static final int CHILDREN_PER_ROW = 3;
 
-  /** Distance from a component's top edge to its first port, and between stacked ports. */
-  public static final int PORT_TOP = 12;
+  /**
+   * Distance from a component's top edge to its first port, and between stacked ports: tight enough
+   * for four ports of 12 px in the 40 px a component keeps (Visual Paradigm fits a component to its
+   * name and takes back any height given to it for its ports).
+   */
+  public static final int PORT_TOP = 6;
 
-  public static final int PORT_GAP = 10;
+  public static final int PORT_GAP = 6;
+
+  /** Free space under the last row of ports. */
+  private static final int PORT_BOTTOM = 4;
 
   private static final int MAX_GRID_CELLS = 10_000;
 
@@ -304,6 +311,18 @@ public final class ComponentDiagramUtils {
    * @return the top-left corner {x, y}
    */
   public static int[] nextChildPosition(int[] parent, List<int[]> children) {
+    return nextChildPosition(parent, children, CHILD_PADDING);
+  }
+
+  /**
+   * {@link #nextChildPosition(int[], List)} with a custom free space between neighbours.
+   *
+   * @param parent the container rectangle {x, y, w, h}
+   * @param children rectangles of the children already in it
+   * @param gap free space between two children of a row, and between rows
+   * @return the next child's top-left corner {x, y}
+   */
+  public static int[] nextChildPosition(int[] parent, List<int[]> children, int gap) {
     int left = parent[0] + CHILD_PADDING;
     if (children == null || children.isEmpty()) {
       return new int[] {left, parent[1] + CHILD_HEADER};
@@ -323,9 +342,9 @@ public final class ComponentDiagramUtils {
       }
     }
     if (inRow >= CHILDREN_PER_ROW) {
-      return new int[] {left, bottom + CHILD_PADDING};
+      return new int[] {left, bottom + gap};
     }
-    return new int[] {right + CHILD_PADDING, rowTop};
+    return new int[] {right + gap, rowTop};
   }
 
   /**
@@ -381,7 +400,7 @@ public final class ComponentDiagramUtils {
       return 0;
     }
     int slots = (portCount + 1) / 2;
-    return 2 * PORT_TOP + slots * portSize + (slots - 1) * PORT_GAP;
+    return PORT_TOP + slots * portSize + (slots - 1) * PORT_GAP + PORT_BOTTOM;
   }
 
   /**

@@ -58,7 +58,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final String USE_STEREOTYPE = "use";
 
   /** Default and largest believable side length of a port square after fit-size. */
-  private static final int PORT_SIZE = 16;
+  private static final int PORT_SIZE = 12;
 
   private static final int PORT_MAX = 30;
 
@@ -186,6 +186,17 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             if (parent != null) {
               shape.bringToFront(); // the parent was drawn first and would hide it otherwise
               encloseUpwards(parent);
+              IShapeUIModel top = parent;
+              while (parentShapeOf(top) != null) {
+                top = parentShapeOf(top);
+              }
+              if (pushApart(top) > 0) {
+                recenterConnectors(diagram);
+              }
+              // Visual Paradigm fits a frame around its new child once this call is over: the
+              // size asked for is put back then
+              IShapeUIModel frame = parent;
+              afterVpSettles(() -> encloseUpwards(frame));
             } else if (x <= 0 && y <= 0) {
               autoPlaced.add(shape.getId());
             }
@@ -391,7 +402,10 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add a dependency (dashed arrow) between two components, interfaces or ports of a"
               + " component diagram. stereotype is optional (\"\" = none, e.g. \"use\", \"call\";"
-              + " several may be comma-separated) and shown as <<stereotype>> on the arrow")
+              + " several may be comma-separated) and shown as <<stereotype>> on the arrow."
+              + " Components added without x/y or a frame are auto-placed in a grid: for a"
+              + " crowded diagram call autoLayoutDiagram once everything is added (orthogonal"
+              + " layout), or place the components with x/y")
   public String addComponentDependency(
       String diagramName, String fromComponent, String toComponent, String stereotype) {
     try {
@@ -677,9 +691,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add a package (layer) frame to a component diagram, e.g. \"Presentation Layer\","
               + " \"Data Layer\". Components added with packageName go inside it and the frame"
               + " grows to enclose them. parentPackage (\"\" = none) nests it in another package"
-              + " frame. x/y (>0) place it explicitly, otherwise it is auto-placed on the grid;"
-              + " width/height (>0) set its size, otherwise it starts at 200x100. A package of"
-              + " that name already in the project (same owner) is reused")
+              + " frame. x/y (>0) place it explicitly, otherwise it is stacked below the previous"
+              + " layer frames (so dependencies between layers run downwards); width/height (>0)"
+              + " are minimum sizes (the frame still grows around its components), otherwise it"
+              + " starts at 200x100. A package of that name already in the project (same owner)"
+              + " is reused")
   public String addComponentPackage(
       String diagramName,
       String packageName,
@@ -734,7 +750,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
                     ? childPosition(parent, shape, x, y)
                     : topLevelPosition(diagram, shape, x, y);
             shape.setBounds(pos[0], pos[1], w, h);
+            keepSize(shape);
             shape.sendToBack();
+            if (width > 0 || height > 0) {
+              minimumSize.put(shape.getId(), new int[] {w, h});
+            }
             if (parent != null) {
               encloseUpwards(parent);
             }
@@ -756,6 +776,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int PACKAGE_MIN_WIDTH = 200;
 
   private static final int PACKAGE_MIN_HEIGHT = 100;
+
+  /** Width and height asked for with addComponentPackage, by shape id: frames never get smaller. */
+  private final java.util.Map<String, int[]> minimumSize = new java.util.HashMap<>();
 
   /** Ids of top-level shapes placed automatically, which their first connection may move. */
   private final Set<String> autoPlaced = new HashSet<>();
@@ -1063,6 +1086,14 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     return result;
   }
 
+  private void recenterConnectors(IDiagramUIModel diagram) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        centerConnector((IConnectorUIModel) de);
+      }
+    }
+  }
+
   /** Port shapes drawn on a component, in creation order. */
   private static List<IShapeUIModel> portsOf(IShapeUIModel component) {
     List<IShapeUIModel> ports = new ArrayList<>();
@@ -1102,33 +1133,68 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       return new int[] {Math.max(x, 0), Math.max(y, 0)};
     }
     List<int[]> occupied = new ArrayList<>();
+    int stackX = -1;
     for (IShapeUIModel other : allShapes(diagram)) {
       if (!sameShape(other, shape) && parentShapeOf(other) == null && hasSize(other)) {
         occupied.add(rect(other));
+        if (kindOf(other) == Kind.PACKAGE && (stackX < 0 || other.getX() < stackX)) {
+          stackX = other.getX();
+        }
       }
+    }
+    if (kindOf(shape) == Kind.PACKAGE && stackX >= 0) {
+      // layers are stacked: each new frame goes below the previous ones, so dependencies between
+      // layers run downwards (a row of frames would make them arch over each other)
+      return DiagramUtils.firstFreeSpot(
+          occupied,
+          stackX,
+          ComponentDiagramUtils.GRID_Y0,
+          shape.getWidth(),
+          shape.getHeight(),
+          stackX + shape.getWidth() + 1,
+          LAYER_GAP);
     }
     return ComponentDiagramUtils.firstFreeCell(occupied, shape.getWidth(), shape.getHeight());
   }
+
+  /** Free space between stacked layer frames: room for the dependencies and their labels. */
+  private static final int LAYER_GAP = 70;
 
   /** Explicit x/y when given, else the parent's next free child slot. */
   private static int[] childPosition(IShapeUIModel parent, IShapeUIModel shape, int x, int y) {
     if (x > 0 || y > 0) {
       return new int[] {Math.max(x, 0), Math.max(y, 0)};
     }
-    return ComponentDiagramUtils.nextChildPosition(rect(parent), nestedRects(parent, shape));
+    // components of a component are the parts that call each other: far enough apart for the
+    // arrow between two of them to show its label
+    int gap =
+        kindOf(parent) == Kind.COMPONENT
+            ? NESTED_COMPONENT_GAP
+            : ComponentDiagramUtils.CHILD_PADDING;
+    return ComponentDiagramUtils.nextChildPosition(rect(parent), nestedRects(parent, shape), gap);
   }
+
+  /** Free space between components nested in a component. */
+  private static final int NESTED_COMPONENT_GAP = 90;
 
   /**
    * Grow a component (and each enclosing component above it) so it encloses its nested components,
    * then put its ports back on its edges. Containers are sized to their children, not fitted to
    * their label.
    */
-  private static void encloseUpwards(IShapeUIModel start) {
+  private void encloseUpwards(IShapeUIModel start) {
     Set<String> seen = new HashSet<>();
     IShapeUIModel current = start;
     while (current != null && seen.add(current.getId())) {
       int[] r = ComponentDiagramUtils.encloseChildren(rect(current), nestedRects(current, null));
+      // a size asked for is a minimum: Visual Paradigm shrinks a frame around its children
+      int[] minimum = minimumSize.get(current.getId());
+      if (minimum != null) {
+        r[2] = Math.max(r[2], minimum[0]);
+        r[3] = Math.max(r[3], minimum[1]);
+      }
       current.setBounds(r[0], r[1], r[2], r[3]);
+      keepSize(current);
       snapPorts(current);
       IShapeUIModel up = parentShapeOf(current);
       current =

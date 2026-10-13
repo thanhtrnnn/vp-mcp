@@ -521,7 +521,26 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     // Flowchart shapes keep their caption where it was laid out at creation (the diagram origin);
     // reset it again so it is laid out inside the final bounds.
     de.resetCaption();
+    centerSymbolCaption(de);
     return de;
+  }
+
+  /** The letter of an on-page connector goes inside its circle (VP hangs it below). */
+  private static void centerSymbolCaption(IDiagramElement de) {
+    if (!(de instanceof IShapeUIModel)
+        || !(de.getModelElement() instanceof com.vp.plugin.model.IFlowchartOnPageReference)) {
+      return;
+    }
+    IShapeUIModel shape = (IShapeUIModel) de;
+    ICaptionUIModel cap = shape.getCaptionUIModel();
+    if (cap != null && cap.getWidth() > 0) {
+      int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
+      cap.setBounds(
+          shape.getX() + (shape.getWidth() - cap.getWidth()) / 2,
+          shape.getY() + (shape.getHeight() - h) / 2,
+          cap.getWidth(),
+          h);
+    }
   }
 
   /**
@@ -570,6 +589,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     autoPlaced.remove(shape.getId());
     // the name is a detached label that stays where it was: lay it out inside the new bounds
     shape.resetCaption();
+    centerSymbolCaption(shape);
     recenterConnectorsOf(shape);
     restoreLoopBacks(diagram);
     relabelFlows(diagram, shape);
@@ -647,6 +667,9 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
   @Override
   protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    if (isOneOf(diagram.getType(), FLOWCHART_TYPES)) {
+      return laidOutWhileAdding(diagram, "flowchart");
+    }
     if (!isOneOf(diagram.getType(), DFD_TYPES)) {
       return null;
     }
@@ -681,6 +704,9 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
    * @return the number of columns used, 0 when there is nothing to lay out
    */
   private int layoutColumns(IDiagramUIModel diagram) {
+    // the lines are clipped at the shape borders by the open diagram: a diagram in the background
+    // would keep them running from center to center, through the text of every shape
+    activate(diagram);
     List<IShapeUIModel> nodes = new ArrayList<>();
     for (IShapeUIModel shape : shapesOf(diagram)) {
       if (dfdRoleOf(shape.getModelElement()) != null) {
@@ -728,6 +754,16 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       }
     }
     relabelFlows(diagram, null);
+    // the open diagram clips the lines at the borders once this call is over: the labels follow
+    afterVpSettles(
+        () -> {
+          for (IDiagramElement de : getDiagramElementsList(diagram)) {
+            if (de instanceof IConnectorUIModel) {
+              centerConnector((IConnectorUIModel) de);
+            }
+          }
+          relabelFlows(diagram, null);
+        });
     return used.size();
   }
 
@@ -1095,13 +1131,18 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       }
     }
     int cy = from.getY() + from.getHeight() / 2;
+    int rowShift = to.getHeight() + BRANCH_GAP;
+    // beside the decision first; a third branch goes on the row below the second one (the straight
+    // line to a shape behind another branch would bend around it), and only then further out
     int[][] candidates = {
       {from.getX() + from.getWidth() + BRANCH_GAP, cy - to.getHeight() / 2},
+      {from.getX() + from.getWidth() + BRANCH_GAP, cy - to.getHeight() / 2 + rowShift},
+      {from.getX() + from.getWidth() + BRANCH_GAP, cy - to.getHeight() / 2 - rowShift},
       {from.getX() + from.getWidth() + 2 * BRANCH_GAP + to.getWidth(), cy - to.getHeight() / 2},
       {from.getX() - BRANCH_GAP - to.getWidth(), cy - to.getHeight() / 2}
     };
     for (int[] c : candidates) {
-      if (c[0] < 0) {
+      if (c[0] < 0 || c[1] < 5) {
         continue;
       }
       Rectangle r = new Rectangle(c[0] - 20, c[1] - 20, to.getWidth() + 40, to.getHeight() + 40);
@@ -1248,8 +1289,12 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             caption.getWidth(),
             caption.getHeight());
     int[] spot =
-        com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
-            candidates, caption.getWidth(), caption.getHeight(), labelObstacles(diagram, flow));
+        clearLabelSpot(
+            candidates,
+            caption.getWidth(),
+            caption.getHeight(),
+            labelObstacles(diagram, flow),
+            lineSegments(diagram));
     caption.setBounds(spot[0], spot[1], caption.getWidth(), caption.getHeight());
   }
 
@@ -1273,8 +1318,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     }
     List<int[]> candidates = DiagramUtils.labelSpotsBeside(pts, w, h);
     int[] spot =
-        com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
-            candidates, w, h, labelObstacles(diagram, flow));
+        clearLabelSpot(candidates, w, h, labelObstacles(diagram, flow), lineSegments(diagram));
     caption.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, h);
   }
 

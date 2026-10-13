@@ -58,7 +58,7 @@ public final class BpmnUtils {
   public static final int ORIGIN_Y = 40;
 
   /** Vertical gap between auto-placed pools. */
-  public static final int POOL_GAP = 60;
+  public static final int POOL_GAP = 90;
 
   /** Smallest task box: BPMN activities stay readable next to 40px gateways. */
   public static final int MIN_TASK_WIDTH = 90;
@@ -1145,15 +1145,49 @@ public final class BpmnUtils {
    */
   public static List<Point> messageRoute(
       Rectangle from, Rectangle to, int gapY, List<Rectangle> obstacles, int index) {
+    return messageRoute(from, to, gapY, obstacles, index, index);
+  }
+
+  /**
+   * {@link #messageRoute(Rectangle, Rectangle, int, List, int)} with the gap line chosen apart from
+   * the pair index: flows that run side by side along the gap take different lines, flows with
+   * nothing in common may share one.
+   *
+   * @param from the source bounds
+   * @param to the target bounds
+   * @param gapY y of the middle line of the gap between the pools
+   * @param obstacles flow nodes the legs must not cross (not the two ends)
+   * @param index how many message flows already join these two shapes (offsets the vertical legs)
+   * @param lineSlot the line of the gap: 0 is the middle one, further lines are {@link
+   *     #MESSAGE_LINE_STEP} px apart (see {@link #gapLineOffset(int)})
+   * @return the connector points
+   */
+  public static List<Point> messageRoute(
+      Rectangle from, Rectangle to, int gapY, List<Rectangle> obstacles, int index, int lineSlot) {
     boolean down = from.y + from.height / 2 < to.y + to.height / 2;
     int shift = index == 0 ? 0 : (index % 2 == 1 ? 1 : -1) * ((index + 1) / 2) * MESSAGE_STEP;
-    // each further flow runs one label row lower in the gap, its label above its own line
-    int lineY = gapY + index * MESSAGE_LINE_STEP;
+    // each further flow runs on its own line in the gap, its label above its own line
+    int lineY = gapY + gapLineOffset(lineSlot);
     List<Point> start = endLeg(from, lineY, down, obstacles, false, shift);
     List<Point> end = endLeg(to, lineY, !down, obstacles, true, shift);
     List<Point> points = new ArrayList<>(start);
     points.addAll(end);
     return points;
+  }
+
+  /**
+   * Offset from the middle of the gap of its {@code slot}-th line: the middle, one below, one
+   * above, two below, ... so a gap of 90 px holds three lines with a label above each.
+   *
+   * @param slot 0, 1, 2, ...
+   * @return the offset in px, positive downwards
+   */
+  public static int gapLineOffset(int slot) {
+    if (slot <= 0) {
+      return 0;
+    }
+    int step = (slot + 1) / 2;
+    return (slot % 2 == 1 ? 1 : -1) * step * MESSAGE_LINE_STEP;
   }
 
   /** Distance between the vertical legs of message flows that join the same two shapes. */
@@ -1179,6 +1213,8 @@ public final class BpmnUtils {
     int cy = shape.y + shape.height / 2;
     int edgeY = gapBelow ? shape.y + shape.height : shape.y;
     List<Point> leg;
+    // a request and its response leave a blocked end through different points of its side
+    int sideShift = Math.max(-(shape.height / 2 - 4), Math.min(shape.height / 2 - 4, shift));
     if (!blocked(cx, edgeY, cx, gapY, obstacles)) {
       leg = new ArrayList<>(Arrays.asList(new Point(cx, edgeY), new Point(cx, gapY)));
     } else {
@@ -1187,16 +1223,16 @@ public final class BpmnUtils {
         for (int side = 0; side < 2 && leg == null; side++) {
           boolean right = side == 0;
           int x =
-              right
-                  ? shape.x + shape.width + COLUMN_STEP * (k + 1)
-                  : shape.x - COLUMN_STEP * (k + 1);
+              (right
+                      ? shape.x + shape.width + COLUMN_STEP * (k + 1)
+                      : shape.x - COLUMN_STEP * (k + 1))
+                  + shift;
           int sideX = right ? shape.x + shape.width : shape.x;
-          if (x > 0
-              && !blocked(sideX, cy, x, cy, obstacles)
-              && !blocked(x, cy, x, gapY, obstacles)) {
+          int y = cy + sideShift;
+          if (x > 0 && !blocked(sideX, y, x, y, obstacles) && !blocked(x, y, x, gapY, obstacles)) {
             leg =
                 new ArrayList<>(
-                    Arrays.asList(new Point(sideX, cy), new Point(x, cy), new Point(x, gapY)));
+                    Arrays.asList(new Point(sideX, y), new Point(x, y), new Point(x, gapY)));
           }
         }
       }
