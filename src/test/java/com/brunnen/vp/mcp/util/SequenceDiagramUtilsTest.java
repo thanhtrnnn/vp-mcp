@@ -38,9 +38,43 @@ public class SequenceDiagramUtilsTest {
   }
 
   @Test
-  public void testFragmentLayout() {
+  public void sequenceNumbersCompareNumberByNumber() {
+    String[] ordered = {"1", "1.1", "1.1.1", "1.2", "2", "2a", "10", ""};
+    for (int i = 0; i + 1 < ordered.length; i++) {
+      assertTrue(
+          ordered[i] + " < " + ordered[i + 1],
+          SequenceDiagramUtils.compareSequenceNumbers(ordered[i], ordered[i + 1]) < 0);
+      assertTrue(SequenceDiagramUtils.compareSequenceNumbers(ordered[i + 1], ordered[i]) > 0);
+    }
+    org.junit.Assert.assertEquals(0, SequenceDiagramUtils.compareSequenceNumbers("1.2", "1.2"));
+  }
+
+  @Test
+  public void topLevelAndNextNumbers() {
+    org.junit.Assert.assertEquals(4, SequenceDiagramUtils.topLevelNumber("4.2.1"));
+    org.junit.Assert.assertEquals(0, SequenceDiagramUtils.topLevelNumber(""));
+    org.junit.Assert.assertEquals(
+        "3", SequenceDiagramUtils.nextTopLevelNumber(new String[] {"1", "2.1", "", "1.1"}));
+  }
+
+  @Test
+  public void nestedMessagesGetTheirOwnRows() {
+    // 1, 1.1, 1.1.1, 1.2 added in order: one row each
+    String[] seqs = {"1", "1.1", "1.1.1"};
+    int[] ys = {100, 136, 172};
     org.junit.Assert.assertArrayEquals(
-        new int[] {178, 296, 195, 262},
-        SequenceDiagramUtils.fragmentLayout(new int[] {208, 280}, 280, 17, 30, 18, 16));
+        new int[] {208, 0}, SequenceDiagramUtils.messageSlot(seqs, ys, "1.2", 100, 36));
+    org.junit.Assert.assertArrayEquals(
+        new int[] {100, 0},
+        SequenceDiagramUtils.messageSlot(new String[0], new int[0], "1", 100, 36));
+  }
+
+  @Test
+  public void anEarlierNumberAddedLaterPushesTheRestDown() {
+    String[] seqs = {"1", "2"};
+    int[] ys = {100, 136};
+    // 1.1 goes below 1, and 2 has to move down a full row
+    org.junit.Assert.assertArrayEquals(
+        new int[] {136, 36}, SequenceDiagramUtils.messageSlot(seqs, ys, "1.1", 100, 36));
   }
 }

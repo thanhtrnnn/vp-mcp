@@ -174,30 +174,115 @@ public final class SequenceDiagramUtils {
   }
 
   /**
-   * Vertical layout of a combined fragment: {top, bottom, operand tops...}. The frame starts {@code
-   * topPad} above the first covered message (just below the previous message, whose label sits
-   * above its arrow), the first operand starts a header below the frame top (VP draws the operator
-   * tab there), later operands start {@code separatorPad} above their first message (the dashed
-   * separator between two message rows) and the frame ends {@code bottomPad} below the last
-   * message.
+   * Compare two UML sequence expressions in reading order: number by number ("1" &lt; "1.1" &lt;
+   * "1.1.1" &lt; "1.2" &lt; "2" &lt; "10"), a suffix after the digits ("2a", "1.1*") ordered as
+   * text. A blank expression sorts after every numbered one.
    *
-   * @param operandFirstYs y of the first message of each operand
-   * @param lastY y of the last covered message
-   * @param header height VP gives the operator tab row
-   * @param topPad distance from the frame top to the first message
-   * @param separatorPad distance from an operand separator to the operand's first message
-   * @param bottomPad distance from the last message to the frame bottom
-   * @return {frame top, frame bottom, operand 1 top, operand 2 top, ...}
+   * @param a first expression
+   * @param b second expression
+   * @return negative, zero or positive like {@link java.util.Comparator#compare}
    */
-  public static int[] fragmentLayout(
-      int[] operandFirstYs, int lastY, int header, int topPad, int separatorPad, int bottomPad) {
-    int[] layout = new int[2 + operandFirstYs.length];
-    layout[0] = operandFirstYs[0] - topPad;
-    layout[1] = lastY + bottomPad;
-    layout[2] = layout[0] + header;
-    for (int i = 1; i < operandFirstYs.length; i++) {
-      layout[2 + i] = operandFirstYs[i] - separatorPad;
+  public static int compareSequenceNumbers(String a, String b) {
+    boolean blankA = a == null || a.trim().isEmpty();
+    boolean blankB = b == null || b.trim().isEmpty();
+    if (blankA || blankB) {
+      return blankA == blankB ? 0 : blankA ? 1 : -1;
     }
-    return layout;
+    String[] pa = a.trim().split("\\.");
+    String[] pb = b.trim().split("\\.");
+    for (int i = 0; i < Math.min(pa.length, pb.length); i++) {
+      int na = leadingNumber(pa[i]);
+      int nb = leadingNumber(pb[i]);
+      if (na != nb) {
+        return Integer.compare(na, nb);
+      }
+      int text = suffix(pa[i]).compareTo(suffix(pb[i]));
+      if (text != 0) {
+        return text;
+      }
+    }
+    return Integer.compare(pa.length, pb.length);
+  }
+
+  /**
+   * The top-level number of a sequence expression ("4" for "4.2.1"), or 0 when it has none.
+   *
+   * @param seq the sequence expression
+   * @return its first number
+   */
+  public static int topLevelNumber(String seq) {
+    if (seq == null || seq.trim().isEmpty()) {
+      return 0;
+    }
+    return Math.max(0, leadingNumber(seq.trim().split("\\.")[0]));
+  }
+
+  /**
+   * The number for a message given none: one past the highest top-level number so far.
+   *
+   * @param seqs the sequence expressions already on the diagram (blank entries ignored)
+   * @return the next top-level number as text
+   */
+  public static String nextTopLevelNumber(String[] seqs) {
+    int max = 0;
+    for (String seq : seqs) {
+      max = Math.max(max, topLevelNumber(seq));
+    }
+    return String.valueOf(max + 1);
+  }
+
+  /**
+   * Row of a new message among the messages already drawn, laid out in sequence-number order: one
+   * step below the lowest message numbered before (or equal to) it, at {@code top} when there is
+   * none. When a message numbered after it is drawn less than a step below that row, the messages
+   * from the row on have to move down.
+   *
+   * @param seqs sequence expressions of the drawn messages
+   * @param bottoms lowest y of each drawn message (its arrow, or the bottom of a self loop)
+   * @param seq the new message's sequence expression
+   * @param top y of the first message row
+   * @param step distance between two message rows
+   * @return {y of the new message, how far the messages at or below that y must move down (0 for
+   *     none)}
+   */
+  public static int[] messageSlot(String[] seqs, int[] bottoms, String seq, int top, int step) {
+    int before = -1;
+    int after = Integer.MAX_VALUE;
+    for (int i = 0; i < seqs.length; i++) {
+      if (compareSequenceNumbers(seqs[i], seq) <= 0) {
+        before = Math.max(before, bottoms[i]);
+      } else {
+        after = Math.min(after, bottoms[i]);
+      }
+    }
+    int y = before < 0 ? top : before + step;
+    if (after == Integer.MAX_VALUE) {
+      return new int[] {y, 0};
+    }
+    int shift = y + step - after;
+    return new int[] {y, Math.max(0, shift)};
+  }
+
+  private static int leadingNumber(String part) {
+    int end = 0;
+    while (end < part.length() && Character.isDigit(part.charAt(end))) {
+      end++;
+    }
+    if (end == 0) {
+      return -1;
+    }
+    try {
+      return Integer.parseInt(part.substring(0, end));
+    } catch (NumberFormatException e) {
+      return Integer.MAX_VALUE;
+    }
+  }
+
+  private static String suffix(String part) {
+    int end = 0;
+    while (end < part.length() && Character.isDigit(part.charAt(end))) {
+      end++;
+    }
+    return part.substring(end);
   }
 }

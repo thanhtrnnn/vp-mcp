@@ -54,11 +54,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            requireProject();
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM, diagramName);
+            if (diagram instanceof IInteractionDiagramUIModel) {
+              // Keep the numbers the tools give ("1", "1.1", "1.1.1"): with VP's automatic
+              // handling every message is renumbered 1, 2, 3... by its position.
+              ((IInteractionDiagramUIModel) diagram)
+                  .setSequenceNumberHandling(IInteractionDiagramUIModel.MANUAL);
+            }
             dm.openDiagram(diagram);
             openStacks.remove(diagramName);
             myActivations.remove(diagramName);
@@ -71,7 +75,17 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addLifeline", description = "Add a lifeline (participant) to a sequence diagram")
+  @Tool(
+      name = "addLifeline",
+      description =
+          "Add a lifeline (participant) to a sequence diagram. lifelineName is the head label and"
+              + " the handle used by addMessage (unique on the diagram). className is the"
+              + " classifier (\"\" = lifelineName; an existing class or actor of the project with"
+              + " that name is reused, never modified). lifelineType: actor | boundary | control"
+              + " | entity | participant or \"\" (plain box); boundary/control/entity draw the"
+              + " robustness icon for this lifeline only. An actor lifeline is drawn with a box"
+              + " head: Visual Paradigm does not draw a stick figure for a lifeline created"
+              + " through the API (its stick-figure actor cannot anchor messages)")
   public String addLifeline(
       String diagramName,
       String lifelineName,
@@ -87,25 +101,39 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
-
-            String type = lifelineType != null ? lifelineType.trim() : "";
+            String name = lifelineName == null ? "" : lifelineName.trim();
+            if (name.isEmpty()) {
+              return "Lifeline name must not be empty";
+            }
+            String type =
+                lifelineType != null ? lifelineType.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            if (!type.isEmpty() && !LIFELINE_TYPES.contains(type)) {
+              return "Unknown lifelineType '"
+                  + lifelineType
+                  + "': use actor, boundary, control, entity, participant or \"\"";
+            }
+            if (SequenceDiagramUtils.findLifelineByName(diagram, name) != null) {
+              return "Lifeline already on diagram: "
+                  + name
+                  + " (lifeline names are the handles used by addMessage)";
+            }
             String classifierName =
-                className != null && !className.trim().isEmpty() ? className.trim() : lifelineName;
-            boolean isActor = "actor".equalsIgnoreCase(type);
+                className != null && !className.trim().isEmpty() ? className.trim() : name;
+            boolean isActor = "actor".equals(type);
 
             // Heads are as wide as their name (at least LIFELINE_W) and laid out left to right
             // after the widest head so far, keeping the usual gap between lifelines.
-            int headWidth = Math.max(LIFELINE_W, estimateHeadWidth(lifelineName));
+            int headWidth = Math.max(LIFELINE_W, estimateHeadWidth(name));
             int participantX = nextParticipantX(diagram);
             // Every participant is a real lifeline so its activation bars and message arrows anchor
-            // correctly. Boundary/entity/control carry their type stereotype for the head icon; an
-            // actor lifeline gets a real IActor as its base classifier so VP draws the stick
-            // figure.
+            // correctly. An actor lifeline gets a real IActor as its base classifier.
             IInteractionLifeLine lifeline = getModelElementFactory().createInteractionLifeLine();
             // An actor/class of that name already in the project is the lifeline's classifier
             // (VP would rename a second root element of the same type and name).
+            boolean reused;
             if (isActor) {
               IActor baseActor = findRootElement(classifierName, IActor.class);
+              reused = baseActor != null;
               if (baseActor == null) {
                 baseActor = getModelElementFactory().createActor();
                 nameInOwner(baseActor, null, classifierName);
@@ -113,16 +141,20 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               lifeline.setBaseClassifier(baseActor);
             } else {
               IClass baseClass = findRootElement(classifierName, IClass.class);
+              reused = baseClass != null;
               if (baseClass == null) {
                 baseClass = getModelElementFactory().createClass();
                 nameInOwner(baseClass, null, classifierName);
               }
-              if (!type.isEmpty() && !baseClass.hasStereotype(type)) {
-                baseClass.addStereotype(type);
-              }
               lifeline.setBaseClassifier(baseClass);
             }
-            addToDiagram(diagram, lifeline, lifelineName);
+            if (ROBUSTNESS_TYPES.contains(type)) {
+              // The robustness icon comes from the lifeline's own stereotype: the shared class is
+              // left alone, so its boxes on class diagrams keep their notation.
+              lifeline.setClassLevelStereotype(false);
+              lifeline.addStereotype(type);
+            }
+            addToDiagram(diagram, lifeline, name);
             IShapeUIModel headShape = findLifelineShape(diagram, lifeline);
             if (headShape != null) {
               headShape.setBounds(participantX, LIFELINE_Y0, headWidth, LIFELINE_HEAD_H);
@@ -143,15 +175,34 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             StringBuilder result = new StringBuilder();
             result
                 .append("Added lifeline '")
-                .append(lifelineName)
+                .append(name)
                 .append("' to diagram '")
                 .append(diagramName)
                 .append("'");
-            if (lifelineType != null && !lifelineType.trim().isEmpty()) {
-              result.append(" (type: ").append(lifelineType.trim()).append(")");
+            if (!type.isEmpty()) {
+              result.append(" (type: ").append(type).append(")");
             }
             if (alias != null && !alias.trim().isEmpty()) {
               result.append(" (alias: ").append(alias.trim()).append(")");
+            }
+            if (headShape != null) {
+              result
+                  .append(" at ")
+                  .append(headShape.getX())
+                  .append(",")
+                  .append(headShape.getY())
+                  .append(" ")
+                  .append(headShape.getWidth())
+                  .append("x")
+                  .append(headShape.getHeight());
+            }
+            if (reused) {
+              result
+                  .append(" (classifier: existing ")
+                  .append(isActor ? "actor" : "class")
+                  .append(" '")
+                  .append(classifierName)
+                  .append("', unchanged)");
             }
             return result.toString();
           });
@@ -159,6 +210,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       return "Error adding lifeline: " + e.getMessage();
     }
   }
+
+  /** Accepted lifelineType values besides "". */
+  private static final java.util.Set<String> LIFELINE_TYPES =
+      new java.util.HashSet<>(
+          java.util.Arrays.asList("actor", "boundary", "control", "entity", "participant"));
+
+  /** Lifeline types drawn as a robustness analysis icon. */
+  private static final java.util.Set<String> ROBUSTNESS_TYPES =
+      new java.util.HashSet<>(java.util.Arrays.asList("boundary", "control", "entity"));
 
   @Tool(
       name = "addActivation",
@@ -256,10 +316,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               + " guard is the operand guard; separate several operands with '|' (e.g."
               + " \"còn phòng|else\" for alt/else). coveredLifelines is a comma list (empty = all"
               + " lifelines). fromSeq/toSeq are the first and last top-level message numbers the"
-              + " frame encloses (0 = 1 / the last message so far); messages are laid out by"
-              + " sequence number, so the frame can be added before or after them. operandStarts"
-              + " is a comma list with the first message number of operands 2..n (empty = share"
-              + " the messages out evenly)")
+              + " frame encloses, nested ones (4.1, 4.2) included (0 = 1 / the last message);"
+              + " add the messages first. operandStarts is a comma list with the first top-level"
+              + " message number of operands 2..n (empty = share the messages out evenly)."
+              + " Messages are moved down to make room for the operator tab and guards, and the"
+              + " frame is widened to enclose the labels of the messages it covers")
   public String addCombinedFragment(
       String diagramName,
       String operator,
@@ -335,33 +396,94 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
             if (covered.isEmpty()) {
+              fragment.delete();
               return "Error adding combined fragment: no covered lifeline on '"
                   + diagramName
                   + "'"
                   + (notFound.isEmpty() ? "" : " (not found: " + String.join(", ", notFound) + ")");
             }
 
-            int messageCount = SequenceDiagramUtils.getAllMessages(diagram).size();
+            List<MessageRow> rows = messageRows(diagram);
+            int maxTop = 0;
+            for (MessageRow row : rows) {
+              maxTop = Math.max(maxTop, SequenceDiagramUtils.topLevelNumber(row.seq));
+            }
             int first = fromSeq > 0 ? fromSeq : 1;
-            int last = toSeq > 0 ? toSeq : Math.max(first, messageCount);
+            int last = toSeq > 0 ? toSeq : Math.max(first, maxTop);
             if (last < first) {
+              fragment.delete();
               return "Error adding combined fragment: toSeq " + toSeq + " < fromSeq " + fromSeq;
             }
             int[] explicit = parseInts(operandStarts);
             int[] starts =
                 SequenceDiagramUtils.operandStarts(first, last, operands.size(), explicit);
+            // Room above each operand's first message for the operator tab / separator and the
+            // guard (the message label sits above its arrow), and below the last message: the
+            // messages from there on move down when it is missing.
+            for (int i = 0; i < starts.length; i++) {
+              boolean guarded = !guards[Math.min(i, guards.length - 1)].trim().isEmpty();
+              int need =
+                  (i == 0 ? FRAGMENT_HEADER : 0) + (guarded ? GUARD_ROW : 0) + LABEL_ROW + GAP_ROW;
+              rows = messageRows(diagram);
+              MessageRow firstRow =
+                  firstRowOf(rows, starts[i], i + 1 < starts.length ? starts[i + 1] - 1 : last);
+              if (firstRow == null) {
+                fragment.delete();
+                return "Error adding combined fragment: no message numbered "
+                    + starts[i]
+                    + (i + 1 < starts.length ? ".." + (starts[i + 1] - 1) : ".." + last)
+                    + " on '"
+                    + diagramName
+                    + "' (add the messages before the fragment)";
+              }
+              int above = previousBottom(rows, firstRow.arrowY);
+              int missing = above + need - firstRow.arrowY;
+              if (missing > 0) {
+                shiftMessagesDown(diagram, firstRow.arrowY, missing);
+              }
+            }
+            rows = messageRows(diagram);
             int[] firstYs = new int[starts.length];
             for (int i = 0; i < starts.length; i++) {
-              firstYs[i] = messageTop(starts[i]);
+              firstYs[i] =
+                  firstRowOf(rows, starts[i], i + 1 < starts.length ? starts[i + 1] - 1 : last)
+                      .arrowY;
             }
-            int[] layout =
-                SequenceDiagramUtils.fragmentLayout(
-                    firstYs,
-                    messageTop(last),
-                    FRAGMENT_HEADER,
-                    FRAGMENT_TOP_PAD,
-                    FRAGMENT_SEPARATOR_PAD,
-                    FRAGMENT_BOTTOM_PAD);
+            int lastBottom = 0;
+            int labelLeft = Integer.MAX_VALUE;
+            int labelRight = Integer.MIN_VALUE;
+            for (MessageRow row : rows) {
+              int top = SequenceDiagramUtils.topLevelNumber(row.seq);
+              if (top >= first && top <= last) {
+                lastBottom = Math.max(lastBottom, row.bottom());
+                com.vp.plugin.diagram.ICaptionUIModel cap = row.connector.getCaptionUIModel();
+                if (cap != null && cap.getWidth() > 0) {
+                  labelLeft = Math.min(labelLeft, cap.getX());
+                  labelRight = Math.max(labelRight, cap.getX() + cap.getWidth());
+                }
+              }
+            }
+            int nextTop = Integer.MAX_VALUE;
+            for (MessageRow row : rows) {
+              if (row.arrowY > lastBottom) {
+                nextTop = Math.min(nextTop, row.arrowY);
+              }
+            }
+            int bottomNeed = FRAGMENT_BOTTOM_PAD + GAP_ROW + LABEL_ROW;
+            if (nextTop != Integer.MAX_VALUE && nextTop - lastBottom < bottomNeed) {
+              shiftMessagesDown(diagram, nextTop, bottomNeed - (nextTop - lastBottom));
+            }
+            int frameTop =
+                firstYs[0]
+                    - (FRAGMENT_HEADER + (guards[0].trim().isEmpty() ? 0 : GUARD_ROW) + LABEL_ROW);
+            int[] layout = new int[2 + starts.length];
+            layout[0] = frameTop;
+            layout[1] = lastBottom + FRAGMENT_BOTTOM_PAD;
+            layout[2] = frameTop + FRAGMENT_HEADER;
+            for (int i = 1; i < starts.length; i++) {
+              boolean guarded = !guards[Math.min(i, guards.length - 1)].trim().isEmpty();
+              layout[2 + i] = firstYs[i] - ((guarded ? GUARD_ROW : 0) + LABEL_ROW);
+            }
 
             int left = Integer.MAX_VALUE;
             int right = Integer.MIN_VALUE;
@@ -371,9 +493,15 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             left -= FRAGMENT_MARGIN;
             right += FRAGMENT_MARGIN;
+            if (labelLeft != Integer.MAX_VALUE) {
+              // self-message labels stick out right of their lifeline
+              left = Math.min(left, labelLeft - 8);
+              right = Math.max(right, labelRight + 8);
+            }
 
             IDiagramElement created = getDiagramManager().createDiagramElement(diagram, fragment);
             if (!(created instanceof IShapeUIModel)) {
+              fragment.delete();
               return "Error adding combined fragment: Visual Paradigm did not create the frame";
             }
             IShapeUIModel frame = (IShapeUIModel) created;
@@ -425,6 +553,28 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding combined fragment: " + e.getMessage();
     }
+  }
+
+  /** The topmost message whose top-level number is in [from, to], or null. */
+  private static MessageRow firstRowOf(List<MessageRow> rows, int from, int to) {
+    for (MessageRow row : rows) {
+      int top = SequenceDiagramUtils.topLevelNumber(row.seq);
+      if (top >= from && top <= to) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  /** Lowest point of the messages above y, or the bottom of the lifeline heads. */
+  private static int previousBottom(List<MessageRow> rows, int y) {
+    int bottom = LIFELINE_Y0 + LIFELINE_HEAD_H;
+    for (MessageRow row : rows) {
+      if (row.arrowY < y) {
+        bottom = Math.max(bottom, row.bottom());
+      }
+    }
+    return bottom;
   }
 
   /** Comma-separated integers, or null when the text is blank or not all numbers. */
@@ -613,13 +763,14 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int MSG_STEP_Y = 36;
   private static final int SELF_LOOP_W = 36;
   private static final int SELF_LOOP_H = 10;
-  // Combined fragment frame: VP's operator tab row, distance from the frame top / an operand
-  // separator / the frame bottom to the nearest covered message (messages are MSG_STEP_Y apart),
-  // and the side margin around the covered lifelines.
+  // Combined fragment frame: VP's operator tab row, the space below the last covered message, and
+  // the side margin around the covered lifelines.
   private static final int FRAGMENT_HEADER = 17;
-  private static final int FRAGMENT_TOP_PAD = 30;
-  private static final int FRAGMENT_SEPARATOR_PAD = 18;
   private static final int FRAGMENT_BOTTOM_PAD = 16;
+  // A guard line under the tab / separator, the label above a message arrow, and free space.
+  private static final int GUARD_ROW = 18;
+  private static final int LABEL_ROW = 18;
+  private static final int GAP_ROW = 8;
   private static final int FRAGMENT_MARGIN = 24;
   // Horizontal lifeline layout (tighter than the default 250px spread).
   private static final int LIFELINE_X0 = 40;
@@ -646,16 +797,28 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       return "To lifeline not found: " + toLifeline;
     }
 
-    int y = messageY(diagram, sequenceNumber);
     boolean self = from.getId().equals(to.getId());
+    List<MessageRow> rows = messageRows(diagram);
+    String seq =
+        sequenceNumber != null && !sequenceNumber.trim().isEmpty()
+            ? sequenceNumber.trim()
+            : SequenceDiagramUtils.nextTopLevelNumber(sequenceNumbers(rows));
+    // Messages are laid out in sequence-number order ("1" < "1.1" < "1.1.1" < "1.2" < "2"): one
+    // row below the last message numbered before this one; later-numbered messages already drawn
+    // move down to make room.
+    int[] slot =
+        SequenceDiagramUtils.messageSlot(
+            sequenceNumbers(rows), rowYs(rows), seq, MSG_TOP_Y, MSG_STEP_Y);
+    int y = slot[0];
+    if (slot[1] > 0) {
+      shiftMessagesDown(diagram, y, slot[1]);
+    }
 
     IMessage message = getModelElementFactory().createMessage();
     // VP prepends the sequence number itself, so strip any leading "N:" the caller put in the name
     // (otherwise the label reads "2: 2: call").
     message.setName(stripLeadingNumber(messageName));
-    if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
-      message.setSequenceNumber(sequenceNumber.trim());
-    }
+    message.setSequenceNumber(seq);
     message.setAsynchronous(async);
 
     if (self) {
@@ -713,8 +876,12 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return "Added "
         + (isReturn ? "return message" : "message")
         + " '"
-        + messageName
-        + "' from '"
+        + seq
+        + ": "
+        + stripLeadingNumber(messageName)
+        + "' at y="
+        + y
+        + " from '"
         + fromLifeline
         + "' to '"
         + toLifeline
@@ -743,6 +910,46 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     growDown(bar, y);
+    hideStubsUnder(diagram, bar);
+  }
+
+  /**
+   * Make VP's small per-message activations that lie on the continuous bar fully transparent: they
+   * are drawn in front of it whatever the z-order, and their borders showed as tick marks across
+   * the bar. They stay in the model (the messages are attached to them).
+   */
+  private static void hideStubsUnder(IInteractionDiagramUIModel diagram, IActivationUIModel bar) {
+    int barCenter = bar.getX() + bar.getWidth() / 2;
+    List<IActivationUIModel> stubs = new ArrayList<>();
+    int bottom = bar.getY() + bar.getHeight();
+    Iterator<?> iter = diagram.diagramElementIterator();
+    while (iter.hasNext()) {
+      Object obj = iter.next();
+      if (!(obj instanceof IActivationUIModel)) {
+        continue;
+      }
+      IActivationUIModel stub = (IActivationUIModel) obj;
+      if (stub.getId().equals(bar.getId())
+          || Math.abs(stub.getX() + stub.getWidth() / 2 - barCenter) > 2
+          || stub.getY() < bar.getY()
+          || stub.getY() > bar.getY() + bar.getHeight()) {
+        continue;
+      }
+      stubs.add(stub);
+      bottom = Math.max(bottom, stub.getY() + stub.getHeight());
+    }
+    if (bottom > bar.getY() + bar.getHeight()) {
+      // a stub sticking out below the bar's end: the bar ends with it
+      bar.setBounds(bar.getX(), bar.getY(), bar.getWidth(), bottom - bar.getY());
+    }
+    for (IActivationUIModel stub : stubs) {
+      if (stub.getFillColor() != null) {
+        stub.getFillColor().setTransparency(100, true);
+      }
+      if (stub.getLineModel() != null) {
+        stub.getLineModel().setTransparency(100, true);
+      }
+    }
   }
 
   /** Stretch each actor's covered bar to span the whole diagram (MSG_TOP_Y down to {@code y}). */
@@ -764,6 +971,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       }
       int bottom = Math.max(bar.getY() + bar.getHeight(), y + 8);
       bar.setBounds(bar.getX(), top, IActivationUIModel.BODY_WIDTH, bottom - top);
+      hideStubsUnder(diagram, bar);
     }
   }
 
@@ -876,30 +1084,126 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  /** Compute the vertical position of a message from its sequence number (1-based). */
-  private int messageY(IInteractionDiagramUIModel diagram, String sequenceNumber) {
-    int idx = -1;
-    if (sequenceNumber != null && !sequenceNumber.trim().isEmpty()) {
-      String s = sequenceNumber.trim();
-      int dot = s.indexOf('.');
-      if (dot > 0) {
-        s = s.substring(0, dot);
-      }
-      try {
-        idx = Integer.parseInt(s.trim());
-      } catch (NumberFormatException ignored) {
-        idx = -1;
-      }
+  /** A message drawn on the diagram: its connector, sequence number and arrow y. */
+  private static final class MessageRow {
+    private final com.vp.plugin.diagram.IConnectorUIModel connector;
+    private final String seq;
+    private final int arrowY;
+    private final boolean self;
+
+    private MessageRow(
+        com.vp.plugin.diagram.IConnectorUIModel connector, String seq, int y, boolean self) {
+      this.connector = connector;
+      this.seq = seq;
+      this.arrowY = y;
+      this.self = self;
     }
-    if (idx < 1) {
-      idx = SequenceDiagramUtils.getAllMessages(diagram).size() + 1;
+
+    /** Lowest point of the message: the arrow, or the bottom of a self-message loop. */
+    private int bottom() {
+      return self ? arrowY + SELF_LOOP_H : arrowY;
     }
-    return messageTop(idx);
   }
 
-  /** Vertical position of the top-level message number {@code idx} (1-based). */
-  private static int messageTop(int idx) {
-    return MSG_TOP_Y + (Math.max(idx, 1) - 1) * MSG_STEP_Y;
+  /** Every message connector of the diagram with its sequence number and y, top to bottom. */
+  private List<MessageRow> messageRows(IInteractionDiagramUIModel diagram) {
+    List<MessageRow> rows = new ArrayList<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof com.vp.plugin.diagram.IConnectorUIModel
+          && de.getModelElement() instanceof IMessage) {
+        com.vp.plugin.diagram.IConnectorUIModel c = (com.vp.plugin.diagram.IConnectorUIModel) de;
+        Point[] points = c.getPoints();
+        if (points == null || points.length == 0) {
+          continue;
+        }
+        IShapeUIModel from = c.getFromShape();
+        IShapeUIModel to = c.getToShape();
+        boolean self = from != null && to != null && from.getId().equals(to.getId());
+        rows.add(
+            new MessageRow(
+                c, ((IMessage) de.getModelElement()).getSequenceNumber(), points[0].y, self));
+      }
+    }
+    rows.sort((a, b) -> Integer.compare(a.arrowY, b.arrowY));
+    return rows;
+  }
+
+  private static String[] sequenceNumbers(List<MessageRow> rows) {
+    String[] seqs = new String[rows.size()];
+    for (int i = 0; i < seqs.length; i++) {
+      seqs[i] = rows.get(i).seq;
+    }
+    return seqs;
+  }
+
+  private static int[] rowYs(List<MessageRow> rows) {
+    int[] ys = new int[rows.size()];
+    for (int i = 0; i < ys.length; i++) {
+      ys[i] = rows.get(i).bottom();
+    }
+    return ys;
+  }
+
+  /**
+   * Move every message at or below {@code fromY} down by {@code dy}, with the activation bars and
+   * combined fragments around them: bars and frames below {@code fromY} move, the ones spanning it
+   * grow. Lifelines are extended to the new last message.
+   */
+  private void shiftMessagesDown(IInteractionDiagramUIModel diagram, int fromY, int dy) {
+    int lowest = 0;
+    for (MessageRow row : messageRows(diagram)) {
+      if (row.arrowY < fromY) {
+        continue;
+      }
+      Point[] points = row.connector.getPoints();
+      row.connector.clearPoints();
+      for (Point p : points) {
+        row.connector.addPoint(new Point(p.x, p.y + dy));
+      }
+      row.connector.resetCaption();
+      lowest = Math.max(lowest, row.bottom() + dy);
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (!(de instanceof IShapeUIModel)
+          || de instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel
+          || ((IShapeUIModel) de).getParent() != null) {
+        continue;
+      }
+      boolean bar = de instanceof IActivationUIModel;
+      boolean frame = de.getModelElement() instanceof ICombinedFragment;
+      if (!bar && !frame) {
+        continue;
+      }
+      shiftShape((IShapeUIModel) de, fromY - 4, dy);
+    }
+    for (IInteractionLifeLine lifeline : SequenceDiagramUtils.getAllLifelines(diagram)) {
+      extendLifelineToY(diagram, lifeline, lowest);
+    }
+  }
+
+  /**
+   * Make room below {@code fromY}: a shape starting below it moves down by dy (children too), a
+   * shape spanning it grows by dy and its children are shifted the same way.
+   */
+  private static void shiftShape(IShapeUIModel shape, int fromY, int dy) {
+    if (shape.getY() >= fromY) {
+      shape.setBounds(shape.getX(), shape.getY() + dy, shape.getWidth(), shape.getHeight());
+    } else if (shape.getY() + shape.getHeight() > fromY) {
+      shape.setBounds(shape.getX(), shape.getY(), shape.getWidth(), shape.getHeight() + dy);
+    } else {
+      return;
+    }
+    IShapeUIModel[] children = shape.toChildArray();
+    if (children != null) {
+      for (IShapeUIModel child : children) {
+        if (shape.getY() >= fromY + dy) {
+          // the parent moved as a whole: its children follow
+          child.setBounds(child.getX(), child.getY() + dy, child.getWidth(), child.getHeight());
+        } else {
+          shiftShape(child, fromY, dy);
+        }
+      }
+    }
   }
 
   private IActivationUIModel findActivationShapeById(
