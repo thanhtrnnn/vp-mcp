@@ -590,7 +590,10 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                 + "'"
                 + suffix
                 + (moved != null ? "; moved '" + toNode.trim() + "' to " + moved : "")
-                + crowdedGuardsWarning(diagram, created);
+                // auto-placed nodes are still re-laid by later flows: warn on explicit layouts only
+                + (autoPlaced.contains(from.getId()) || autoPlaced.contains(to.getId())
+                    ? ""
+                    : crowdedGuardsWarning(diagram, created));
           });
     } catch (Exception e) {
       return "Error adding flow: " + e.getMessage();
@@ -637,7 +640,8 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add a rounded frame with a bold title at its top-left (a UML activity) to an activity"
               + " diagram, the book's \"Xử lí tại gdXxx.jsp\" page frames. nodeNames is a comma"
-              + " list of nodes the frame encloses (sized around them with room for the title);"
+              + " list of nodes the frame encloses (sized around them and the guards of their"
+              + " outgoing flows, with room for the title);"
               + " call it after the nodes are placed (after their flows). With nodeNames \"\" the"
               + " frame takes x/y/width/height. Calling it again with the same title re-sizes"
               + " that frame. The frame stays behind the nodes")
@@ -677,6 +681,13 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
                     + diagramName
                     + "': "
                     + String.join(", ", missing);
+              }
+              // the guards of flows leaving these nodes sit near their source: keep them inside
+              for (ICaptionUIModel guardLabel : guardsLeaving(diagram, nodeNames)) {
+                left = Math.min(left, guardLabel.getX());
+                top = Math.min(top, guardLabel.getY());
+                right = Math.max(right, guardLabel.getX() + guardLabel.getWidth());
+                bottom = Math.max(bottom, guardLabel.getY() + guardLabel.getHeight());
               }
               int titleWidth = ActivityDiagramUtils.estimateTextWidth(name);
               int pad = FRAME_PADDING;
@@ -758,6 +769,28 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding frame: " + e.getMessage();
     }
+  }
+
+  /** The visible guard labels of the flows leaving the comma-listed nodes. */
+  private List<ICaptionUIModel> guardsLeaving(IActivityDiagramUIModel diagram, String nodeNames) {
+    List<ICaptionUIModel> labels = new ArrayList<>();
+    for (String part : nodeNames.split(",")) {
+      IShapeUIModel node = part.trim().isEmpty() ? null : findNodeShape(diagram, part.trim());
+      IConnectorUIModel[] outgoing = node != null ? node.toFromConnectorArray() : null;
+      if (outgoing == null) {
+        continue;
+      }
+      for (IConnectorUIModel c : outgoing) {
+        ICaptionUIModel caption = c.getCaptionUIModel();
+        if (hasGuard(c.getModelElement())
+            && caption != null
+            && caption.isVisible()
+            && caption.getWidth() > 0) {
+          labels.add(caption);
+        }
+      }
+    }
+    return labels;
   }
 
   /** Free space between a frame's border and the nodes it encloses. */
@@ -1597,11 +1630,15 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
         continue;
       }
       int[] spot = {caption.getX(), caption.getY()};
-      if (!ActivityDiagramUtils.isClear(
-          spot,
-          caption.getWidth(),
-          caption.getHeight(),
-          labelObstacles(diagram, (IConnectorUIModel) de, null))) {
+      List<int[]> obstacles = labelObstacles(diagram, (IConnectorUIModel) de, null);
+      // auto-placed nodes waiting for their first flow still move: they do not count
+      for (IShapeUIModel node : nodeShapes(diagram)) {
+        if (isFloating(node)) {
+          int[] r = rect(node);
+          obstacles.removeIf(o -> java.util.Arrays.equals(o, r));
+        }
+      }
+      if (!ActivityDiagramUtils.isClear(spot, caption.getWidth(), caption.getHeight(), obstacles)) {
         crowded.add(
             ActivityDiagramUtils.formatGuard(
                 model instanceof IControlFlow

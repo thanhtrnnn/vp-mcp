@@ -481,7 +481,8 @@ public final class ActivityDiagramUtils {
   /**
    * Candidate spots for a flow's [guard] along the flow's first segment, best first: beside the
    * line at 25%, 45% and 65% of the segment (capped near the source), on the right of the direction
-   * of travel first, then on the left.
+   * of travel first, then on the left; then the same spots further off the line (a slanted line's
+   * clearance box needs more room).
    *
    * @param sx segment start x (source end)
    * @param sy segment start y
@@ -498,23 +499,27 @@ public final class ActivityDiagramUtils {
     double ux = (ex - sx) / len;
     double uy = (ey - sy) / len;
     double[] fractions = {0.25, 0.45, 0.65};
-    for (int side = 0; side < 2; side++) {
-      for (double f : fractions) {
-        double along = Math.min(len * f, 30 + 60 * f);
-        double ax = sx + ux * along;
-        double ay = sy + uy * along;
-        // "right" of a downward flow is +x; of a rightward flow it is +y (below)
-        boolean right = side == 0;
-        int x;
-        int y;
-        if (Math.abs(uy) >= Math.abs(ux)) {
-          x = (int) Math.round(right == (uy > 0) ? ax + 6 : ax - w - 6);
-          y = (int) Math.round(ay - h / 2.0);
-        } else {
-          x = (int) Math.round(ax - w / 2.0);
-          y = (int) Math.round(right == (ux < 0) ? ay - h - 4 : ay + 4);
+    for (int pass = 0; pass < 2; pass++) {
+      int off = pass == 0 ? 6 : 16;
+      int offV = pass == 0 ? 4 : 12;
+      for (int side = 0; side < 2; side++) {
+        for (double f : fractions) {
+          double along = Math.min(len * f, 30 + 60 * f);
+          double ax = sx + ux * along;
+          double ay = sy + uy * along;
+          // "right" of a downward flow is +x; of a rightward flow it is +y (below)
+          boolean right = side == 0;
+          int x;
+          int y;
+          if (Math.abs(uy) >= Math.abs(ux)) {
+            x = (int) Math.round(right == (uy > 0) ? ax + off : ax - w - off);
+            y = (int) Math.round(ay - h / 2.0);
+          } else {
+            x = (int) Math.round(ax - w / 2.0);
+            y = (int) Math.round(right == (ux < 0) ? ay - h - offV : ay + offV);
+          }
+          result.add(new int[] {x, y});
         }
-        result.add(new int[] {x, y});
       }
     }
     return result;

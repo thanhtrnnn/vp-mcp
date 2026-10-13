@@ -310,6 +310,10 @@ public class ActivityDiagramUtilsTest {
     // downward flow: the first candidate is right of the line, the 4th left of it
     assertTrue(candidates.get(0)[0] > 100);
     assertTrue(candidates.get(3)[0] + 60 < 100);
+    // then the same spots further off the line
+    assertEquals(12, candidates.size());
+    assertTrue(candidates.get(6)[0] > candidates.get(0)[0]);
+    assertTrue(candidates.get(9)[0] < candidates.get(3)[0]);
     java.util.List<int[]> obstacles = new java.util.ArrayList<>();
     obstacles.add(new int[] {100, 100, 200, 200}); // everything right of the line is taken
     int[] spot = ActivityDiagramUtils.firstClearSpot(candidates, 60, 14, obstacles);
