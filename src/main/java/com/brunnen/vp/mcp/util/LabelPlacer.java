@@ -16,7 +16,7 @@ import java.util.Map;
 public final class LabelPlacer {
 
   /** Clearance between a label and its line: the nearest first, then further out. */
-  private static final int[] GAPS = {3, 14, 26, 50, 80};
+  private static final int[] GAPS = {3, 14, 26, 50, 80, 110, 150};
 
   /** Where a label belongs on its connector. */
   public enum Slot {
@@ -53,6 +53,15 @@ public final class LabelPlacer {
       this.slot = slot;
       this.verticalW = w;
       this.verticalH = h;
+    }
+
+    /**
+     * The id of the connector the label belongs to.
+     *
+     * @return the id
+     */
+    public String connector() {
+      return connector;
     }
 
     /**
@@ -94,6 +103,40 @@ public final class LabelPlacer {
    */
   public static Map<String, Map<Integer, int[]>> place(
       List<int[]> shapes, Map<String, List<int[]>> routes, List<Spec> specs) {
+    return place(shapes, routes, specs, new ArrayList<int[]>());
+  }
+
+  /**
+   * Place some labels around labels that are already on the canvas.
+   *
+   * @param shapes rectangles of the shapes labels must keep off (leaf shapes)
+   * @param routes the final route of every connector by id (first point at its tail)
+   * @param specs the labels to place
+   * @param fixed rectangles of labels that stay where they are
+   * @return for every connector id the label rectangles by label index
+   */
+  public static Map<String, Map<Integer, int[]>> place(
+      List<int[]> shapes, Map<String, List<int[]>> routes, List<Spec> specs, List<int[]> fixed) {
+    return place(shapes, routes, specs, fixed, CANVAS_MIN);
+  }
+
+  /**
+   * Place some labels around labels that are already on the canvas.
+   *
+   * @param shapes rectangles of the shapes labels must keep off (leaf shapes)
+   * @param routes the final route of every connector by id (first point at its tail)
+   * @param specs the labels to place
+   * @param fixed rectangles of labels that stay where they are
+   * @param canvasMin the least x and y a label may have (the export clips what lies left of or
+   *     above the canvas); a layout that may move everything afterwards passes a very small value
+   * @return for every connector id the label rectangles by label index
+   */
+  public static Map<String, Map<Integer, int[]>> place(
+      List<int[]> shapes,
+      Map<String, List<int[]>> routes,
+      List<Spec> specs,
+      List<int[]> fixed,
+      int canvasMin) {
     List<int[]> lines = new ArrayList<>(); // {x1, y1, x2, y2, index of the route}
     Map<String, Integer> owner = new LinkedHashMap<>();
     for (Map.Entry<String, List<int[]>> entry : routes.entrySet()) {
@@ -106,7 +149,7 @@ public final class LabelPlacer {
         lines.add(new int[] {a[0], a[1], b[0], b[1], index});
       }
     }
-    List<int[]> placed = new ArrayList<>();
+    List<int[]> placed = new ArrayList<>(fixed);
     Map<String, Map<Integer, int[]>> result = new LinkedHashMap<>();
     // ends first (they are tied to a short stretch), then centre labels
     for (Slot pass : new Slot[] {Slot.TAIL, Slot.HEAD, Slot.CENTER}) {
@@ -118,7 +161,8 @@ public final class LabelPlacer {
         if (route == null || route.size() < 2) {
           continue;
         }
-        int[] rect = choose(spec, route, shapes, lines, placed, owner.get(spec.connector));
+        int[] rect =
+            choose(spec, route, shapes, lines, placed, owner.get(spec.connector), canvasMin);
         placed.add(rect);
         result.computeIfAbsent(spec.connector, k -> new LinkedHashMap<>()).put(spec.index, rect);
       }
@@ -132,7 +176,8 @@ public final class LabelPlacer {
       List<int[]> shapes,
       List<int[]> lines,
       List<int[]> placed,
-      int own) {
+      int own,
+      int canvasMin) {
     List<int[]> candidates = new ArrayList<>();
     for (int gap : GAPS) {
       candidates.addAll(candidates(spec, route, gap, lines, own));
@@ -141,7 +186,7 @@ public final class LabelPlacer {
     int bestScore = Integer.MAX_VALUE;
     for (int i = 0; i < candidates.size(); i++) {
       int[] c = candidates.get(i);
-      int score = collisions(c, shapes, lines, placed, own) * 1000 + i;
+      int score = collisions(c, shapes, lines, placed, own, canvasMin) * 1000 + i;
       if (score < bestScore) {
         bestScore = score;
         best = c;
@@ -310,6 +355,9 @@ public final class LabelPlacer {
     return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
   }
 
+  /** The least coordinate of a label on a canvas that stays where it is. */
+  private static final int CANVAS_MIN = 2;
+
   /** Distance after which a neighbouring line does not matter for the side of a label. */
   private static final int ROOM = 400;
 
@@ -321,7 +369,7 @@ public final class LabelPlacer {
    * right beside the line of another connector (where it would read as that line's label) less so.
    */
   private static int collisions(
-      int[] r, List<int[]> shapes, List<int[]> lines, List<int[]> placed, int own) {
+      int[] r, List<int[]> shapes, List<int[]> lines, List<int[]> placed, int own, int canvasMin) {
     int n = 0;
     for (int[] s : shapes) {
       if (intersects(r, s)) {
@@ -339,7 +387,7 @@ public final class LabelPlacer {
         n++;
       }
     }
-    if (r[0] < 2 || r[1] < 2) {
+    if (r[0] < canvasMin || r[1] < canvasMin) {
       n += 5; // the export clips what lies left of or above the canvas
     }
     return n;

@@ -247,6 +247,7 @@ public final class ElkLayout {
     boolean brandesKoepf = true;
     int labelAllowance = 96;
     boolean flowOrder;
+    boolean favorStraightEdges = true;
 
     /**
      * Flow direction.
@@ -292,6 +293,17 @@ public final class ElkLayout {
      */
     public Options flowOrder() {
       this.flowOrder = true;
+      return this;
+    }
+
+    /**
+     * Put a node in the middle of its successors instead of in line with the first one (a decision
+     * with three branches stands over the middle branch, one left and one right of it).
+     *
+     * @return this
+     */
+    public Options centerParents() {
+      this.favorStraightEdges = false;
       return this;
     }
 
@@ -569,7 +581,8 @@ public final class ElkLayout {
           org.eclipse.elk.alg.layered.options.OrderingStrategy.NODES_AND_EDGES);
     }
     node.setProperty(LayeredOptions.THOROUGHNESS, 30);
-    node.setProperty(LayeredOptions.NODE_PLACEMENT_FAVOR_STRAIGHT_EDGES, true);
+    node.setProperty(
+        LayeredOptions.NODE_PLACEMENT_FAVOR_STRAIGHT_EDGES, options.favorStraightEdges);
     node.setProperty(
         LayeredOptions.NODE_PLACEMENT_BK_EDGE_STRAIGHTENING,
         org.eclipse.elk.alg.layered.options.EdgeStraighteningStrategy.IMPROVE_STRAIGHTNESS);

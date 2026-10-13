@@ -46,6 +46,11 @@ public final class CommunicationLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public boolean shiftsIntoCanvas() {
+    return true;
+  }
+
+  @Override
   public int laneGap() {
     return LINK_GAP;
   }
@@ -92,7 +97,8 @@ public final class CommunicationLayoutProfile extends LayoutProfile {
         .edgeNodeGap(40)
         .padding(40, 40)
         .labelAllowance(0)
-        .flowOrder();
+        .flowOrder()
+        .centerParents();
   }
 
   @Override

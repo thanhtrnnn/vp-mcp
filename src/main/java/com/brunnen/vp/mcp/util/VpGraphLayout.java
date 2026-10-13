@@ -28,6 +28,9 @@ public final class VpGraphLayout {
   /** Distance from a corner a connector end keeps. */
   private static final int CORNER = 10;
 
+  /** Least distance of anything from the left and top edge of the canvas after a shift. */
+  private static final int CANVAS_MARGIN = 14;
+
   /** How far a bar reaches past the outermost shape it joins. */
   private static final int BAR_MARGIN = 24;
 
@@ -81,7 +84,7 @@ public final class VpGraphLayout {
       graph.routeDeferred(profile, routes);
       graph.repair(profile, routes);
     }
-    graph.draw(profile, routes, summary);
+    graph.draw(profile, routes, summary, profile.shiftsIntoCanvas());
     profile.afterLayout(diagram);
     return summary;
   }
@@ -134,7 +137,7 @@ public final class VpGraphLayout {
           r.get(n - 1),
           r.get(n - 2));
     }
-    graph.draw(profile, routes, summary);
+    graph.draw(profile, routes, summary, false);
     profile.afterLayout(diagram);
     return summary;
   }
@@ -363,11 +366,9 @@ public final class VpGraphLayout {
     }
 
     /** Draw every route (points from the connector's from-shape) and put the labels beside them. */
-    void draw(LayoutProfile profile, Map<String, List<int[]>> routes, Summary summary) {
-      for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
-        route(connectors.get(e.getKey()), e.getValue());
-        summary.connectors++;
-      }
+    void draw(
+        LayoutProfile profile, Map<String, List<int[]>> routes, Summary summary, boolean mayShift) {
+      int canvasMin = mayShift ? Integer.MIN_VALUE / 4 : 2;
       List<int[]> obstacles = new ArrayList<>();
       for (IShapeUIModel s : shapes.values()) {
         if (!hasChildren(s.getId())) {
@@ -391,7 +392,53 @@ public final class VpGraphLayout {
           index++;
         }
       }
-      Map<String, Map<Integer, int[]>> placed = LabelPlacer.place(obstacles, routes, specs);
+      Map<String, Map<Integer, int[]>> placed =
+          LabelPlacer.place(obstacles, routes, specs, new ArrayList<int[]>(), canvasMin);
+      // a line that runs through the label of another connector is routed again around the labels
+      // that stay (its own label then goes beside its new route)
+      for (int pass = 0; pass < 2; pass++) {
+        List<String> crossed = crossingLabels(routes, placed);
+        if (crossed.isEmpty()) {
+          break;
+        }
+        Map<String, List<int[]>> routesBefore = copyOf(routes);
+        Map<String, Map<Integer, int[]>> placedBefore = placed;
+        int crossingsBefore = RouteChecks.crossings(routes.values());
+        List<int[]> blocks = new ArrayList<>();
+        Map<String, Map<Integer, int[]>> kept = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<Integer, int[]>> e : placed.entrySet()) {
+          if (!crossed.contains(e.getKey())) {
+            blocks.addAll(e.getValue().values());
+            kept.put(e.getKey(), e.getValue());
+          }
+        }
+        reroute(profile, routes, crossed, blocks);
+        List<LabelPlacer.Spec> again = new ArrayList<>();
+        for (LabelPlacer.Spec spec : specs) {
+          if (crossed.contains(spec.connector())) {
+            again.add(spec);
+          }
+        }
+        Map<String, Map<Integer, int[]>> moved =
+            LabelPlacer.place(obstacles, routes, again, blocks, canvasMin);
+        placed = new LinkedHashMap<>(kept);
+        placed.putAll(moved);
+        if (RouteChecks.crossings(routes.values()) > crossingsBefore
+            || crossingLabels(routes, placed).size() >= crossed.size()) {
+          // a detour that crosses more lines (or still crosses a label) is worse than the label
+          routes.clear();
+          routes.putAll(routesBefore);
+          placed = placedBefore;
+          break;
+        }
+      }
+      if (mayShift) {
+        shiftIntoCanvas(profile, routes, placed, obstacles);
+      }
+      for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
+        route(connectors.get(e.getKey()), e.getValue());
+        summary.connectors++;
+      }
       for (Map.Entry<String, Map<Integer, int[]>> e : placed.entrySet()) {
         for (Map.Entry<Integer, int[]> l : e.getValue().entrySet()) {
           profile.applyLabel(
@@ -399,6 +446,87 @@ public final class VpGraphLayout {
           summary.labels++;
         }
       }
+    }
+
+    /**
+     * Move shapes, routes and labels right and down by the same amount when a label (or anything
+     * else) reaches left of or above the canvas margin.
+     */
+    private void shiftIntoCanvas(
+        LayoutProfile profile,
+        Map<String, List<int[]>> routes,
+        Map<String, Map<Integer, int[]>> placed,
+        List<int[]> obstacles) {
+      int minX = Integer.MAX_VALUE;
+      int minY = Integer.MAX_VALUE;
+      for (int[] r : obstacles) {
+        minX = Math.min(minX, r[0]);
+        minY = Math.min(minY, r[1]);
+      }
+      for (Map<Integer, int[]> labels : placed.values()) {
+        for (int[] r : labels.values()) {
+          minX = Math.min(minX, r[0]);
+          minY = Math.min(minY, r[1]);
+        }
+      }
+      for (List<int[]> route : routes.values()) {
+        for (int[] p : route) {
+          minX = Math.min(minX, p[0]);
+          minY = Math.min(minY, p[1]);
+        }
+      }
+      int dx = Math.max(CANVAS_MARGIN - minX, 0);
+      int dy = Math.max(CANVAS_MARGIN - minY, 0);
+      if (dx == 0 && dy == 0) {
+        return;
+      }
+      for (IShapeUIModel s : shapes.values()) {
+        s.setBounds(s.getX() + dx, s.getY() + dy, s.getWidth(), s.getHeight());
+      }
+      for (IShapeUIModel s : shapes.values()) {
+        profile.placed(s); // the detached names follow
+      }
+      for (List<int[]> route : routes.values()) {
+        for (int[] p : route) {
+          p[0] += dx;
+          p[1] += dy;
+        }
+      }
+      for (Map<Integer, int[]> labels : placed.values()) {
+        for (int[] r : labels.values()) {
+          r[0] += dx;
+          r[1] += dy;
+        }
+      }
+    }
+
+    private static Map<String, List<int[]>> copyOf(Map<String, List<int[]>> routes) {
+      Map<String, List<int[]>> copy = new LinkedHashMap<>();
+      for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
+        copy.put(e.getKey(), RouteTidy.copy(e.getValue()));
+      }
+      return copy;
+    }
+
+    /** The connectors whose route runs through the label of another connector. */
+    private List<String> crossingLabels(
+        Map<String, List<int[]>> routes, Map<String, Map<Integer, int[]>> placed) {
+      List<String> crossed = new ArrayList<>();
+      for (Map.Entry<String, List<int[]>> r : routes.entrySet()) {
+        outer:
+        for (Map.Entry<String, Map<Integer, int[]>> p : placed.entrySet()) {
+          if (p.getKey().equals(r.getKey())) {
+            continue;
+          }
+          for (int[] label : p.getValue().values()) {
+            if (RouteChecks.through(r.getValue(), label, 1)) {
+              crossed.add(r.getKey());
+              break outer;
+            }
+          }
+        }
+      }
+      return crossed;
     }
 
     /** The routes of an ELK result in the direction of the VP connectors. */
@@ -420,7 +548,19 @@ public final class VpGraphLayout {
 
     /** The shapes as the router sees them, where they stand now. */
     List<OrthogonalRouter.Shape> routerShapes(LayoutProfile profile) {
+      return routerShapes(profile, new ArrayList<int[]>());
+    }
+
+    /**
+     * The shapes as the router sees them, with rectangles it must keep out of as shapes of their
+     * own.
+     */
+    List<OrthogonalRouter.Shape> routerShapes(LayoutProfile profile, List<int[]> blocks) {
       List<OrthogonalRouter.Shape> list = new ArrayList<>();
+      for (int i = 0; i < blocks.size(); i++) {
+        list.add(
+            new OrthogonalRouter.Shape("~block" + i, blocks.get(i), null, ShapeOutline.Kind.RECT));
+      }
       for (IShapeUIModel s : shapes.values()) {
         list.add(
             new OrthogonalRouter.Shape(
@@ -503,6 +643,17 @@ public final class VpGraphLayout {
 
     /** Route the connectors {@code ids} again; the other routes stay and are kept clear of. */
     private void reroute(LayoutProfile profile, Map<String, List<int[]>> routes, List<String> ids) {
+      reroute(profile, routes, ids, new ArrayList<int[]>());
+    }
+
+    /**
+     * Route the connectors {@code ids} again, keeping clear of the rectangles {@code blocks} too.
+     */
+    private void reroute(
+        LayoutProfile profile,
+        Map<String, List<int[]>> routes,
+        List<String> ids,
+        List<int[]> blocks) {
       if (ids.isEmpty()) {
         return;
       }
@@ -529,7 +680,7 @@ public final class VpGraphLayout {
                 e.getValue()));
       }
       Map<String, List<int[]>> extra =
-          OrthogonalRouter.route(routerShapes(profile), pending, drawn, profile.laneGap());
+          OrthogonalRouter.route(routerShapes(profile, blocks), pending, drawn, profile.laneGap());
       removeJogs(profile, routes, extra);
       for (Map.Entry<String, List<int[]>> e : extra.entrySet()) {
         IConnectorUIModel c = connectors.get(e.getKey());

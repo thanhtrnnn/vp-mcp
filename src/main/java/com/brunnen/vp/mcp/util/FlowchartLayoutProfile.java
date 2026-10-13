@@ -23,13 +23,19 @@ public final class FlowchartLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public boolean shiftsIntoCanvas() {
+    return true;
+  }
+
+  @Override
   public ElkLayout.Options options(IDiagramUIModel diagram) {
     return new ElkLayout.Options()
         .direction(ElkLayout.Dir.DOWN)
         .gaps(70, 80, 18)
         .padding(30, 30)
         .labelAllowance(56)
-        .flowOrder();
+        .flowOrder()
+        .centerParents();
   }
 
   @Override

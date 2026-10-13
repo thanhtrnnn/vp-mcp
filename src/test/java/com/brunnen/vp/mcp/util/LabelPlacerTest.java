@@ -115,4 +115,22 @@ public class LabelPlacerTest {
     assertTrue("left label left of its line", l[0] + l[2] <= 100);
     assertTrue("right label right of its line", r[0] >= 114);
   }
+
+  @Test
+  public void aLayoutThatMayShiftPutsTheLabelLeftOfTheLineEvenOffTheCanvas() {
+    Map<String, List<int[]>> routes = new LinkedHashMap<>();
+    routes.put("c", route(30, 40, 30, 200));
+    List<LabelPlacer.Spec> specs = new ArrayList<>();
+    specs.add(new LabelPlacer.Spec("c", 0, 120, 14, LabelPlacer.Slot.CENTER));
+    int[] r =
+        LabelPlacer.place(
+                new ArrayList<int[]>(),
+                routes,
+                specs,
+                new ArrayList<int[]>(),
+                Integer.MIN_VALUE / 4)
+            .get("c")
+            .get(0);
+    assertTrue("left of the line, as the first choice: " + r[0], r[0] + r[2] <= 30);
+  }
 }

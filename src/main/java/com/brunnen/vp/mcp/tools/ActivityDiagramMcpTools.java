@@ -1368,25 +1368,6 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     return null;
   }
 
-  /** The shape showing {@code element} on {@code diagram}, or null. */
-  private static IShapeUIModel viewOn(IDiagramUIModel diagram, IModelElement element) {
-    if (element == null) {
-      return null;
-    }
-    IDiagramElement[] views = element.getDiagramElements();
-    if (views == null) {
-      return null;
-    }
-    for (IDiagramElement view : views) {
-      if (view instanceof IShapeUIModel
-          && view.getDiagramUIModel() != null
-          && diagram.getId().equals(view.getDiagramUIModel().getId())) {
-        return (IShapeUIModel) view;
-      }
-    }
-    return null;
-  }
-
   // --- Small helpers ---
 
   /**

@@ -213,6 +213,17 @@ public class LayoutProfile {
   }
 
   /**
+   * Whether a full layout may put labels left of or above the first shape: everything is then moved
+   * right and down until it lies on the canvas again (a transition label wider than the room left
+   * of its line sits on the left, as the line deserves, instead of on another line).
+   *
+   * @return true when the layout shifts a drawing that reaches off the canvas
+   */
+  public boolean shiftsIntoCanvas() {
+    return false;
+  }
+
+  /**
    * Whether Visual Paradigm draws things only when the diagram is opened again (the arrows of a
    * communication diagram turn along their link when it lays the diagram out from scratch): the
    * diagram is then closed, opened and its connectors drawn once more after a layout.

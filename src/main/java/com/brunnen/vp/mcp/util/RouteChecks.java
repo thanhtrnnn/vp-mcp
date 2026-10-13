@@ -73,4 +73,46 @@ public final class RouteChecks {
     }
     return false;
   }
+
+  /**
+   * Number of places where a horizontal segment of one route crosses a vertical segment of another
+   * (a crossing at an end of a segment does not count).
+   *
+   * @param routes the routes
+   * @return the number of crossings
+   */
+  public static int crossings(java.util.Collection<List<int[]>> routes) {
+    List<List<int[]>> list = new java.util.ArrayList<>(routes);
+    int count = 0;
+    for (int a = 0; a < list.size(); a++) {
+      for (int b = a + 1; b < list.size(); b++) {
+        count += crossings(list.get(a), list.get(b)) + crossings(list.get(b), list.get(a));
+      }
+    }
+    return count;
+  }
+
+  /** Crossings of the horizontal segments of {@code h} with the vertical segments of {@code v}. */
+  private static int crossings(List<int[]> h, List<int[]> v) {
+    int count = 0;
+    for (int i = 0; i + 1 < h.size(); i++) {
+      int[] p = h.get(i);
+      int[] q = h.get(i + 1);
+      if (p[1] != q[1]) {
+        continue;
+      }
+      for (int j = 0; j + 1 < v.size(); j++) {
+        int[] s = v.get(j);
+        int[] t = v.get(j + 1);
+        if (s[0] == t[0]
+            && Math.min(p[0], q[0]) < s[0]
+            && s[0] < Math.max(p[0], q[0])
+            && Math.min(s[1], t[1]) < p[1]
+            && p[1] < Math.max(s[1], t[1])) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
 }

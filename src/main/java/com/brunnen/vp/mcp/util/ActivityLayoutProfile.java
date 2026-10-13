@@ -147,13 +147,19 @@ public final class ActivityLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public boolean shiftsIntoCanvas() {
+    return lanes == null; // the lanes stand at the frame's own place
+  }
+
+  @Override
   public ElkLayout.Options options(IDiagramUIModel diagram) {
     return new ElkLayout.Options()
         .direction(ElkLayout.Dir.DOWN)
         .gaps(60, 80, 18)
         .padding(44, 26)
         .labelAllowance(56)
-        .flowOrder();
+        .flowOrder()
+        .centerParents();
   }
 
   /**

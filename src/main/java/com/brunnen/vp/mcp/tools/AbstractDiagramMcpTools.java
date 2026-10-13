@@ -956,6 +956,7 @@ public abstract class AbstractDiagramMcpTools {
       return "";
     }
     String parentId = self.getParent() == null ? null : self.getParent().getId();
+    LayoutProfile profile = profileOf(diagram);
     List<int[]> others = new ArrayList<>();
     for (IShapeUIModel other : diagram.toShapeUIModelArray()) {
       String otherParent = other.getParent() == null ? null : other.getParent().getId();
@@ -967,12 +968,14 @@ public abstract class AbstractDiagramMcpTools {
           || !java.util.Objects.equals(parentId, otherParent)) {
         continue;
       }
-      others.add(new int[] {other.getX(), other.getY(), other.getWidth(), other.getHeight()});
+      others.add(footprint(profile, other));
     }
-    int w = self.getWidth();
-    int h = self.getHeight();
-    int x = self.getX();
-    int y = self.getY();
+    // the shape and the name that hangs beside it move as one
+    int[] own = footprint(profile, self);
+    int w = own[2];
+    int h = own[3];
+    int x = own[0];
+    int y = own[1];
     if (!overlapsAny(x, y, w, h, others)) {
       return "";
     }
@@ -1006,6 +1009,23 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return "";
+  }
+
+  /** A shape's rectangle together with the name or label that hangs outside it. */
+  private static int[] footprint(LayoutProfile profile, IShapeUIModel shape) {
+    int[] box = {shape.getX(), shape.getY(), shape.getWidth(), shape.getHeight()};
+    int[] hanging = profile == null ? null : profile.hanging(shape);
+    if (hanging == null) {
+      return box;
+    }
+    int x = Math.min(box[0], hanging[0]);
+    int y = Math.min(box[1], hanging[1]);
+    return new int[] {
+      x,
+      y,
+      Math.max(box[0] + box[2], hanging[0] + hanging[2]) - x,
+      Math.max(box[1] + box[3], hanging[1] + hanging[3]) - y
+    };
   }
 
   /**
@@ -1187,10 +1207,7 @@ public abstract class AbstractDiagramMcpTools {
     IShapeUIModel first = canonical ? from : to;
     IShapeUIModel second = canonical ? to : from;
     List<String> parallel = connectorsBetween(from, to);
-    // a two-way exchange is drawn as one line with an arrowhead at each end: never spread apart
-    parallel.removeIf(OVERLAID::contains);
-    boolean overlaid = OVERLAID.contains(connector.getId());
-    if (!overlaid && parallel.size() > 1 && isDataFlowDiagram(connector.getDiagramUIModel())) {
+    if (parallel.size() > 1 && isDataFlowDiagram(connector.getDiagramUIModel())) {
       // a data flow diagram draws opposite flows as two parallel straight arrows
       Point[] side =
           parallelLine(
@@ -1221,8 +1238,8 @@ public abstract class AbstractDiagramMcpTools {
         DiagramUtils.routeBends(
             visibleRect(first),
             visibleRect(second),
-            overlaid ? 0 : Math.max(parallel.indexOf(connector.getId()), 0),
-            overlaid ? 1 : parallel.size(),
+            Math.max(parallel.indexOf(connector.getId()), 0),
+            parallel.size(),
             PARALLEL_STEP,
             obstaclesBetween(from, to),
             titleBands(from.getDiagramUIModel()));
@@ -1645,24 +1662,6 @@ public abstract class AbstractDiagramMcpTools {
       parent = parent instanceof IShapeUIModel ? ((IShapeUIModel) parent).getParent() : null;
     }
     return false;
-  }
-
-  /** Ids of connectors drawn on top of each other (a two-way exchange), never spread apart. */
-  private static final java.util.Set<String> OVERLAID =
-      java.util.Collections.synchronizedSet(new java.util.HashSet<>());
-
-  /**
-   * Draw two opposite connectors between the same shapes on one line, so they read as a single
-   * double-headed arrow, and keep them that way when their shapes move.
-   *
-   * @param a one connector
-   * @param b the connector back
-   */
-  protected static void overlay(IConnectorUIModel a, IConnectorUIModel b) {
-    OVERLAID.add(a.getId());
-    OVERLAID.add(b.getId());
-    centerConnector(a);
-    centerConnector(b);
   }
 
   /** Containers a connector between two shapes outside them must go around. */
