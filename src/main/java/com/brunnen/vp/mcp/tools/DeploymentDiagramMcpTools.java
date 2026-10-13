@@ -66,6 +66,9 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
   /** Free space between shapes inside a node. */
   private static final int INNER_GAP = 20;
 
+  /** Free space between the components of one host: room for an arrow and its label. */
+  private static final int COMPONENT_GAP = 90;
+
   /** Inner padding of a container node. */
   private static final int PAD = 16;
 
@@ -150,20 +153,26 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
-            INode node = getModelElementFactory().createNode();
-            node.setName(name);
-            if (nodeKind.getStereotype() != null) {
-              node.addStereotype(nodeKind.getStereotype());
-            }
-            if (parentShape != null) {
-              ((INode) parentShape.getModelElement()).addNode(node);
+            // The same machine drawn on two diagrams (overview and detail) is one node of the
+            // project: a node of that name in the same owner is reused (a new view of it).
+            INode node = ownedNode(parentShape, name);
+            boolean reused = node != null;
+            if (node == null) {
+              node = getModelElementFactory().createNode();
+              node.setName(name);
+              if (nodeKind.getStereotype() != null) {
+                node.addStereotype(nodeKind.getStereotype());
+              }
+              if (parentShape != null) {
+                ((INode) parentShape.getModelElement()).addNode(node);
+              }
             }
             Placement placed =
                 placeShape(
                     diagram, node, parentShape, x, y, width, height, NODE_WIDTH, NODE_HEIGHT);
 
             return "Added "
-                + describeNode(nodeKind)
+                + (reused ? "existing node of the project (drawn again)" : describeNode(nodeKind))
                 + " '"
                 + name
                 + "'"
@@ -173,6 +182,85 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding deployment node: " + e.getMessage();
     }
+  }
+
+  /** Whether a <<deploy>> arrow (deployment or dependency) already joins the artifact and node. */
+  private static boolean deployArrowExists(IShapeUIModel artifact, IShapeUIModel node) {
+    IConnectorUIModel[] outgoing = artifact.toFromConnectorArray();
+    for (IConnectorUIModel c : outgoing == null ? new IConnectorUIModel[0] : outgoing) {
+      IModelElement m = c.getModelElement();
+      if (c.getToShape() != null
+          && sameShape(c.getToShape(), node)
+          && (m instanceof IDeployment || m instanceof IDependency)
+          && m.hasStereotype("deploy")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Put the label of a path or dependency beside its line where it touches no node border, no
+   * artifact or component and no other label: a label on a container's border or across a nested
+   * node's name is read as part of it.
+   */
+  private void placeLabelClear(IDiagramUIModel diagram, IDiagramElement connector) {
+    if (!(connector instanceof IConnectorUIModel)) {
+      return;
+    }
+    IConnectorUIModel c = (IConnectorUIModel) connector;
+    com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
+    java.awt.Point[] points = c.getPoints();
+    if (cap == null || cap.getWidth() <= 0 || points == null || points.length < 2) {
+      return;
+    }
+    int w = cap.getWidth();
+    int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
+    int[][] pts = new int[points.length][];
+    for (int i = 0; i < points.length; i++) {
+      pts[i] = new int[] {points[i].x, points[i].y};
+    }
+    List<int[]> obstacles = new ArrayList<>();
+    for (IShapeUIModel s : allShapes(diagram)) {
+      int[] r = boundsOf(s);
+      if (s.getModelElement() instanceof INode) {
+        // a node: its border bands and its title band
+        obstacles.add(new int[] {r[0] - 4, r[1] - 4, r[2] + 8, 8});
+        obstacles.add(new int[] {r[0] - 4, r[1] + r[3] - 4, r[2] + 8, 8});
+        obstacles.add(new int[] {r[0] - 4, r[1] - 4, 8, r[3] + 8});
+        obstacles.add(new int[] {r[0] + r[2] - 4, r[1] - 4, 8, r[3] + 8});
+        obstacles.add(new int[] {r[0], r[1], r[2], HEADER});
+      } else {
+        obstacles.add(r);
+      }
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel && !de.getId().equals(c.getId())) {
+        com.vp.plugin.diagram.ICaptionUIModel other = ((IConnectorUIModel) de).getCaptionUIModel();
+        if (other != null && other.isVisible() && other.getWidth() > 0) {
+          obstacles.add(
+              new int[] {other.getX(), other.getY(), other.getWidth(), other.getHeight()});
+        }
+      }
+    }
+    int[] spot =
+        com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
+            DiagramUtils.labelSpotsAlong(pts, w, h), w, h, obstacles);
+    cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, h);
+  }
+
+  /** The node called {@code name} owned by the node on {@code parent} (project root if null). */
+  private static INode ownedNode(IShapeUIModel parent, String name) {
+    if (parent == null) {
+      return findRootElement(name, INode.class);
+    }
+    INode[] nested = ((INode) parent.getModelElement()).toNodeArray();
+    for (INode n : nested == null ? new INode[0] : nested) {
+      if (name.equals(n.getName())) {
+        return n;
+      }
+    }
+    return null;
   }
 
   @Tool(
@@ -245,8 +333,12 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               + " Tomcat): owned by the node and drawn inside it, auto-placed and fitted to its"
               + " caption. nodeName may also name an artifact (View/Controller/Model inside"
               + " app.war), which then encloses the component. nodeName \"\" draws it"
-              + " free-standing. Component names must be unique on the diagram")
-  public String addDeploymentComponent(String diagramName, String componentName, String nodeName) {
+              + " free-standing. Components of one host go in a row (left to right in the order"
+              + " added, 90 px apart, room for the label of the arrow between them) and the host"
+              + " grows to hold them; x/y (>0, diagram coordinates) place one explicitly."
+              + " Component names must be unique on the diagram")
+  public String addDeploymentComponent(
+      String diagramName, String componentName, String nodeName, int x, int y) {
     try {
       return runOnEdt(
           () -> {
@@ -280,7 +372,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
               nameInOwner(component, null, name);
             }
             Placement placed =
-                placeShape(diagram, component, hostShape, 0, 0, 0, 0, LEAF_WIDTH, LEAF_HEIGHT);
+                placeShape(diagram, component, hostShape, x, y, 0, 0, LEAF_WIDTH, LEAF_HEIGHT);
 
             return "Added component '"
                 + name
@@ -339,6 +431,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + toNode
                   + "'";
             }
+            placeLabelClear(diagram, connector);
 
             String text = labelText(parsed);
             return "Added communication path '"
@@ -384,6 +477,15 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + " to draw a <<deploy>> arrow instead";
             }
 
+            if (deployArrowExists(artifactShape, nodeShape)) {
+              return "A <<deploy>> arrow from '"
+                  + artifactName.trim()
+                  + "' to '"
+                  + nodeName.trim()
+                  + "' already exists on diagram '"
+                  + diagramName
+                  + "'";
+            }
             String movedNote = moveNextToNode(diagram, artifactShape, nodeShape);
             IModelElement artifact = artifactShape.getModelElement();
             IModelElement node = nodeShape.getModelElement();
@@ -473,7 +575,8 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             if (parsed.getStereotype() != null) {
               dependency.addStereotype(parsed.getStereotype());
             }
-            if (connectCentered(diagram, dependency, from, to) == null) {
+            IDiagramElement drawn = connectCentered(diagram, dependency, from, to);
+            if (drawn == null) {
               dependency.delete();
               return "Visual Paradigm refused the dependency '"
                   + fromElement
@@ -481,6 +584,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + toElement
                   + "'";
             }
+            placeLabelClear(diagram, drawn);
             String text = labelText(parsed);
             return "Added dependency '"
                 + from.getModelElement().getName()
@@ -606,6 +710,12 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     int originX = parent.getX() + PAD;
     int originY = parent.getY() + HEADER;
     int maxRight = parent.getX() + Math.max(parent.getWidth(), MIN_CONTAINER_ROW) - PAD_RIGHT;
+    if (shape.getModelElement() instanceof IComponent) {
+      // components of one host are the layers that call each other: one row, far enough apart for
+      // the arrow between two of them to show its label, and the host grows to hold the row
+      return DeploymentDiagramUtils.nextFlowPosition(
+          occupied, w, h, originX, originY, Integer.MAX_VALUE / 2, COMPONENT_GAP);
+    }
     return DeploymentDiagramUtils.nextFlowPosition(
         occupied, w, h, originX, originY, maxRight, INNER_GAP);
   }

@@ -40,4 +40,24 @@ public class ErdUtilsTest {
         java.util.Arrays.asList("datetime", "timestamp"), ErdUtils.typeCandidates("datetime"));
     assertEquals(java.util.Arrays.asList("varchar"), ErdUtils.typeCandidates("varchar"));
   }
+
+  @Test
+  public void sqlIdentifiersAreAsciiWordsWithoutSpaces() {
+    org.junit.Assert.assertTrue(ErdUtils.isSqlIdentifier("tblHoaDon"));
+    org.junit.Assert.assertTrue(ErdUtils.isSqlIdentifier("_x1"));
+    org.junit.Assert.assertFalse(ErdUtils.isSqlIdentifier("ti\u1ebfng vi\u1ec7t"));
+    org.junit.Assert.assertFalse(ErdUtils.isSqlIdentifier("1abc"));
+    org.junit.Assert.assertFalse(ErdUtils.isSqlIdentifier(""));
+    org.junit.Assert.assertFalse(ErdUtils.isSqlIdentifier(null));
+  }
+
+  @Test
+  public void varcharWithoutLengthGets255() {
+    org.junit.Assert.assertArrayEquals(
+        new String[] {"varchar", "255", "0"}, ErdUtils.parseColumnType("varchar", 0, 0));
+    org.junit.Assert.assertArrayEquals(
+        new String[] {"varchar", "40", "0"}, ErdUtils.parseColumnType("varchar", 40, 0));
+    org.junit.Assert.assertArrayEquals(
+        new String[] {"int", "0", "0"}, ErdUtils.parseColumnType("int", 0, 0));
+  }
 }

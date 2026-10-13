@@ -25,10 +25,16 @@ The plugin includes an embedded MCP server that:
 - Runs on **port 2026** with SSE endpoint `/sse`
 - Provides **tool capabilities** for external MCP clients
 
-#### Available MCP Tools (111 total)
+#### Available MCP Tools (117 total)
 
 The main tools per diagram family are listed below. Project, layout and export helpers
-(for example `listDiagrams`, `exportDiagramImage`, `saveProject`) are also available.
+(for example `listDiagrams`, `exportDiagramImage`, `saveProject`) are also available, and so are
+tools that work on any diagram: `setElementBounds` (a container takes its nested shapes along, a
+sequence lifeline its messages), `rerouteConnectors`, `removeDiagramElement`, `addNote(diagramName,
+text, attachedTo, x, y)` (a comment box, optionally anchored to a shape) and
+`getDiagramGeometry(diagramName)` (bounds of every shape, points of every connector, caption
+bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
+and matches the exact diagram type.
 
 ##### Use Case Diagram (5 tools)
 - **createUseCaseDiagram(diagramName)**: Create new use case diagrams
@@ -54,9 +60,10 @@ The main tools per diagram family are listed below. Project, layout and export h
 ##### ERD - Entity Relationship Diagram (7 tools)
 - **createErd(diagramName)**: Create new ER diagrams
 - **addTable(diagramName, tableName)**: Add tables to ER diagrams
-- **addColumn(diagramName, tableName, columnName, columnType, length, scale, isPrimaryKey, isNullable)**: Add columns to a table shown on the diagram (SQL Server types such as nvarchar/datetime are mapped to the project database's types)
+- **addColumn(diagramName, tableName, columnName, columnType, length, scale, isPrimaryKey, isNullable, isUnique)**: Add columns to a table shown on the diagram (SQL Server types such as nvarchar/datetime are mapped to the project database's types; varchar without a length gets 255; isUnique draws the book's "U")
 - **addForeignKey(diagramName, fromTable, toTable, fromColumn, toColumn, relationshipName)**: Add an FK: fromTable (child) column fromColumn references toTable (parent)
 - **addTableRelationship(diagramName, fromTable, toTable, type, fromMultiplicity, toMultiplicity)**: Add identifying/non-identifying relationships
+- **removeColumn(diagramName, tableName, columnName)**, **renameColumn(diagramName, tableName, columnName, newName)**, **removeForeignKey(diagramName, parentTable, childTable)**, **removeTable(diagramName, tableName)**: Correct a data model without rebuilding it
 - **generateDdl(diagramName)**: Generate CREATE TABLE DDL statements
 - **generateErdReport(diagramName)**: Generate ERD analysis report
 
@@ -64,7 +71,7 @@ The main tools per diagram family are listed below. Project, layout and export h
 - **createSequenceDiagram(diagramName)**: Create new sequence diagrams
 - **addLifeline(diagramName, lifelineName, className, lifelineType, alias)**: Add lifelines (participants); lifelineType actor/boundary/control/entity draws the icon for this lifeline only
 - **addActivation(diagramName, lifelineName)**: Add activation bars
-- **addMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber, messageType)**: Add sync/async messages
+- **addMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber, messageType)**: Add messages (messageType synch/asynch/create/destroy)
 - **addReturnMessage(diagramName, fromLifeline, toLifeline, messageName, sequenceNumber)**: Add return messages
 - **addCombinedFragment(diagramName, operator, guard, coveredLifelines, fromSeq, toSeq, operandStarts)**: Add an alt/opt/loop/break/par frame around messages fromSeq..toSeq (guards `a|else` give one operand each)
 - **generateSequenceReport(diagramName)**: Generate sequence diagram analysis report
@@ -92,7 +99,7 @@ The main tools per diagram family are listed below. Project, layout and export h
 - **createDeploymentDiagram(diagramName)**: Create new deployment diagrams
 - **addDeploymentNode(diagramName, nodeName, kind, parentNode, x, y, width, height)**: Add node/device/executionEnvironment, optionally nested
 - **addDeploymentArtifact(diagramName, artifactName, nodeName, x, y)**: Add an artifact, optionally inside a node
-- **addDeploymentComponent(diagramName, componentName, nodeName)**: Add a component inside a node or an artifact
+- **addDeploymentComponent(diagramName, componentName, nodeName, x, y)**: Add a component inside a node or an artifact (the components of one host go in a row)
 - **addCommunicationPath(diagramName, fromNode, toNode, label)**: Connect two nodes
 - **addDeployDependency(diagramName, artifactName, nodeName)**: Add a <<deploy>> dependency
 - **addDeploymentDependency(diagramName, fromElement, toElement, label)**: Add a dashed dependency between components or artifacts
@@ -103,7 +110,7 @@ The main tools per diagram family are listed below. Project, layout and export h
 - **addPackageDependency(diagramName, fromPackage, toPackage, kind)**: Add use/import/access/merge dependencies, or a plain `line`
 - **addClassInPackage(diagramName, packageName, className)**: Show a class inside a package
 - **createObjectDiagram(diagramName)**: Create new object diagrams
-- **addObject(diagramName, objectName, className, slots, x, y)**: Add an object with `attr=value;...` slots (empty objectName: anonymous `: Class`)
+- **addObject(diagramName, objectName, className, slots, x, y, modelPackage)**: Add an object with `attr=value;...` slots (empty objectName: anonymous `: Class`; modelPackage picks the class when several packages own one of that name)
 - **addObjectLink(diagramName, fromObject, toObject, label)**: Link two objects
 
 ##### Communication Diagram (5 tools)
@@ -119,7 +126,7 @@ The main tools per diagram family are listed below. Project, layout and export h
 - **addFlowchartFlow(diagramName, fromShape, toShape, label)**: Connect two flowchart shapes
 - **createDataFlowDiagram(diagramName, notation)**: Create a DFD (standard, ganeSarson, yourdonDeMarco, yourdonCoad)
 - **addDfdProcess(diagramName, processName, processId, x, y)**: Add a process (auto-numbered)
-- **addDfdExternalEntity(diagramName, entityName, x, y)**: Add an external entity
+- **addDfdExternalEntity(diagramName, entityName, entityId, x, y)**: Add an external entity (entityId is the marker a, b, c... in its corner)
 - **addDfdDataStore(diagramName, storeName, storeId, x, y)**: Add a data store (auto D1, D2, ...)
 - **addDfdDataFlow(diagramName, fromElement, toElement, label)**: Add a data flow
 

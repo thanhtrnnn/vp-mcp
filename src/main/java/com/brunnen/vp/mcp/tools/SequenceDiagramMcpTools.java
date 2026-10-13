@@ -47,6 +47,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // not just their own active span. diagramName -> set of actor lifeline ids.
   private final java.util.Map<String, java.util.Set<String>> actorLifelineIds =
       new java.util.HashMap<>();
+  // Lifelines that got their destroy message: diagramName -> lifeline ids.
+  private final java.util.Map<String, java.util.Set<String>> destroyedLifelines =
+      new java.util.HashMap<>();
 
   @Tool(
       name = "createSequenceDiagram",
@@ -69,6 +72,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             myActivations.remove(diagramName);
             continuousBarId.remove(diagramName);
             actorLifelineIds.remove(diagramName);
+            destroyedLifelines.remove(diagramName);
             return "Created sequence diagram: " + diagramName;
           });
     } catch (Exception e) {
@@ -261,7 +265,10 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addMessage",
       description =
           "Add a message between two lifelines in a sequence diagram. messageType: synch (default,"
-              + " solid line with a filled head) or asynch (open head). sequenceNumber (\"\" = the"
+              + " solid line with a filled head), asynch (open head), create (the first message"
+              + " to a lifeline: dashed arrow ending at its head, which is lowered to the arrow) or"
+              + " destroy (the last message to a lifeline, which ends there with the X marker)."
+              + " sequenceNumber (\"\" = the"
               + " next top-level number) is the number VP prints in front of messageName; a number"
               + " already used on the diagram is refused. A label wider than the arrow moves the"
               + " lifelines at its right apart")
@@ -287,14 +294,25 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
                 && !"synch".equals(kind)
                 && !"sync".equals(kind)
                 && !"asynch".equals(kind)
-                && !"async".equals(kind)) {
+                && !"async".equals(kind)
+                && !"create".equals(kind)
+                && !"destroy".equals(kind)) {
               return "Unknown messageType '"
                   + messageType
-                  + "': use synch (solid line, filled head) or asynch (open head)";
+                  + "': use synch (solid line, filled head), asynch (open head), create or"
+                  + " destroy";
             }
             boolean async = "asynch".equals(kind) || "async".equals(kind);
+            String special = "create".equals(kind) || "destroy".equals(kind) ? kind : "";
             return createMessageConnector(
-                diagram, fromLifeline, toLifeline, messageName, sequenceNumber, async, false);
+                diagram,
+                fromLifeline,
+                toLifeline,
+                messageName,
+                sequenceNumber,
+                async,
+                false,
+                special);
           });
     } catch (Exception e) {
       return "Error adding message: " + e.getMessage();
@@ -323,7 +341,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             return createMessageConnector(
-                diagram, fromLifeline, toLifeline, messageName, sequenceNumber, false, true);
+                diagram, fromLifeline, toLifeline, messageName, sequenceNumber, false, true, "");
           });
     } catch (Exception e) {
       return "Error adding return message: " + e.getMessage();
@@ -1027,7 +1045,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   // A guard line under the tab / separator, the label above a message arrow, and free space.
   private static final int GUARD_ROW = 18;
   private static final int LABEL_ROW = 18;
-  private static final int GAP_ROW = 8;
+  private static final int GAP_ROW = 20;
   private static final int FRAGMENT_MARGIN = 24;
   // Space kept between a message label and the lifelines at the ends of its arrow, and between a
   // nested combined fragment and the one around it.
@@ -1039,6 +1057,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int LIFELINE_W = 90;
   private static final int LIFELINE_Y0 = 30;
   private static final int LIFELINE_HEAD_H = 40;
+  // Length of the lifeline below the arrow of a destroy message.
+  private static final int DESTROY_TAIL = 14;
 
   /**
    * The points of a message arrow at height {@code y}: lifeline center to lifeline center, or the
@@ -1064,7 +1084,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       String messageName,
       String sequenceNumber,
       boolean async,
-      boolean isReturn) {
+      boolean isReturn,
+      String special) {
     // All participants are real lifelines (boundary/entity/control + actor-as-box).
     IInteractionLifeLine from = SequenceDiagramUtils.findLifelineByName(diagram, fromLifeline);
     IInteractionLifeLine to = SequenceDiagramUtils.findLifelineByName(diagram, toLifeline);
@@ -1076,7 +1097,31 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
 
     boolean self = from.getId().equals(to.getId());
+    if (!special.isEmpty() && self) {
+      return "A " + special + " message goes to another lifeline, not to the same one";
+    }
+    java.util.Set<String> gone =
+        destroyedLifelines.computeIfAbsent(diagram.getName(), k -> new java.util.HashSet<>());
+    if (gone.contains(from.getId()) || gone.contains(to.getId())) {
+      return "Lifeline '"
+          + (gone.contains(from.getId()) ? fromLifeline : toLifeline)
+          + "' was destroyed: no message can start or end there after its destroy message";
+    }
     List<MessageRow> rows = messageRows(diagram);
+    if ("create".equals(special)) {
+      for (MessageRow row : rows) {
+        if (row.connector.getToShape() != null
+                && row.connector.getToShape().getModelElement() != null
+                && row.connector.getToShape().getModelElement().getId().equals(to.getId())
+            || row.connector.getFromShape() != null
+                && row.connector.getFromShape().getModelElement() != null
+                && row.connector.getFromShape().getModelElement().getId().equals(to.getId())) {
+          return "Lifeline '"
+              + toLifeline
+              + "' already has messages: a create message must be the first one to it";
+        }
+      }
+    }
     String seq =
         sequenceNumber != null && !sequenceNumber.trim().isEmpty()
             ? sequenceNumber.trim()
@@ -1110,6 +1155,11 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
 
     if (self) {
       message.setType(IMessage.TYPE_RECURSIVE_MESSAGE);
+    } else if ("create".equals(special)) {
+      message.setType(IMessage.TYPE_CREATE_MESSAGE);
+      message.setActionType(getModelElementFactory().createActionTypeCreate());
+    } else if ("destroy".equals(special)) {
+      message.setActionType(getModelElementFactory().createActionTypeDestroy());
     } else if (isReturn) {
       message.setActionType(getModelElementFactory().createActionTypeReturn());
     } else {
@@ -1128,8 +1178,33 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       return "Could not find lifeline for: " + (fromShape == null ? fromLifeline : toLifeline);
     }
     Point[] points = messagePoints(fromShape, toShape, y, self);
-    com.vp.plugin.diagram.IDiagramElement msgShape =
-        getDiagramManager().createConnector(diagram, message, fromShape, toShape, points);
+    if ("create".equals(special)) {
+      // the created object stands where its create message arrives: its head is lowered to the
+      // arrow, which ends at the head's side
+      int headTop = Math.max(LIFELINE_Y0, y - LIFELINE_HEAD_H / 2);
+      int bottom = Math.max(toShape.getY() + toShape.getHeight(), y + 40);
+      toShape.setBounds(toShape.getX(), headTop, toShape.getWidth(), bottom - headTop);
+      boolean fromLeft = fromShape.getX() < toShape.getX();
+      points =
+          new Point[] {
+            new Point(fromShape.getX() + fromShape.getWidth() / 2, y),
+            new Point(fromLeft ? toShape.getX() : toShape.getX() + toShape.getWidth(), y)
+          };
+    }
+    final Point[] route = points;
+    com.vp.plugin.diagram.IDiagramElement msgShape;
+    try {
+      // a destroy message makes VP ask whether to mark the lifeline stopped: answered Yes
+      msgShape =
+          answeringDeletePrompts(
+              () ->
+                  getDiagramManager().createConnector(diagram, message, fromShape, toShape, route),
+              new ArrayList<>());
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Exception e) {
+      throw new IllegalStateException(e.getMessage(), e);
+    }
     if (msgShape instanceof com.vp.plugin.diagram.IBaseDiagramElement) {
       // resetCaption() (as in the VP Open API sample) makes the message label render on the arrow.
       ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
@@ -1146,6 +1221,16 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     // Actors carry one bar down the whole diagram (first step -> last), so stretch theirs to the
     // top and to the latest message on every message.
     extendActorBarsFull(diagram, y);
+    if ("destroy".equals(special)) {
+      // the lifeline ends where it is destroyed, with the X marker
+      to.setStopped(true);
+      toShape.setBounds(
+          toShape.getX(), toShape.getY(), toShape.getWidth(), y + DESTROY_TAIL - toShape.getY());
+      gone.add(to.getId());
+      toShape.resetCaption();
+      diagram.realCloseDiagram(); // VP draws the stop marker when it lays the diagram out
+      getDiagramManager().openDiagram(diagram);
+    }
     // A label wider than the arrow runs over the lifelines at its ends (and their bars): the
     // lifelines right of the arrow's left end move apart until the label fits between them.
     if (!self && msgShape instanceof com.vp.plugin.diagram.IConnectorUIModel) {

@@ -300,6 +300,30 @@ public final class DiagramUtils {
    */
   public static int[][] routeBends(
       int[] a, int[] b, int lane, int laneCount, int laneStep, List<int[]> obstacles) {
+    return routeBends(a, b, lane, laneCount, laneStep, obstacles, new ArrayList<int[]>());
+  }
+
+  /**
+   * {@link #routeBends(int[], int[], int, int, int, List)} with areas no bend point may lie in (the
+   * title band of a frame: the connector's label is drawn at its bend).
+   *
+   * @param a the first shape's rectangle {x, y, w, h}
+   * @param b the second shape's rectangle
+   * @param lane index of this connector among those joining the pair
+   * @param laneCount number of connectors joining the pair
+   * @param laneStep perpendicular distance between neighbouring lanes
+   * @param obstacles other shapes the connector should not cross
+   * @param forbiddenBends rectangles a bend point must stay out of
+   * @return the bend points {x, y} from a to b (empty for a straight connector)
+   */
+  public static int[][] routeBends(
+      int[] a,
+      int[] b,
+      int lane,
+      int laneCount,
+      int laneStep,
+      List<int[]> obstacles,
+      List<int[]> forbiddenBends) {
     double ax = a[0] + a[2] / 2.0;
     double ay = a[1] + a[3] / 2.0;
     double bx = b[0] + b[2] / 2.0;
@@ -332,6 +356,9 @@ public final class DiagramUtils {
       if (bend != null && (bend[0] < MIN_COORD || bend[1] < MIN_COORD)) {
         continue; // off the canvas: VP drops such points
       }
+      if (bend != null && inAny(forbiddenBends, bend[0], bend[1])) {
+        continue; // a bend (and its label) in a frame's title band
+      }
       if (bend != null
           && (contains(grow(a, END_CLEARANCE), bend[0], bend[1])
               || contains(grow(b, END_CLEARANCE), bend[0], bend[1]))) {
@@ -358,6 +385,15 @@ public final class DiagramUtils {
       }
     }
     return !bestSet || best == null ? new int[0][] : new int[][] {best};
+  }
+
+  private static boolean inAny(List<int[]> rects, int x, int y) {
+    for (int[] r : rects) {
+      if (contains(r, x, y)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

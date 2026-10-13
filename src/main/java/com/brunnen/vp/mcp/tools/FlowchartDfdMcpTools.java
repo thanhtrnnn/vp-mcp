@@ -1,7 +1,6 @@
 package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
-import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdNotation;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdRole;
@@ -196,14 +195,26 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
             String caption = FlowchartDfdUtils.normalizeLabel(label);
             IFlowchartFlowline flow = factory().createFlowchartFlowline();
+            flow.setFrom(from.getModelElement());
+            flow.setTo(to.getModelElement());
+            if (caption != null) {
+              flow.setName(caption);
+            }
+            if (duplicateConnector(from, to, flow) != null) {
+              flow.delete();
+              return "A flow '"
+                  + fromShape
+                  + "' -> '"
+                  + toShape
+                  + "'"
+                  + FlowchartDfdUtils.labelSuffix(caption)
+                  + " already exists on flowchart '"
+                  + diagramName
+                  + "'";
+            }
             IDiagramElement connector = null;
             String moved;
             try {
-              flow.setFrom(from.getModelElement());
-              flow.setTo(to.getModelElement());
-              if (caption != null) {
-                flow.setName(caption);
-              }
               moved = placeBranch(diagram, from, to);
               if (moved == null) {
                 moved = rejoin(diagram, from, to);
@@ -217,8 +228,18 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             if (connector == null) {
               return "Error adding flowchart flow: Visual Paradigm did not create the connector";
             }
-            if (caption != null && connector instanceof IConnectorUIModel) {
-              placeLabelBeside(diagram, (IConnectorUIModel) connector);
+            if (connector instanceof IConnectorUIModel) {
+              IConnectorUIModel line = (IConnectorUIModel) connector;
+              if (to.getY() + to.getHeight() / 2 < from.getY()) {
+                // a loop back to an earlier shape is an elbow around the column: a diagonal
+                // would form a narrow V with the flow into the same shape
+                routeAroundColumn(diagram, line, from, to);
+                keepRoute(line);
+                recenterPair(from, to, line.getId());
+              }
+              if (caption != null) {
+                placeLabelBeside(diagram, line);
+              }
             }
 
             String hint =
@@ -292,10 +313,12 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       name = "addDfdExternalEntity",
       description =
           "Add an external entity (source/sink outside the system, e.g. a customer or bank) to "
-              + "a data flow diagram. x/y (>0) set its top-left corner, otherwise it is "
-              + "auto-placed in the left column")
-  public String addDfdExternalEntity(String diagramName, String entityName, int x, int y) {
-    return addDfdShape(diagramName, entityName, null, x, y, DfdRole.EXTERNAL_ENTITY);
+              + "a data flow diagram. entityId is the marker shown in the corner of its box "
+              + "(\"a\", \"b\"...; \"\" continues the diagram's letters). x/y (>0) set its "
+              + "top-left corner, otherwise it is auto-placed in the left column")
+  public String addDfdExternalEntity(
+      String diagramName, String entityName, String entityId, int x, int y) {
+    return addDfdShape(diagramName, entityName, entityId, x, y, DfdRole.EXTERNAL_ENTITY);
   }
 
   @Tool(
@@ -347,13 +370,25 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
             String caption = FlowchartDfdUtils.normalizeLabel(label);
             IRelationship flow = createDfdDataFlow(notation);
+            flow.setFrom(from.getModelElement());
+            flow.setTo(to.getModelElement());
+            if (caption != null) {
+              flow.setName(caption);
+            }
+            if (duplicateConnector(from, to, flow) != null) {
+              flow.delete();
+              return "A data flow '"
+                  + fromElement
+                  + "' -> '"
+                  + toElement
+                  + "'"
+                  + FlowchartDfdUtils.labelSuffix(caption)
+                  + " already exists on data flow diagram '"
+                  + diagramName
+                  + "'";
+            }
             IDiagramElement connector = null;
             try {
-              flow.setFrom(from.getModelElement());
-              flow.setTo(to.getModelElement());
-              if (caption != null) {
-                flow.setName(caption);
-              }
               connector = connectCentered(diagram, flow, from, to);
             } finally {
               if (connector == null) {
@@ -366,6 +401,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             if (caption != null && connector instanceof IConnectorUIModel) {
               placeLabelAlong(diagram, (IConnectorUIModel) connector);
             }
+            layoutByFlows(diagram);
             return "Added data flow '"
                 + fromElement
                 + "' -> '"
@@ -409,7 +445,15 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
               }
               if (id == null) {
                 id = FlowchartDfdUtils.nextDfdId(dfdIdsOf(diagram, role), "");
-              } else if (findDfdShapeById(diagram, id) != null) {
+              } else if (findDfdShapeById(diagram, id, role) != null) {
+                return "ID '" + id + "' is already used on data flow diagram '" + diagramName + "'";
+              }
+            } else {
+              // the marker in the corner of the entity's box: a, b, c... unless an ID is given
+              id = FlowchartDfdUtils.normalizeLabel(elementId);
+              if (id == null) {
+                id = FlowchartDfdUtils.nextEntityId(dfdIdsOf(diagram, role));
+              } else if (findDfdShapeById(diagram, id, role) != null) {
                 return "ID '" + id + "' is already used on data flow diagram '" + diagramName + "'";
               }
             }
@@ -456,17 +500,9 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     de.resetCaption();
     fitShape(de);
     applyBlueFill(de);
-    int width = de.getWidth();
-    int height = de.getHeight();
-    // fit-size hugs the text: a diamond needs room around it (its text would otherwise run to
-    // the vertices), and processes / data symbols get some side padding
-    if (model instanceof IFlowchartDecision) {
-      width = (int) Math.round(width * 1.5);
-      height = (int) Math.round(height * 1.5);
-    } else if (dfdRoleOf(model) == DfdRole.PROCESS
-        || model instanceof com.vp.plugin.model.IFlowchartData) {
-      width += 16;
-    }
+    int[] size = paddedSize(model, de.getWidth(), de.getHeight());
+    int width = size[0];
+    int height = size[1];
     Point autoCenter;
     if (grid == null) {
       int top =
@@ -485,6 +521,213 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     // reset it again so it is laid out inside the final bounds.
     de.resetCaption();
     return de;
+  }
+
+  /**
+   * The size a shape gets from the width and height that fit-size measured for its text: a diamond
+   * needs room around it (its text would otherwise run to the vertices), and processes and data
+   * symbols some side padding.
+   */
+  private static int[] paddedSize(IModelElement model, int fitWidth, int fitHeight) {
+    if (model instanceof IFlowchartDecision) {
+      return new int[] {(int) Math.round(fitWidth * 1.5), (int) Math.round(fitHeight * 1.5)};
+    }
+    if (dfdRoleOf(model) == DfdRole.PROCESS
+        || model instanceof com.vp.plugin.model.IFlowchartData) {
+      return new int[] {fitWidth + 16, fitHeight};
+    }
+    return new int[] {fitWidth, fitHeight};
+  }
+
+  private static boolean isFlowchartOrDfd(IDiagramUIModel diagram) {
+    return isOneOf(diagram.getType(), FLOWCHART_TYPES) || isOneOf(diagram.getType(), DFD_TYPES);
+  }
+
+  @Override
+  protected String moveOwnShape(
+      IDiagramUIModel diagram,
+      IDiagramElement de,
+      String name,
+      int x,
+      int y,
+      int width,
+      int height) {
+    if (!isFlowchartOrDfd(diagram) || !(de instanceof IShapeUIModel)) {
+      return null;
+    }
+    IShapeUIModel shape = (IShapeUIModel) de;
+    int w = width;
+    int h = height;
+    if (width <= 0 || height <= 0) {
+      // the size the add* tools give: fitted to the text, with the padding of its notation
+      fitShape(shape);
+      int[] size = paddedSize(shape.getModelElement(), shape.getWidth(), shape.getHeight());
+      w = width > 0 ? width : size[0];
+      h = height > 0 ? height : size[1];
+    }
+    shape.setBounds(x, y, w, h);
+    autoPlaced.remove(shape.getId());
+    // the name is a detached label that stays where it was: lay it out inside the new bounds
+    shape.resetCaption();
+    recenterConnectorsOf(shape);
+    restoreLoopBacks(diagram);
+    relabelFlows(diagram, shape);
+    return boundsResult(name, shape);
+  }
+
+  @Override
+  protected int rerouteOwnConnectors(IDiagramUIModel diagram) {
+    if (!isFlowchartOrDfd(diagram)) {
+      return -1;
+    }
+    int count = 0;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        centerConnector((IConnectorUIModel) de);
+        count++;
+      }
+    }
+    restoreLoopBacks(diagram);
+    relabelFlows(diagram, null);
+    return count;
+  }
+
+  /** Draw the flows that loop back to a shape above them as elbows around the column again. */
+  private void restoreLoopBacks(IDiagramUIModel diagram) {
+    if (!isOneOf(diagram.getType(), FLOWCHART_TYPES)) {
+      return;
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (!(de instanceof IConnectorUIModel)) {
+        continue;
+      }
+      IConnectorUIModel c = (IConnectorUIModel) de;
+      IShapeUIModel from = c.getFromShape();
+      IShapeUIModel to = c.getToShape();
+      if (from != null && to != null && to.getY() + to.getHeight() / 2 < from.getY()) {
+        routeAroundColumn(diagram, c, from, to);
+        keepRoute(c);
+      }
+    }
+  }
+
+  /**
+   * Put the labels of the flows attached to {@code shape} (of every flow when null) beside their
+   * lines again, after shapes moved.
+   */
+  private void relabelFlows(IDiagramUIModel diagram, IShapeUIModel shape) {
+    boolean flowchart = isOneOf(diagram.getType(), FLOWCHART_TYPES);
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (!(de instanceof IConnectorUIModel)) {
+        continue;
+      }
+      IConnectorUIModel c = (IConnectorUIModel) de;
+      boolean attached =
+          shape == null
+              || (c.getFromShape() != null && sameShape(c.getFromShape(), shape))
+              || (c.getToShape() != null && sameShape(c.getToShape(), shape));
+      if (attached
+          && c.getCaptionUIModel() != null
+          && c.getModelElement() != null
+          && FlowchartDfdUtils.normalizeLabel(c.getModelElement().getName()) != null) {
+        if (flowchart) {
+          placeLabelBeside(diagram, c);
+        } else {
+          placeLabelAlong(diagram, c);
+        }
+      }
+    }
+  }
+
+  /** DFD columns: external entities left, processes in the middle, data stores right. */
+  private static int dfdColumn(DfdRole role) {
+    return role == DfdRole.PROCESS ? 1 : role == DfdRole.DATA_STORE ? 2 : 0;
+  }
+
+  @Override
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    if (!isOneOf(diagram.getType(), DFD_TYPES)) {
+      return null;
+    }
+    int columns = layoutColumns(diagram);
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (dfdRoleOf(shape.getModelElement()) != null) {
+        autoPlaced.add(shape.getId());
+      }
+    }
+    return columns == 0
+        ? "Diagram '" + diagram.getName() + "' has no elements to lay out"
+        : "Laid out '"
+            + diagram.getName()
+            + "': entities left, processes in the middle, data stores right, each ordered by the"
+            + " elements they exchange data with";
+  }
+
+  /** Lay a DFD out by its flows when every element was placed automatically. */
+  private void layoutByFlows(IDiagramUIModel diagram) {
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (dfdRoleOf(shape.getModelElement()) != null && !autoPlaced.contains(shape.getId())) {
+        return; // an element placed by hand: the layout is the caller's
+      }
+    }
+    layoutColumns(diagram);
+  }
+
+  /**
+   * Arrange the elements in the three DFD columns, each column ordered by where the elements they
+   * are linked to stand, re-route every flow and put the labels beside their lines.
+   *
+   * @return the number of columns used, 0 when there is nothing to lay out
+   */
+  private int layoutColumns(IDiagramUIModel diagram) {
+    List<IShapeUIModel> nodes = new ArrayList<>();
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (dfdRoleOf(shape.getModelElement()) != null) {
+        nodes.add(shape);
+      }
+    }
+    if (nodes.isEmpty()) {
+      return 0;
+    }
+    int n = nodes.size();
+    int[] columns = new int[n];
+    int[] widths = new int[n];
+    int[] heights = new int[n];
+    java.util.Map<String, Integer> index = new java.util.HashMap<>();
+    for (int i = 0; i < n; i++) {
+      IShapeUIModel node = nodes.get(i);
+      index.put(node.getId(), i);
+      columns[i] = dfdColumn(dfdRoleOf(node.getModelElement()));
+      widths[i] = node.getWidth();
+      heights[i] = node.getHeight();
+    }
+    List<int[]> edges = new ArrayList<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        Integer a = c.getFromShape() == null ? null : index.get(c.getFromShape().getId());
+        Integer b = c.getToShape() == null ? null : index.get(c.getToShape().getId());
+        if (a != null && b != null && !a.equals(b)) {
+          edges.add(new int[] {a, b});
+        }
+      }
+    }
+    int[][] pos =
+        FlowchartDfdUtils.columnLayout(
+            columns, widths, heights, edges.toArray(new int[0][]), 220, 100, 60, 50);
+    java.util.Set<Integer> used = new java.util.HashSet<>();
+    for (int i = 0; i < n; i++) {
+      nodes.get(i).setBounds(pos[i][0], pos[i][1], widths[i], heights[i]);
+      nodes.get(i).resetCaption();
+      used.add(columns[i]);
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        centerConnector((IConnectorUIModel) de);
+      }
+    }
+    relabelFlows(diagram, null);
+    return used.size();
   }
 
   private IModelElement createFlowchartModel(FlowchartKind kind) {
@@ -521,7 +764,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
         return createDfdDataStore(f, notation, id);
       case EXTERNAL_ENTITY:
       default:
-        return createDfdExternalEntity(f, notation);
+        return createDfdExternalEntity(f, notation, id);
     }
   }
 
@@ -572,17 +815,25 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
   }
 
   private static IModelElement createDfdExternalEntity(
-      IModelElementFactory f, DfdNotation notation) {
+      IModelElementFactory f, DfdNotation notation, String id) {
     switch (notation) {
       case GANE_SARSON:
-        return f.createGsDfdExternalEntity();
+        IGsDfdExternalEntity gs = f.createGsDfdExternalEntity();
+        gs.setDfId(id);
+        return gs;
       case YOURDON_DEMARCO:
-        return f.createYdDfdExternalEntity();
+        IYdDfdExternalEntity yd = f.createYdDfdExternalEntity();
+        yd.setDfId(id);
+        return yd;
       case YOURDON_COAD:
-        return f.createYcDfdExternalEntity();
+        IYcDfdExternalEntity yc = f.createYcDfdExternalEntity();
+        yc.setDfId(id);
+        return yc;
       case STANDARD:
       default:
-        return f.createDFExternalEntity();
+        IDFExternalEntity df = f.createDFExternalEntity();
+        df.setDfId(id);
+        return df;
     }
   }
 
@@ -694,7 +945,10 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     return ids;
   }
 
-  /** A DFD element by name first, then by its ID ("1", "D1"). */
+  /**
+   * A DFD element by name first, then by its ID: "D1" is a data store, a bare "1" a process (or,
+   * when no process has that ID, a store or entity that does).
+   */
   private static IShapeUIModel findDfdShape(IDiagramUIModel diagram, String handle) {
     IShapeUIModel byName = findShape(diagram, handle);
     if (byName != null && dfdRoleOf(byName.getModelElement()) != null) {
@@ -707,17 +961,45 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     if (id == null) {
       return null;
     }
+    String handle = id.trim();
+    boolean storeHandle =
+        handle.length() > 1
+            && (handle.charAt(0) == 'D' || handle.charAt(0) == 'd')
+            && Character.isDigit(handle.charAt(1));
+    IShapeUIModel fallback = null;
     for (IShapeUIModel shape : shapesOf(diagram)) {
       IModelElement model = shape.getModelElement();
       String shapeId = dfIdOf(model);
-      if (shapeId == null) {
+      DfdRole role = dfdRoleOf(model);
+      if (shapeId == null || role == null) {
         continue;
       }
-      if (id.equals(shapeId.trim())) {
-        return shape;
+      if (storeHandle) {
+        // "D1" names a data store (VP prints the D itself, the stored ID is the number)
+        if (role == DfdRole.DATA_STORE
+            && FlowchartDfdUtils.storeIdNumber(handle)
+                .equals(FlowchartDfdUtils.storeIdNumber(shapeId))) {
+          return shape;
+        }
+      } else if (handle.equals(shapeId.trim())) {
+        if (role == DfdRole.PROCESS) {
+          return shape; // a bare number is a process
+        }
+        if (fallback == null) {
+          fallback = shape;
+        }
       }
-      // a data store is shown as "D" + its number: accept "D1" and "1"
-      if (dfdRoleOf(model) == DfdRole.DATA_STORE
+    }
+    return fallback;
+  }
+
+  /** The element of the given role that carries this ID (IDs are unique per role). */
+  private static IShapeUIModel findDfdShapeById(IDiagramUIModel diagram, String id, DfdRole role) {
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      IModelElement model = shape.getModelElement();
+      String shapeId = dfIdOf(model);
+      if (shapeId != null
+          && dfdRoleOf(model) == role
           && FlowchartDfdUtils.storeIdNumber(id).equals(FlowchartDfdUtils.storeIdNumber(shapeId))) {
         return shape;
       }
@@ -927,9 +1209,11 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
       IDiagramUIModel diagram, IConnectorUIModel flow, IShapeUIModel decision, IShapeUIModel to) {
     int decisionY = decision.getY() + decision.getHeight() / 2;
     int targetY = to.getY() + to.getHeight() / 2;
+    int top = Math.min(decisionY, targetY);
+    int bottom = Math.max(decisionY, targetY);
     int right = Math.max(decision.getX() + decision.getWidth(), to.getX() + to.getWidth());
     for (IShapeUIModel shape : shapesOf(diagram)) {
-      if (shape.getY() + shape.getHeight() > decisionY && shape.getY() < targetY) {
+      if (shape.getY() + shape.getHeight() > top && shape.getY() < bottom) {
         right = Math.max(right, shape.getX() + shape.getWidth());
       }
     }
@@ -969,8 +1253,10 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
-   * Put a data flow's label on its line where it touches no shape and no other label: the middle
-   * first, then further towards either end, then beside the line.
+   * Put a data flow's label beside its line, above a horizontal or shallow one and to the right of
+   * a steep one (the reference diagrams read "label over the arrow"; centered on the line the line
+   * strikes through the text), in the middle of its longest leg and clear of shapes and other
+   * labels; further along the leg and on the other side are tried in turn.
    */
   private void placeLabelAlong(IDiagramUIModel diagram, IConnectorUIModel flow) {
     ICaptionUIModel caption = flow.getCaptionUIModel();
@@ -978,16 +1264,44 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     if (caption == null || caption.getWidth() <= 0 || points == null || points.length < 2) {
       return;
     }
-    int[][] pts = new int[points.length][];
-    for (int i = 0; i < points.length; i++) {
-      pts[i] = new int[] {points[i].x, points[i].y};
+    int w = caption.getWidth();
+    int h = caption.getHeight() > 0 ? caption.getHeight() : 14;
+    // the longest leg of the visible line
+    int best = 0;
+    double longest = -1;
+    for (int i = 0; i + 1 < points.length; i++) {
+      double len = points[i].distance(points[i + 1]);
+      if (len > longest) {
+        longest = len;
+        best = i;
+      }
     }
-    List<int[]> candidates =
-        DiagramUtils.labelSpotsAlong(pts, caption.getWidth(), caption.getHeight());
+    Point a = points[best];
+    Point b = points[best + 1];
+    double dx = b.x - a.x;
+    double dy = b.y - a.y;
+    double len = Math.max(1, Math.hypot(dx, dy));
+    boolean shallow = Math.abs(dx) >= Math.abs(dy);
+    // the normal pointing up (shallow line) or right (steep line) first
+    double nx = -dy / len;
+    double ny = dx / len;
+    if (shallow ? ny > 0 : nx < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    double clearance = shallow ? h / 2.0 + 6 : w / 2.0 + 8;
+    List<int[]> candidates = new ArrayList<>();
+    for (double t : new double[] {0.5, 0.35, 0.65, 0.2, 0.8}) {
+      for (double side : new double[] {1, -1}) {
+        double cx = a.x + dx * t + nx * clearance * side;
+        double cy = a.y + dy * t + ny * clearance * side;
+        candidates.add(new int[] {(int) Math.round(cx - w / 2.0), (int) Math.round(cy - h / 2.0)});
+      }
+    }
     int[] spot =
         com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
-            candidates, caption.getWidth(), caption.getHeight(), labelObstacles(diagram, flow));
-    caption.setBounds(spot[0], spot[1], caption.getWidth(), caption.getHeight());
+            candidates, w, h, labelObstacles(diagram, flow));
+    caption.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, h);
   }
 
   /** Every shape and every other connector label on the diagram. */

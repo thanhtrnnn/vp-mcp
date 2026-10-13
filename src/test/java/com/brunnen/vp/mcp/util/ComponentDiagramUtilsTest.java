@@ -61,6 +61,12 @@ public class ComponentDiagramUtilsTest {
         "Duplicates are dropped case-insensitively, first spelling wins",
         Collections.singletonList("Subsystem"),
         ComponentDiagramUtils.parseStereotypes("Subsystem,subsystem, <<SUBSYSTEM>>"));
+    // VP draws <<component>> itself
+    assertTrue(ComponentDiagramUtils.parseStereotypes("component").isEmpty());
+    assertTrue(ComponentDiagramUtils.parseStereotypes("<<Component>>").isEmpty());
+    assertEquals(
+        java.util.Arrays.asList("service"),
+        ComponentDiagramUtils.parseStereotypes("component, service"));
     assertTrue(ComponentDiagramUtils.parseStereotypes(null).isEmpty());
     assertTrue(ComponentDiagramUtils.parseStereotypes("").isEmpty());
     assertTrue(ComponentDiagramUtils.parseStereotypes(" , ,").isEmpty());

@@ -50,6 +50,9 @@ import java.util.Set;
  */
 public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
 
+  /** Width of the box of a boundary, control or entity icon: the icon and nothing more. */
+  private static final int ICON_WIDTH = 46;
+
   /** Free space between neighbours of a row: room for the message labels along their link. */
   private static final int LAYOUT_H_GAP = 230;
 
@@ -76,7 +79,9 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
                 newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_COMMUNICATION_DIAGRAM, name);
-            diagram.setAutoFitShapesSize(true);
+            // Not auto-fit: VP would widen a robustness icon's box to its name again whenever the
+            // diagram is laid out (the tools fit every shape once, explicitly)
+            diagram.setAutoFitShapesSize(false);
             if (diagram instanceof ICommunicationDiagramUIModel) {
               ((ICommunicationDiagramUIModel) diagram).setShowSequenceNumbers(true);
             }
@@ -169,7 +174,10 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
             renderCaption(shape);
             applyBlueFill(shape);
             fitShape(shape);
-            int width = shape.getWidth();
+            // A robustness icon is drawn in the middle of a box as wide as its name; links end at
+            // the box, 20-30 px short of the circle. The box is cut down to the icon, its name
+            // stays a label under it.
+            int width = type.isEmpty() ? shape.getWidth() : Math.min(shape.getWidth(), ICON_WIDTH);
             int height = shape.getHeight();
             int[] cell = CommunicationDiagramUtils.gridCenter(index);
             int[] auto =
@@ -586,7 +594,7 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
         }
       }
       layers[i] = CommunicationDiagramUtils.layerOf(model instanceof IInteractionActor, type);
-      widths[i] = node.getWidth();
+      widths[i] = type.isEmpty() ? node.getWidth() : Math.min(node.getWidth(), ICON_WIDTH);
       heights[i] = node.getHeight();
     }
     List<int[]> edges = new ArrayList<>();

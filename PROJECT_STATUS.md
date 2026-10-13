@@ -13,15 +13,15 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
 
-### MCP Tool Services (111 tools total)
+### MCP Tool Services (117 tools total)
 
 | Category | Tools | Count |
 |----------|-------|-------|
-| Management | listDiagrams, getDiagramElements, autoLayoutDiagram, removeDiagramElement, getElementCounts | 5 |
+| Management | listDiagrams, getDiagramElements, getDiagramGeometry, autoLayoutDiagram, removeDiagramElement, getElementCounts, addNote | 7 |
 | Use Case | create, addActor, addUseCase, addRelationship, addSystemBoundary, generateReport | 6 |
 | Class | create, addClass, addAttribute, addOperation, addAssociation, addGeneralization, addAggregation, addComposition, addDependency, addRealization, addInterface, addPackage, setClassColor, generateReport, setElementBounds, addStereotypeToClasses, removeRelationship, setAssociationProperties, getRelationshipDetails, rerouteConnectors, layoutConnectorLabels, exportDiagramImage, addPackageShape, moveIntoPackage, addUsage | 25 |
 | Project | newProject, openProject, saveProject, saveProjectAs, getProjectInfo | 5 |
-| ERD | create, addTable, addColumn, addForeignKey, addTableRelationship, generateDdl, generateReport | 7 |
+| ERD | create, addTable, addColumn, removeColumn, renameColumn, addForeignKey, removeForeignKey, addTableRelationship, removeTable, generateDdl, generateReport | 11 |
 | Sequence | create, addLifeline, addActivation, addMessage, addReturnMessage, addCombinedFragment, generateReport | 7 |
 | State machine | createStateDiagram, addState, addInitialState, addFinalState, addTransition | 5 |
 | Activity | createActivityDiagram, addActivityPartition, addActivityAction, addActivityControlNode, addActivityObjectNode, addActivityFlow, addActivityFrame | 7 |
@@ -42,6 +42,87 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   labeled system rectangle (the module box). Call it AFTER `autoLayoutDiagram` so the box encloses
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
+
+### Round-3 audit fixes (server version 1.32.3.x)
+
+Graded against the course notation brief and verified live in VP 18.1 on F3_* diagrams (exported
+PNGs, `getDiagramGeometry` dumps). What changed and the quirks behind it:
+
+- **Family hooks**: the cross-family tools no longer know the families. `AbstractDiagramMcpTools`
+  keeps the registered instance of every family (`familyOf`, `families()`) and calls overridable
+  hooks: `moveOwnShape` (setElementBounds), `rerouteOwnConnectors` (rerouteConnectors),
+  `layoutOwnDiagram` (autoLayoutDiagram). Sequence, communication, activity, state, component,
+  deployment, flowchart/DFD and BPMN implement them; every other diagram goes through
+  `applyBounds` + `recenterTree`.
+- **setElementBounds**: moving a container (package, node, artifact, component with ports,
+  boundary) moves every nested shape (VP leaves them behind otherwise: `moveShapeTree`), a
+  container is never made smaller than its contents, `width/height <= 0` fits only shapes without
+  children, control nodes / pseudo-states keep their notation size and re-lay their detached
+  caption, flowchart/DFD/BPMN symbols get the size the add* tools give. A sequence lifeline moves
+  its messages and activation bars with it: VP drags the ends of attached messages to the head's
+  corner on a bounds change and re-snaps them to the stub activations when it lays the diagram
+  out, so the arrows are redrawn from the lifeline centers as the very last step, after the
+  diagram was reopened (a setBounds on a bar or the head afterwards puts the old ends back).
+- **removeDiagramElement**: removing a shape with connectors, nested shapes, ports or artifacts
+  opens a modal "X has no referenced view. Delete X from the repository?" dialog per orphaned
+  model, which blocks the EDT call forever. `answeringDeletePrompts` runs a `javax.swing.Timer`
+  on the EDT that answers "No to all" (view goes, model stays); it also answers "Yes" to the
+  "mark X stopped?" prompt of a destroy message. Never leave a prompt open: the tool returns.
+- **Duplicates**: `connectCentered` refuses a second connector of the same kind, stereotypes and
+  name between the same two shapes (and deletes the unplaced model). Unnamed associations are
+  exempt (different multiplicities). Activity/state/flow tools have their own checks.
+- **Package frames**: VP clips a connector at the shape's bounding box, which includes the folder
+  tab: package ends get an explicit end on the border of the body (`FOLDER_TAB`, flags
+  `setUseFromShapeCenter(false)`, no rebuild). The title band of a frame is forbidden for bend
+  points (a label drawn at a bend must not read as part of the title); ports and the contents
+  of the two end shapes are no obstacles. A grown package pushes its siblings away (tree-aware
+  `pushApart`).
+- **Class**: auto-placed classes reserve a 220x140 slot (members come after the class), three per
+  row. Association names and multiplicities follow the drawn route (first/last leg, longest leg).
+  The report names the subclass first, prints visibility symbols, aggregation/composition and
+  both multiplicities.
+- **Activity**: a merge/join is only moved below its branches while it has no outgoing flow (a loop
+  back no longer drags it); a guarded flow gets 24 px more room; a twoWay box ("XxxDAO: method()")
+  goes beside its action, 110 px away; `addActivityFrame` moves unlisted nodes it would cut or hold
+  out to the side; identical flows are refused; a second initial node warns.
+- **State**: a second incoming transition of an auto-placed state without outgoing transitions
+  moves it below all its sources (`spotBelowAll`); sideways gaps grow with the label; the name of
+  an initial/final state hangs on a side no transition uses; a diagram whose label would cross the
+  canvas edge shifts right (`makeRoomLeft`); labels are sized by their text (the caption box can
+  be narrower than the text).
+- **Communication**: participants of a diagram whose participants were all auto-placed are laid
+  out by their links (actor row, chain of boundaries, controls, entities under their boundary:
+  `layeredLayout`, also behind `autoLayoutDiagram`); the caption is rendered before the message
+  slot is computed; icon boxes are cut down to the icon and the diagram is not auto-fit (VP would
+  widen the box to its name again).
+- **Sequence**: nested fragments start below the guard of the frame around them and are inset; a
+  label wider than its arrow moves the lifelines on the right apart; duplicate numbers, unknown
+  message types and operators are refused; `create` lowers the head to the dashed arrow;
+  `destroy` ends the lifeline (VP draws no X for an API-created lifeline); the invisible stub
+  activations are left out of `getDiagramElements`.
+- **Component / deployment / object**: `<<component>>` is never added as a stereotype (VP prints it)
+  and a reused component keeps its own stereotypes; ports push their neighbours away; components of
+  one deployment host stand in one row 90 px apart (`addDeploymentComponent` takes x/y); a node of
+  that name in the same owner is reused; path labels avoid node borders; `addObject` takes
+  `modelPackage` and prefers the class that has the slot attributes.
+- **Flowchart / DFD / BPMN**: a bare DFD id is a process, `D1` a store; entities carry an a/b/c
+  marker; DFD columns are ordered around the processes (`columnLayout`); flow labels sit beside
+  the line; a flowchart loop back is an elbow around the column. BPMN flows leave a gateway or
+  event through distinct vertices, avoid other elements and name labels, never start behind the
+  element's own name; request/response message flows run side by side; event names stay inside
+  their lane; long names wrap in tasks; nodes wrap into a second row at 900 px.
+- **ERD**: four tables per row; removeColumn/renameColumn/removeForeignKey/removeTable; isUnique;
+  SQL identifiers only; varchar defaults to 255; relationship results list the generated columns.
+- **Use case**: use cases are 60 px apart and the system boundary encloses the detours and labels
+  of the lines between them.
+
+Remaining limitations: an operand guard of a combined fragment is drawn by VP at the operand's
+top-left (no caption to move), so it can cross the first lifeline's bar; VP draws no X for the
+destroy message of an API-created lifeline; BPMN boundary events, annotations, call activities and
+loop markers, and UML composite states / choice / history are not available; the sequence actor
+still has a box head; the DFD and BPMN layouts are greedy (explicit x/y remain best for large
+diagrams); `rerouteConnectors` on a diagram family without its own routing is straight
+center-to-center.
 
 ### Round-2 audit fixes (server version 1.32.2.x)
 

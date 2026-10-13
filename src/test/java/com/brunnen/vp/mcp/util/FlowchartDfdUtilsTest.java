@@ -241,6 +241,9 @@ public class FlowchartDfdUtilsTest {
   @Test
   public void testNextDfdIdLevelZero() {
     assertEquals("2.0", FlowchartDfdUtils.nextDfdId(Arrays.asList("1.0"), ""));
+    // a stray plain "1" next to level-0 numbers does not turn 5.0 into 5.1
+    assertEquals("6.0", FlowchartDfdUtils.nextDfdId(Arrays.asList("1", "5.0"), ""));
+    assertEquals("3", FlowchartDfdUtils.nextDfdId(Arrays.asList("1", "2"), ""));
     assertEquals("4.0", FlowchartDfdUtils.nextDfdId(Arrays.asList("1.0", "3.0", "2.0"), ""));
     assertEquals(
         "child numbers still count up",

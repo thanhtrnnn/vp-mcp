@@ -45,7 +45,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add a table/entity to an ER diagram. A table of that name elsewhere in the project is"
               + " the same table and is shown again (with its columns). Tables are placed left to"
-              + " right after the existing ones, wrapping to a new row")
+              + " right, four to a row (room is kept for the columns still to come); names are SQL"
+              + " identifiers (letters, digits, underscore: no spaces or diacritics)")
   public String addTable(String diagramName, String tableName) {
     try {
       return runOnEdt(
@@ -54,6 +55,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             String name = tableName == null ? "" : tableName.trim();
             if (name.isEmpty()) {
               return "Table name must not be empty";
+            }
+            if (!ErdUtils.isSqlIdentifier(name)) {
+              return notAnIdentifier("Table", name);
             }
             if (findTableOnDiagram(diagram, name) != null) {
               return "Table already on diagram: " + name;
@@ -67,7 +71,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             IDiagramElement de = addToDiagram(diagram, table, name);
             de.resetCaption();
             fitShape(de);
-            int[] spot = freeSpot(diagram, de, 50, 50, TABLE_ROW_RIGHT, TABLE_GAP);
+            int[] spot = tableSlot(diagram, de);
             de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
 
             return "Added table '"
@@ -92,7 +96,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
               + " varchar, nvarchar(100), int, decimal(10,2), datetime; a length/scale written in"
               + " the type wins over length/scale. Types the project's database does not know are"
               + " mapped to their standard equivalent (nvarchar -> varchar, datetime -> timestamp,"
-              + " bit -> boolean, ...); a type that still cannot be set is reported as an error")
+              + " bit -> boolean, ...); a type that still cannot be set is reported as an error."
+              + " varchar without a length gets 255. isUnique marks the column unique (the book's"
+              + " \"U\" next to the key). Names are SQL identifiers (no spaces or diacritics)")
   public String addColumn(
       String diagramName,
       String tableName,
@@ -101,7 +107,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       int length,
       int scale,
       boolean isPrimaryKey,
-      boolean isNullable) {
+      boolean isNullable,
+      boolean isUnique) {
     try {
       return runOnEdt(
           () -> {
@@ -112,6 +119,9 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             }
             if (columnName == null || columnName.trim().isEmpty()) {
               return "Column name must not be empty";
+            }
+            if (!ErdUtils.isSqlIdentifier(columnName.trim())) {
+              return notAnIdentifier("Column", columnName.trim());
             }
             if (findColumnByName(table, columnName) != null) {
               return "Column '" + columnName + "' already exists in table '" + tableName + "'";
@@ -149,6 +159,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             }
             col.setPrimaryKey(isPrimaryKey);
             col.setNullable(isNullable);
+            col.setUnique(isUnique);
             table.addDBColumn(col);
             refitTable(table);
 
@@ -305,6 +316,16 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                   + "': use identifying, nonIdentifying or \"\" (non-identifying)";
             }
 
+            if (findForeignKey(diagram, source, target) != null) {
+              return "A relationship from '"
+                  + fromTable
+                  + "' to '"
+                  + toTable
+                  + "' already exists (each one adds a foreign key column to '"
+                  + toTable
+                  + "'); use addForeignKey with fromColumn for a second one";
+            }
+            java.util.Map<String, List<String>> columnsBefore = columnNames(diagram);
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
             fk.setFrom(source);
             fk.setTo(target);
@@ -322,6 +343,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
               return "Error adding relationship: Visual Paradigm refused the connector";
             }
             refitTable(target);
+            String added = addedColumns(diagram, columnsBefore);
 
             return "Added "
                 + (fk.isIdentifying() ? "identifying" : "non-identifying")
@@ -329,7 +351,8 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                 + fromTable
                 + "' to '"
                 + toTable
-                + "'";
+                + "'"
+                + added;
           });
     } catch (Exception e) {
       return "Error adding relationship: " + e.getMessage();
@@ -366,12 +389,278 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       String name = childCol.getName();
       boolean pk = childCol.isPrimaryKey();
       boolean nullable = childCol.isNullable();
+      boolean unique = childCol.isUnique();
+      int index = 0;
+      IDBColumn[] before = child.toDBColumnArray();
+      for (int i = 0; i < before.length; i++) {
+        if (before[i].getId().equals(childCol.getId())) {
+          index = i;
+        }
+      }
       childCol.delete();
       generated.setName(name);
       generated.setPrimaryKey(pk);
       generated.setNullable(nullable);
+      generated.setUnique(unique);
+      // the column keeps its place among the table's columns (VP appends the one it generated)
+      List<IDBColumn> order = new ArrayList<>();
+      for (IDBColumn c : child.toDBColumnArray()) {
+        if (!c.getId().equals(generated.getId())) {
+          order.add(c);
+        }
+      }
+      order.add(Math.min(index, order.size()), generated);
+      child.reorderDBColumn(order.toArray(new IDBColumn[0]));
     }
     return generated.getName();
+  }
+
+  private static String notAnIdentifier(String what, String name) {
+    return what
+        + " name '"
+        + name
+        + "' is not a SQL identifier: use letters, digits and underscores, starting with a letter"
+        + " (no spaces or diacritics: they would be written unquoted into the DDL)";
+  }
+
+  /** Names of the columns of every table of the diagram, by table id. */
+  private java.util.Map<String, List<String>> columnNames(IDiagramUIModel diagram) {
+    java.util.Map<String, List<String>> result = new java.util.LinkedHashMap<>();
+    for (IDBTable table : ErdUtils.getTablesInDiagram(diagram)) {
+      List<String> names = new ArrayList<>();
+      for (IDBColumn c : table.toDBColumnArray()) {
+        names.add(c.getName());
+      }
+      result.put(table.getId(), names);
+    }
+    return result;
+  }
+
+  /**
+   * The columns Visual Paradigm generated since {@code before}, as a note for a result text: a
+   * relationship adds foreign key columns to the child, and an identifying one passes them on to
+   * the tables below it.
+   */
+  private String addedColumns(IDiagramUIModel diagram, java.util.Map<String, List<String>> before) {
+    List<String> added = new ArrayList<>();
+    for (IDBTable table : ErdUtils.getTablesInDiagram(diagram)) {
+      List<String> old = before.getOrDefault(table.getId(), new ArrayList<>());
+      for (IDBColumn c : table.toDBColumnArray()) {
+        if (!old.contains(c.getName())) {
+          added.add(table.getName() + "." + c.getName());
+        }
+      }
+    }
+    return added.isEmpty() ? "" : "; added column(s): " + String.join(", ", added);
+  }
+
+  /**
+   * Top-left corner for an auto-placed table: four to a row. Members are added after the table, so
+   * every table keeps a slot the size of a typical one until its real size is larger.
+   */
+  private static int[] tableSlot(IDiagramUIModel diagram, IDiagramElement self) {
+    List<int[]> occupied = new ArrayList<>();
+    for (com.vp.plugin.diagram.IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getId().equals(self.getId()) || s.getParent() != null || s.getWidth() <= 0) {
+        continue;
+      }
+      int[] r = rect(s);
+      if (s.getModelElement() instanceof IDBTable) {
+        r[2] = Math.max(r[2], TABLE_SLOT_W);
+        r[3] = Math.max(r[3], TABLE_SLOT_H);
+      }
+      occupied.add(r);
+    }
+    return DiagramUtils.firstFreeSpot(
+        occupied,
+        50,
+        50,
+        Math.max(self.getWidth(), TABLE_SLOT_W),
+        Math.max(self.getHeight(), TABLE_SLOT_H),
+        TABLE_ROW_RIGHT,
+        TABLE_GAP);
+  }
+
+  @Tool(
+      name = "removeColumn",
+      description =
+          "Delete a column of a table shown on an ER diagram (from the project, not just the"
+              + " view). A foreign key column cannot be removed: remove the foreign key first"
+              + " (removeForeignKey)")
+  public String removeColumn(String diagramName, String tableName, String columnName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable table = findTableOnDiagram(diagram, tableName);
+            if (table == null) {
+              return "Table not on diagram: " + tableName;
+            }
+            IDBColumn col = columnName == null ? null : findColumnByName(table, columnName.trim());
+            if (col == null) {
+              return "Column '" + columnName + "' not found in table '" + tableName + "'";
+            }
+            IDBForeignKeyConstraint[] fks = col.toForeignKeyConstraintArray();
+            if (fks != null && fks.length > 0) {
+              return "Column '"
+                  + col.getName()
+                  + "' is a foreign key column: remove the foreign key first (removeForeignKey)";
+            }
+            String name = col.getName();
+            col.delete();
+            refitTable(table);
+            return "Removed column '" + name + "' from table '" + tableName + "'";
+          });
+    } catch (Exception e) {
+      return "Error removing column: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "renameColumn",
+      description =
+          "Rename a column of a table shown on an ER diagram (a SQL identifier: letters, digits,"
+              + " underscores)")
+  public String renameColumn(
+      String diagramName, String tableName, String columnName, String newName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable table = findTableOnDiagram(diagram, tableName);
+            if (table == null) {
+              return "Table not on diagram: " + tableName;
+            }
+            IDBColumn col = columnName == null ? null : findColumnByName(table, columnName.trim());
+            if (col == null) {
+              return "Column '" + columnName + "' not found in table '" + tableName + "'";
+            }
+            if (!isSet(newName) || !ErdUtils.isSqlIdentifier(newName.trim())) {
+              return notAnIdentifier("Column", newName == null ? "" : newName.trim());
+            }
+            if (findColumnByName(table, newName.trim()) != null) {
+              return "Column '" + newName.trim() + "' already exists in table '" + tableName + "'";
+            }
+            col.setName(newName.trim());
+            refitTable(table);
+            return "Renamed column '"
+                + columnName.trim()
+                + "' of '"
+                + tableName
+                + "' to '"
+                + newName.trim()
+                + "'";
+          });
+    } catch (Exception e) {
+      return "Error renaming column: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "removeTable",
+      description =
+          "Delete a table from the project (every diagram that shows it loses it). A table that is"
+              + " part of a foreign key is refused: remove the foreign keys first"
+              + " (removeForeignKey). removeDiagramElement removes only the view")
+  public String removeTable(String diagramName, String tableName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable table = findTableOnDiagram(diagram, tableName);
+            if (table == null) {
+              return "Table not on diagram: " + tableName;
+            }
+            for (IDiagramElement de : getDiagramElementsList(diagram)) {
+              IModelElement m = de.getModelElement();
+              if (m instanceof IDBForeignKey) {
+                IDBForeignKey fk = (IDBForeignKey) m;
+                if ((fk.getFrom() != null && fk.getFrom().getId().equals(table.getId()))
+                    || (fk.getTo() != null && fk.getTo().getId().equals(table.getId()))) {
+                  return "Table '"
+                      + tableName
+                      + "' is part of a foreign key ("
+                      + fk.getFrom().getName()
+                      + " -> "
+                      + fk.getTo().getName()
+                      + "): remove it first (removeForeignKey)";
+                }
+              }
+            }
+            String name = table.getName();
+            List<String> prompts = new ArrayList<>();
+            answeringDeletePrompts(
+                () -> {
+                  table.delete();
+                  return null;
+                },
+                prompts);
+            return "Removed table '" + name + "' from the project";
+          });
+    } catch (Exception e) {
+      return "Error removing table: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "removeForeignKey",
+      description =
+          "Delete the foreign key between two tables shown on an ER diagram: parentTable is the"
+              + " referenced (one) side, childTable the table that holds the foreign key column."
+              + " The foreign key column itself stays in the child (remove it with removeColumn)")
+  public String removeForeignKey(String diagramName, String parentTable, String childTable) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = findErd(diagramName);
+            IDBTable parent = findTableOnDiagram(diagram, parentTable);
+            IDBTable child = findTableOnDiagram(diagram, childTable);
+            if (parent == null || child == null) {
+              return "Table not on diagram: " + (parent == null ? parentTable : childTable);
+            }
+            IDBForeignKey fk = findForeignKey(diagram, parent, child);
+            if (fk == null) {
+              return "No foreign key from '"
+                  + parentTable
+                  + "' to '"
+                  + childTable
+                  + "' on this"
+                  + " diagram";
+            }
+            List<String> columns = new ArrayList<>();
+            Iterator<?> it = fk.foreignKeyColumnsIterator();
+            while (it.hasNext()) {
+              Object c = it.next();
+              if (c instanceof IDBColumn) {
+                columns.add(((IDBColumn) c).getName());
+              }
+            }
+            List<String> prompts = new ArrayList<>();
+            answeringDeletePrompts(
+                () -> {
+                  fk.delete();
+                  return null;
+                },
+                prompts);
+            List<String> left = new ArrayList<>();
+            for (String name : columns) {
+              if (findColumnByName(child, name) != null) {
+                left.add(name);
+              }
+            }
+            refitTable(child);
+            return "Removed the foreign key '"
+                + parentTable
+                + "' -> '"
+                + childTable
+                + "'"
+                + (left.isEmpty()
+                    ? ""
+                    : "; column(s) " + String.join(", ", left) + " stay in '" + childTable + "'");
+          });
+    } catch (Exception e) {
+      return "Error removing foreign key: " + e.getMessage();
+    }
   }
 
   /** Refit every view of a table after its columns changed and keep it clear of its neighbours. */
@@ -428,8 +717,13 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     return value != null && !value.trim().isEmpty();
   }
 
-  /** Tables wrap to a new row past this x. */
-  private static final int TABLE_ROW_RIGHT = 1200;
+  /** Tables wrap to a new row past this x (four per row). */
+  private static final int TABLE_ROW_RIGHT = 1050;
+
+  /** Room reserved for a table before its columns are added. */
+  private static final int TABLE_SLOT_W = 190;
+
+  private static final int TABLE_SLOT_H = 200;
 
   /** Space kept between tables. */
   private static final int TABLE_GAP = 60;

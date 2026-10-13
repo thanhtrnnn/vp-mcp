@@ -4,6 +4,7 @@ import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IBaseDiagramElement;
+import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -373,6 +374,33 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             if (useCases.isEmpty()) {
               return "No use cases found on diagram '" + diagramName + "' to wrap";
             }
+            // the detours and labels of lines between use cases stay inside the boundary
+            for (IDiagramElement de : getDiagramElementsList(diagram)) {
+              if (!(de instanceof IConnectorUIModel)) {
+                continue;
+              }
+              IConnectorUIModel c = (IConnectorUIModel) de;
+              if (c.getFromShape() == null
+                  || c.getToShape() == null
+                  || !(c.getFromShape().getModelElement() instanceof IUseCase)
+                  || !(c.getToShape().getModelElement() instanceof IUseCase)) {
+                continue;
+              }
+              java.awt.Point[] points = c.getPoints();
+              for (int i = 0; points != null && i < points.length; i++) {
+                minX = Math.min(minX, points[i].x);
+                minY = Math.min(minY, points[i].y);
+                maxX = Math.max(maxX, points[i].x);
+                maxY = Math.max(maxY, points[i].y);
+              }
+              com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
+              if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+                minX = Math.min(minX, cap.getX());
+                minY = Math.min(minY, cap.getY());
+                maxX = Math.max(maxX, cap.getX() + cap.getWidth());
+                maxY = Math.max(maxY, cap.getY() + cap.getHeight());
+              }
+            }
 
             String boundaryName = systemName == null ? "" : systemName.trim();
             if (boundaryName.isEmpty()) {
@@ -492,7 +520,8 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
   /** Free space below an actor figure (its name is drawn under it) and between use cases. */
   private static final int ACTOR_GAP = 50;
 
-  private static final int USE_CASE_GAP = 30;
+  /** Space between use cases: room for the <<Include>>/<<Extend>> label of a line between them. */
+  private static final int USE_CASE_GAP = 60;
 
   /** Top of the auto-placed columns. */
   private static final int COLUMN_TOP = 50;

@@ -50,7 +50,7 @@ public final class BpmnUtils {
   /** Lower bounds for explicit pool sizes, so the name band and one node always fit. */
   public static final int MIN_POOL_WIDTH = 200;
 
-  public static final int MIN_POOL_HEIGHT = 80;
+  public static final int MIN_POOL_HEIGHT = 40;
 
   /** Top-left corner of the first auto-placed pool (and of the free area without pools). */
   public static final int ORIGIN_X = 40;
@@ -58,7 +58,7 @@ public final class BpmnUtils {
   public static final int ORIGIN_Y = 40;
 
   /** Vertical gap between auto-placed pools. */
-  public static final int POOL_GAP = 40;
+  public static final int POOL_GAP = 60;
 
   /** Smallest task box: BPMN activities stay readable next to 40px gateways. */
   public static final int MIN_TASK_WIDTH = 90;
@@ -579,8 +579,20 @@ public final class BpmnUtils {
   public static int[] taskSize(int fittedWidth, int fittedHeight, String label) {
     int width = fittedWidth >= MIN_FITTED_SIZE ? fittedWidth : estimateTextWidth(label);
     int height = fittedHeight >= MIN_FITTED_SIZE ? fittedHeight : 0;
+    if (width > MAX_TASK_WIDTH) {
+      // a long name wraps into a box of readable width instead of a 400 px line
+      int lines = (int) Math.ceil((width - 24) / (double) (MAX_TASK_WIDTH - 24));
+      height = Math.max(height, lines * 16 + 16);
+      width = MAX_TASK_WIDTH;
+    }
     return new int[] {Math.max(width, MIN_TASK_WIDTH), Math.max(height, MIN_TASK_HEIGHT)};
   }
+
+  /** Widest a task box grows before its name wraps. */
+  public static final int MAX_TASK_WIDTH = 170;
+
+  /** Width of a row of flow nodes before the next one starts a second row. */
+  public static final int ROW_WIDTH = 900;
 
   /**
    * Rough rendered width of a one-line label in Visual Paradigm's default font, with padding.
@@ -686,7 +698,7 @@ public final class BpmnUtils {
    */
   public static Point nextNodePosition(
       List<Rectangle> flowNodes, Rectangle body, int width, int height) {
-    Rectangle last = rightmost(flowNodes);
+    Rectangle last = lastOfLowestRow(flowNodes);
     int x;
     int centerY;
     if (last == null) {
@@ -695,6 +707,16 @@ public final class BpmnUtils {
     } else {
       x = last.x + last.width + NODE_GAP;
       centerY = last.y + last.height / 2;
+      if (x + width > body.x + ROW_WIDTH) {
+        // the row is full: a second row under the lowest node (a process of 19 nodes in one row
+        // is a 2.6:1 picture that shrinks to unreadable text on a page)
+        int bottom = last.y + last.height;
+        for (Rectangle r : flowNodes) {
+          bottom = Math.max(bottom, r.y + r.height);
+        }
+        x = body.x + FIRST_NODE_INSET;
+        centerY = bottom + NODE_GAP + height / 2;
+      }
     }
     int y = Math.max(centerY - height / 2, body.y + MIN_INSET);
     return new Point(x, y);
@@ -787,8 +809,14 @@ public final class BpmnUtils {
     boolean above = b.y + b.height <= a.y;
     if (!firstLeft) {
       if (below) {
+        // back to the start of the next row: down, across the gap, into the top of the target
+        // (entering its right side would meet the flow that leaves it there)
+        int midY = (a.y + a.height + b.y) / 2;
         return Arrays.asList(
-            new Point(acx, a.y + a.height), new Point(acx, by), new Point(b.x + b.width, by));
+            new Point(acx, a.y + a.height),
+            new Point(acx, midY),
+            new Point(bcx, midY),
+            new Point(bcx, b.y));
       }
       int top = Math.min(a.y, b.y) - LOOP_BACK_CLEARANCE;
       return Arrays.asList(
@@ -816,6 +844,275 @@ public final class BpmnUtils {
   /** How far a loop-back flow runs above the higher of its two shapes. */
   public static final int LOOP_BACK_CLEARANCE = 25;
 
+  /** A flow leaves a gateway or event through the vertex the route itself picks. */
+  public static final int EXIT_AUTO = 0;
+
+  /** A flow leaves through the top vertex. */
+  public static final int EXIT_TOP = 1;
+
+  /** A flow leaves through the right vertex. */
+  public static final int EXIT_RIGHT = 2;
+
+  /** A flow leaves through the bottom vertex. */
+  public static final int EXIT_BOTTOM = 3;
+
+  /** A flow (a loop back) leaves through the left vertex. */
+  public static final int EXIT_LEFT = 4;
+
+  /** A routed flow and the vertex of its (round) source it leaves through. */
+  public static final class FlowRoute {
+    private final List<Point> points;
+    private final int exit;
+
+    private FlowRoute(List<Point> points, int exit) {
+      this.points = points;
+      this.exit = exit;
+    }
+
+    /**
+     * The connector points.
+     *
+     * @return the route, or null when the shapes overlap
+     */
+    public List<Point> points() {
+      return points;
+    }
+
+    /**
+     * The vertex of the source the route leaves through.
+     *
+     * @return an {@code EXIT_*} constant
+     */
+    public int exit() {
+      return exit;
+    }
+  }
+
+  /**
+   * Vertices a flow from a gateway or event may leave through, best first: a flow to another row
+   * leaves through the vertex facing that row, a flow on the same row through the right vertex, a
+   * loop back through the top. Several branches of one gateway take different ones.
+   *
+   * @param a the source bounds
+   * @param b the target bounds
+   * @return the {@code EXIT_*} constants in order of preference
+   */
+  public static int[] exitPreference(Rectangle a, Rectangle b) {
+    boolean forward = a.x + a.width <= b.x;
+    boolean above = b.y + b.height <= a.y;
+    boolean below = b.y >= a.y + a.height;
+    if (forward) {
+      if (above) {
+        return new int[] {EXIT_TOP, EXIT_RIGHT, EXIT_BOTTOM};
+      }
+      if (below) {
+        return new int[] {EXIT_BOTTOM, EXIT_RIGHT, EXIT_TOP};
+      }
+      return new int[] {EXIT_RIGHT, EXIT_TOP, EXIT_BOTTOM};
+    }
+    return below
+        ? new int[] {EXIT_BOTTOM, EXIT_LEFT, EXIT_TOP, EXIT_RIGHT}
+        : new int[] {EXIT_TOP, EXIT_LEFT, EXIT_BOTTOM, EXIT_RIGHT};
+  }
+
+  /**
+   * The vertex of {@code a} that a connector starting at {@code first} leaves through.
+   *
+   * @param a the source bounds
+   * @param first the first point of the connector
+   * @return an {@code EXIT_*} constant, {@link #EXIT_AUTO} for any other start
+   */
+  public static int exitOf(Rectangle a, Point first) {
+    if (Math.abs(first.y - a.y) <= 1 && Math.abs(first.x - (a.x + a.width / 2)) <= 3) {
+      return EXIT_TOP;
+    }
+    if (Math.abs(first.y - (a.y + a.height)) <= 1 && Math.abs(first.x - (a.x + a.width / 2)) <= 3) {
+      return EXIT_BOTTOM;
+    }
+    if (Math.abs(first.x - (a.x + a.width)) <= 1 && Math.abs(first.y - (a.y + a.height / 2)) <= 3) {
+      return EXIT_RIGHT;
+    }
+    if (Math.abs(first.x - a.x) <= 1 && Math.abs(first.y - (a.y + a.height / 2)) <= 3) {
+      return EXIT_LEFT;
+    }
+    return EXIT_AUTO;
+  }
+
+  /**
+   * Route of a sequence flow. A gateway or event source picks the best vertex that no other flow of
+   * its own uses yet and whose route crosses no other element; every other source takes the plain
+   * route.
+   *
+   * @param from the source bounds
+   * @param fromRound whether the source is a circle/diamond
+   * @param to the target bounds
+   * @param toRound whether the target is a circle/diamond
+   * @param usedExits vertices of the source other flows already leave through
+   * @param obstacles the other elements (with their name labels) the legs must not cross
+   * @return the route and its exit; the route is null when the shapes overlap
+   */
+  public static FlowRoute routeFlow(
+      Rectangle from,
+      boolean fromRound,
+      Rectangle to,
+      boolean toRound,
+      java.util.Set<Integer> usedExits,
+      List<Rectangle> obstacles) {
+    if (!fromRound) {
+      return new FlowRoute(route(from, false, to, toRound, false), EXIT_AUTO);
+    }
+    boolean horizontallyApart = from.x + from.width <= to.x || to.x + to.width <= from.x;
+    boolean verticallyApart = from.y + from.height <= to.y || to.y + to.height <= from.y;
+    if (!horizontallyApart && !verticallyApart) {
+      return new FlowRoute(null, EXIT_AUTO);
+    }
+    // Every vertex that suits the geometry is scored: a route through another element costs 2, a
+    // vertex another flow already uses 1 (two flows along one line cannot be told apart), and
+    // the later in the preference list the more by a small amount; the cheapest wins.
+    FlowRoute best = null;
+    double bestCost = Double.MAX_VALUE;
+    int[] preference = exitPreference(from, to);
+    for (int rank = 0; rank < preference.length; rank++) {
+      int exit = preference[rank];
+      // a leg beside the source may have to come closer to it (or go further) to miss a neighbour
+      int[] clearances =
+          exit == EXIT_LEFT || exit == EXIT_RIGHT
+              ? new int[] {LOOP_BACK_CLEARANCE, 12, 40}
+              : new int[] {LOOP_BACK_CLEARANCE};
+      for (int c = 0; c < clearances.length; c++) {
+        List<Point> points = routeFrom(from, to, toRound, exit, clearances[c]);
+        if (points == null) {
+          continue;
+        }
+        double cost =
+            (crosses(points, obstacles) ? 2 : 0)
+                + (usedExits.contains(exit) ? 1 : 0)
+                + rank * 0.1
+                + c * 0.01;
+        if (cost < bestCost) {
+          bestCost = cost;
+          best = new FlowRoute(points, exit);
+        }
+      }
+    }
+    return best != null ? best : new FlowRoute(route(from, true, to, toRound, false), EXIT_AUTO);
+  }
+
+  /**
+   * The route of a flow from a gateway or event leaving through the given vertex, or null when that
+   * vertex does not suit the geometry.
+   *
+   * @param a the source bounds
+   * @param b the target bounds
+   * @param secondRound whether the target is a circle/diamond
+   * @param exit an {@code EXIT_*} constant
+   * @return the connector points, or null
+   */
+  public static List<Point> routeFrom(Rectangle a, Rectangle b, boolean secondRound, int exit) {
+    return routeFrom(a, b, secondRound, exit, LOOP_BACK_CLEARANCE);
+  }
+
+  /**
+   * {@link #routeFrom(Rectangle, Rectangle, boolean, int)} with the distance a loop back keeps from
+   * the shapes it goes around.
+   *
+   * @param a the source bounds
+   * @param b the target bounds
+   * @param secondRound whether the target is a circle/diamond
+   * @param exit an {@code EXIT_*} constant
+   * @param clearance distance of the legs beside the source from it
+   * @return the connector points, or null
+   */
+  public static List<Point> routeFrom(
+      Rectangle a, Rectangle b, boolean secondRound, int exit, int clearance) {
+    int acx = a.x + a.width / 2;
+    int bcx = b.x + b.width / 2;
+    int ay = a.y + a.height / 2;
+    int by = b.y + b.height / 2;
+    boolean forward = a.x + a.width <= b.x;
+    boolean below = b.y >= a.y + a.height;
+    boolean above = b.y + b.height <= a.y;
+    int x1 = a.x + a.width;
+    int x2 = b.x;
+    if (forward) {
+      switch (exit) {
+        case EXIT_RIGHT:
+          Integer y = sharedLine(a.y, a.height, true, b.y, b.height, secondRound);
+          if (y != null) {
+            return Arrays.asList(new Point(x1, y), new Point(x2, y));
+          }
+          if (secondRound && (below || above)) {
+            return Arrays.asList(
+                new Point(x1, ay),
+                new Point(bcx, ay),
+                new Point(bcx, below ? b.y : b.y + b.height));
+          }
+          int mx = (x1 + x2) / 2;
+          return Arrays.asList(
+              new Point(x1, ay), new Point(mx, ay), new Point(mx, by), new Point(x2, by));
+        case EXIT_TOP:
+          return above
+              ? Arrays.asList(new Point(acx, a.y), new Point(acx, by), new Point(x2, by))
+              : null;
+        case EXIT_BOTTOM:
+          return below
+              ? Arrays.asList(new Point(acx, a.y + a.height), new Point(acx, by), new Point(x2, by))
+              : null;
+        default:
+          return null;
+      }
+    }
+    switch (exit) {
+      case EXIT_TOP:
+        int top = Math.min(a.y, b.y) - LOOP_BACK_CLEARANCE;
+        return Arrays.asList(
+            new Point(acx, a.y), new Point(acx, top), new Point(bcx, top), new Point(bcx, b.y));
+      case EXIT_BOTTOM:
+        int bottom = Math.max(a.y + a.height, b.y + b.height) + LOOP_BACK_CLEARANCE;
+        return Arrays.asList(
+            new Point(acx, a.y + a.height),
+            new Point(acx, bottom),
+            new Point(bcx, bottom),
+            new Point(bcx, b.y + b.height));
+      case EXIT_RIGHT:
+        int over = Math.min(a.y, b.y) - LOOP_BACK_CLEARANCE;
+        return Arrays.asList(
+            new Point(x1, ay),
+            new Point(x1 + clearance, ay),
+            new Point(x1 + clearance, over),
+            new Point(bcx, over),
+            new Point(bcx, b.y));
+      case EXIT_LEFT:
+        int across = Math.min(a.y, b.y) - LOOP_BACK_CLEARANCE;
+        return Arrays.asList(
+            new Point(a.x, ay),
+            new Point(a.x - clearance, ay),
+            new Point(a.x - clearance, across),
+            new Point(bcx, across),
+            new Point(bcx, b.y));
+      default:
+        return null;
+    }
+  }
+
+  private static boolean crosses(List<Point> points, List<Rectangle> obstacles) {
+    for (int i = 0; i + 1 < points.size(); i++) {
+      if (blocked(
+          points.get(i).x,
+          points.get(i).y,
+          points.get(i + 1).x,
+          points.get(i + 1).y,
+          obstacles,
+          FLOW_CLEARANCE)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** How close a sequence flow may run to an element it passes (its border is 1 px). */
+  private static final int FLOW_CLEARANCE = 1;
+
   /**
    * Route of a message flow between two pools stacked vertically: out of the source's facing
    * border, along the gap between the pools at {@code gapY}, and into the target's facing border. A
@@ -830,21 +1127,55 @@ public final class BpmnUtils {
    */
   public static List<Point> messageRoute(
       Rectangle from, Rectangle to, int gapY, List<Rectangle> obstacles) {
+    return messageRoute(from, to, gapY, obstacles, 0);
+  }
+
+  /**
+   * {@link #messageRoute(Rectangle, Rectangle, int, List)} for the {@code index}-th message flow
+   * between the same two shapes (a request and its response): each further one runs {@link
+   * #MESSAGE_STEP} px further along both vertical legs and the gap line, so the two never lie on
+   * top of each other.
+   *
+   * @param from the source bounds
+   * @param to the target bounds
+   * @param gapY y of the horizontal leg of the first flow
+   * @param obstacles flow nodes the legs must not cross (not the two ends)
+   * @param index how many message flows already join these two shapes
+   * @return the connector points
+   */
+  public static List<Point> messageRoute(
+      Rectangle from, Rectangle to, int gapY, List<Rectangle> obstacles, int index) {
     boolean down = from.y + from.height / 2 < to.y + to.height / 2;
-    List<Point> start = endLeg(from, gapY, down, obstacles, false);
-    List<Point> end = endLeg(to, gapY, !down, obstacles, true);
+    int shift = index == 0 ? 0 : (index % 2 == 1 ? 1 : -1) * ((index + 1) / 2) * MESSAGE_STEP;
+    // each further flow runs one label row lower in the gap, its label above its own line
+    int lineY = gapY + index * MESSAGE_LINE_STEP;
+    List<Point> start = endLeg(from, lineY, down, obstacles, false, shift);
+    List<Point> end = endLeg(to, lineY, !down, obstacles, true, shift);
     List<Point> points = new ArrayList<>(start);
     points.addAll(end);
     return points;
   }
+
+  /** Distance between the vertical legs of message flows that join the same two shapes. */
+  public static final int MESSAGE_STEP = 14;
+
+  /** Distance between the horizontal legs of those flows: room for a label above each. */
+  public static final int MESSAGE_LINE_STEP = 22;
 
   /**
    * The leg between a shape and the gap line: straight up/down from its center when clear, else
    * from its side to the nearest clear column. Points run shape -> gap (reversed for an end).
    */
   private static List<Point> endLeg(
-      Rectangle shape, int gapY, boolean gapBelow, List<Rectangle> obstacles, boolean reverse) {
-    int cx = shape.x + shape.width / 2;
+      Rectangle shape,
+      int gapY,
+      boolean gapBelow,
+      List<Rectangle> obstacles,
+      boolean reverse,
+      int shift) {
+    // a shifted leg stays within the shape's width, whatever its size
+    int limit = Math.max(2, shape.width / 2 - 4);
+    int cx = shape.x + shape.width / 2 + Math.max(-limit, Math.min(limit, shift));
     int cy = shape.y + shape.height / 2;
     int edgeY = gapBelow ? shape.y + shape.height : shape.y;
     List<Point> leg;
@@ -883,12 +1214,17 @@ public final class BpmnUtils {
   private static final int COLUMN_STEP = 30;
 
   private static boolean blocked(int x1, int y1, int x2, int y2, List<Rectangle> obstacles) {
+    return blocked(x1, y1, x2, y2, obstacles, 6);
+  }
+
+  private static boolean blocked(
+      int x1, int y1, int x2, int y2, List<Rectangle> obstacles, int margin) {
     if (obstacles == null) {
       return false;
     }
     for (Rectangle r : obstacles) {
       if (DiagramUtils.segmentHitsRect(
-          x1, y1, x2, y2, new int[] {r.x, r.y, r.width, r.height}, 6)) {
+          x1, y1, x2, y2, new int[] {r.x, r.y, r.width, r.height}, margin)) {
         return true;
       }
     }
@@ -943,6 +1279,25 @@ public final class BpmnUtils {
 
   // --- Small helpers ---
 
+  /** The rightmost of the nodes on the lowest row: where the next node continues that row. */
+  private static Rectangle lastOfLowestRow(List<Rectangle> rects) {
+    int lowestCenter = Integer.MIN_VALUE;
+    for (Rectangle r : rects) {
+      lowestCenter = Math.max(lowestCenter, r.y + r.height / 2);
+    }
+    Rectangle best = null;
+    for (Rectangle r : rects) {
+      if (r.y + r.height / 2 >= lowestCenter - ROW_TOLERANCE
+          && (best == null || r.x + r.width > best.x + best.width)) {
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  /** Nodes whose centers differ by less than this are on one row. */
+  private static final int ROW_TOLERANCE = 30;
+
   private static int firstRowCenter(Rectangle body) {
     return body.y + Math.min(body.height, LANE_HEIGHT) / 2;
   }
@@ -972,6 +1327,8 @@ public final class BpmnUtils {
     if (raw == null) {
       return "";
     }
-    return raw.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
+    // case, spaces, dashes and underscores are ignored; any other character (a digit, a "!") makes
+    // the word unknown instead of being dropped: "xor2" is not "xor"
+    return raw.trim().toLowerCase(Locale.ROOT).replaceAll("[ _\\-]", "");
   }
 }

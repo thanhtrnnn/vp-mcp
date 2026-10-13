@@ -151,6 +151,11 @@ public final class ComponentDiagramUtils {
     List<String> seen = new ArrayList<>();
     for (String token : raw.split(",")) {
       String s = normalizeStereotype(token);
+      // Visual Paradigm prints <<component>> on every component itself: a second one would read
+      // "<<component>> <<component>>"
+      if (s != null && "component".equalsIgnoreCase(s)) {
+        continue;
+      }
       if (s != null && !seen.contains(s.toLowerCase(Locale.ROOT))) {
         seen.add(s.toLowerCase(Locale.ROOT));
         result.add(s);

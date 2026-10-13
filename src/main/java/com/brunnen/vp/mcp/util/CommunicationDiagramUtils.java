@@ -486,6 +486,35 @@ public final class CommunicationDiagramUtils {
       int vGap,
       int originX,
       int originY) {
+    return layeredLayout(layers, widths, heights, edges, hGap, vGap, originX, originY, -1);
+  }
+
+  /**
+   * {@link #layeredLayout(int[], int[], int[], int[][], int, int, int, int)} around an anchor
+   * layer: the anchor row keeps the creation order (or its chain order), every other row is ordered
+   * by where the participants closer to the anchor that it is linked to stand.
+   *
+   * @param layers layer of each participant
+   * @param widths width of each participant
+   * @param heights height of each participant
+   * @param edges pairs {a, b} of linked participants (indexes)
+   * @param hGap free space between neighbours of a row
+   * @param vGap free space between rows
+   * @param originX left edge of the whole layout
+   * @param originY top edge of the whole layout
+   * @param anchorLayer the layer that keeps its order; a value not used (e.g. -1) means the first
+   * @return the top-left corner {x, y} of each participant
+   */
+  public static int[][] layeredLayout(
+      int[] layers,
+      int[] widths,
+      int[] heights,
+      int[][] edges,
+      int hGap,
+      int vGap,
+      int originX,
+      int originY,
+      int anchorLayer) {
     int n = layers.length;
     int[][] result = new int[n][2];
     if (n == 0) {
@@ -497,6 +526,7 @@ public final class CommunicationDiagramUtils {
       used.add(layer);
     }
     java.util.List<Integer> layerIds = new java.util.ArrayList<>(used);
+    final int anchorRow = Math.max(0, layerIds.indexOf(anchorLayer));
     int[] row = new int[n];
     java.util.List<java.util.List<Integer>> rows = new java.util.ArrayList<>();
     for (int i = 0; i < layerIds.size(); i++) {
@@ -553,26 +583,28 @@ public final class CommunicationDiagramUtils {
       }
     }
     for (int sweep = 0; sweep < 3; sweep++) {
-      for (int ri = 1; ri < rows.size(); ri++) {
-        if (chained[ri]) {
-          continue;
-        }
-        java.util.List<Integer> r = rows.get(ri);
-        final double[] key = new double[n];
-        for (int node : r) {
-          double sum = 0;
-          int count = 0;
-          for (int nb : neighbours.get(node)) {
-            if (row[nb] < ri) {
-              sum += pos[nb] / Math.max(1, rows.get(row[nb]).size() - 1);
-              count++;
-            }
+      for (int dist = 1; dist < rows.size(); dist++) {
+        for (int ri : new int[] {anchorRow - dist, anchorRow + dist}) {
+          if (ri < 0 || ri >= rows.size() || chained[ri]) {
+            continue;
           }
-          key[node] = count > 0 ? sum / count : pos[node] / Math.max(1, r.size() - 1);
-        }
-        r.sort((a, b) -> Double.compare(key[a], key[b]));
-        for (int k = 0; k < r.size(); k++) {
-          pos[r.get(k)] = k;
+          java.util.List<Integer> r = rows.get(ri);
+          final double[] key = new double[n];
+          for (int node : r) {
+            double sum = 0;
+            int count = 0;
+            for (int nb : neighbours.get(node)) {
+              if (Math.abs(row[nb] - anchorRow) < dist) {
+                sum += pos[nb] / Math.max(1, rows.get(row[nb]).size() - 1);
+                count++;
+              }
+            }
+            key[node] = count > 0 ? sum / count : pos[node] / Math.max(1, r.size() - 1);
+          }
+          r.sort((a, b) -> Double.compare(key[a], key[b]));
+          for (int k = 0; k < r.size(); k++) {
+            pos[r.get(k)] = k;
+          }
         }
       }
     }

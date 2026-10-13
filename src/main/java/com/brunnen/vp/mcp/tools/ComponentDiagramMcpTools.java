@@ -87,7 +87,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addComponent",
       description =
           "Add a component to a component diagram. stereotype is optional (\"\" = none, e.g."
-              + " \"subsystem\"; several may be comma-separated). parentComponent (a component"
+              + " \"subsystem\"; several may be comma-separated; <<component>> is drawn by Visual"
+              + " Paradigm itself and ignored; a component that already exists in the project is"
+              + " reused and keeps its own stereotypes). parentComponent (a component"
               + " already on the diagram, \"\" = none) nests the new component inside it, in the"
               + " model and on the diagram, and the parent grows to enclose it. packageName (a"
               + " layer frame added with addComponentPackage, \"\" = none) puts it in that"
@@ -152,18 +154,22 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + name
                   + "' is an interface of the project; pick another name for the component";
             }
+            // the model is shared by every diagram that shows it: a stereotype given for a view of
+            // an existing component would show up on all of them, so only a new one gets it
+            boolean reused = component != null;
             if (component == null) {
               component = getModelElementFactory().createComponent();
               nameInOwner(component, owner, name);
-            }
-            for (String s : stereotypes) {
-              if (!component.hasStereotype(s)) {
+              for (String s : stereotypes) {
                 component.addStereotype(s);
               }
             }
 
             IDiagramElement de = getDiagramManager().createDiagramElement(diagram, component);
             if (!(de instanceof IShapeUIModel)) {
+              if (!reused) {
+                component.delete(); // no orphan model when VP draws nothing
+              }
               return "Error adding component: Visual Paradigm could not draw '" + name + "'";
             }
             IShapeUIModel shape = (IShapeUIModel) de;
@@ -185,7 +191,10 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             StringBuilder result = new StringBuilder("Added component '").append(name).append("'");
-            if (!stereotypes.isEmpty()) {
+            if (reused) {
+              result.append(" (existing component of the project, drawn again; its stereotypes");
+              result.append(" are those of the model)");
+            } else if (!stereotypes.isEmpty()) {
               result.append(' ').append(ComponentDiagramUtils.formatStereotypes(stereotypes));
             }
             if (parent != null) {
@@ -493,6 +502,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
 
             IDiagramElement de = getDiagramManager().createDiagramElement(diagram, port);
             if (!(de instanceof IShapeUIModel)) {
+              port.delete(); // no port left on the component when VP draws nothing
               return "Error adding port: Visual Paradigm could not draw '" + name + "'";
             }
             IShapeUIModel portShape = (IShapeUIModel) de;
@@ -511,6 +521,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               placePortCaption(owner, p);
             }
             portShape.bringToFront();
+            makeRoomForPorts(owner);
             IShapeUIModel up = parentShapeOf(owner);
             if (up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE)) {
               encloseUpwards(up); // the owner may have grown to fit its ports
@@ -528,6 +539,90 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding port: " + e.getMessage();
     }
+  }
+
+  /** Free space kept between a port's name and the neighbouring component. */
+  private static final int PORT_CLEARANCE = 30;
+
+  /**
+   * A port sits on the border of its component and its name is drawn outside it: the neighbours on
+   * that side move away until the name fits between the two components (a name that is clipped by
+   * the next box, or a port that lies over a neighbour's icon, is unreadable).
+   */
+  private void makeRoomForPorts(IShapeUIModel owner) {
+    int right = owner.getX() + owner.getWidth();
+    int needRight = 0;
+    int needLeft = 0;
+    for (IShapeUIModel port : portsOf(owner)) {
+      com.vp.plugin.diagram.ICaptionUIModel cap = port.getCaptionUIModel();
+      int nameWidth = cap != null && cap.getWidth() > 0 ? cap.getWidth() : 0;
+      boolean leftSide = port.getX() + port.getWidth() / 2 < owner.getX() + owner.getWidth() / 2;
+      if (leftSide) {
+        needLeft = Math.max(needLeft, owner.getX() - (port.getX() - nameWidth - 3));
+      } else {
+        needRight = Math.max(needRight, port.getX() + port.getWidth() + 3 + nameWidth - right);
+      }
+    }
+    IDiagramUIModel diagram = owner.getDiagramUIModel();
+    IShapeUIModel rightNeighbour = null;
+    IShapeUIModel leftNeighbour = null;
+    for (IShapeUIModel other : allShapes(diagram)) {
+      if (sameShape(other, owner)
+          || !hasSize(other)
+          || kindOf(other) == Kind.PORT
+          || kindOf(other) == Kind.PACKAGE
+          || !sameParentShape(other, owner)
+          || other.getY() >= owner.getY() + owner.getHeight()
+          || owner.getY() >= other.getY() + other.getHeight()) {
+        continue;
+      }
+      if (other.getX() >= right - 2
+          && (rightNeighbour == null || other.getX() < rightNeighbour.getX())) {
+        rightNeighbour = other;
+      } else if (other.getX() + other.getWidth() <= owner.getX() + 2
+          && (leftNeighbour == null
+              || other.getX() + other.getWidth()
+                  > leftNeighbour.getX() + leftNeighbour.getWidth())) {
+        leftNeighbour = other;
+      }
+    }
+    IShapeUIModel frame = parentShapeOf(owner);
+    if (leftNeighbour == null && needLeft > 0 && frame != null) {
+      // the first component of a frame: its left port's name must stay inside the frame, so the
+      // components move right (the frame grows on the right afterwards)
+      int captionLeft = owner.getX() - needLeft;
+      int shift = frame.getX() + 8 - captionLeft;
+      if (shift > 0) {
+        for (IShapeUIModel child : childrenOf(frame)) {
+          if (kindOf(child) != Kind.PORT) {
+            moveShapeTree(child, shift, 0);
+          }
+        }
+        for (IShapeUIModel child : childrenOf(frame)) {
+          recenterTree(child);
+        }
+      }
+    }
+    if (rightNeighbour != null && needRight > 0) {
+      makeRoomBetween(owner, rightNeighbour, needRight + PORT_CLEARANCE, 0);
+    }
+    if (leftNeighbour != null && needLeft > 0) {
+      makeRoomBetween(leftNeighbour, owner, needLeft + PORT_CLEARANCE, 0);
+    }
+    for (IShapeUIModel s : allShapes(diagram)) {
+      if (kindOf(s) == Kind.COMPONENT) {
+        for (IShapeUIModel port : portsOf(s)) {
+          port.resetCaption();
+          placePortCaption(s, port);
+        }
+      }
+    }
+  }
+
+  private static boolean sameParentShape(IShapeUIModel a, IShapeUIModel b) {
+    IShapeUIModel pa = parentShapeOf(a);
+    IShapeUIModel pb = parentShapeOf(b);
+    return pa == null ? pb == null : pb != null && sameShape(pa, pb);
   }
 
   @Override

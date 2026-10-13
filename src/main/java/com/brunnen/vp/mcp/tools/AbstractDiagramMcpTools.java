@@ -466,7 +466,12 @@ public abstract class AbstractDiagramMcpTools {
   protected static String diagramNotFound(String name) {
     IDiagramUIModel other = DiagramUtils.findDiagramByName(name);
     return other != null
-        ? "Diagram '" + name + "' is a " + other.getType() + ", which this tool does not edit"
+        ? "Diagram '"
+            + name
+            + "' is a "
+            + other.getType()
+            + ", a diagram type this tool does not work on (getDiagramGeometry and"
+            + " exportDiagramImage work on every type)"
         : "Diagram not found: " + name;
   }
 
@@ -642,6 +647,20 @@ public abstract class AbstractDiagramMcpTools {
       IDiagramUIModel diagram, IModelElement model, IDiagramElement from, IDiagramElement to) {
     activate(diagram);
     useCenterConnectionPoints(diagram);
+    if (duplicateConnector(from, to, model) != null) {
+      // the model was never placed anywhere: no orphan is left behind
+      String label = connectorLabel(model);
+      model.delete();
+      throw new IllegalStateException(
+          label
+              + " from '"
+              + shapeName(from)
+              + "' to '"
+              + shapeName(to)
+              + "' already exists on diagram '"
+              + diagram.getName()
+              + "'");
+    }
     IDiagramElement connector;
     try {
       connector =
@@ -666,6 +685,65 @@ public abstract class AbstractDiagramMcpTools {
       connector.resetCaption(); // fresh connectors render blank until the caption is reset
     }
     return connector;
+  }
+
+  /**
+   * The connector from {@code from} to {@code to} that already draws a relationship like {@code
+   * model} (same kind, stereotypes and name), or null. Plain unnamed associations are not compared:
+   * two of them between the same classes can differ in their multiplicities.
+   */
+  protected static IDiagramElement duplicateConnector(
+      IDiagramElement from, IDiagramElement to, IModelElement model) {
+    if (model == null
+        || (model instanceof IAssociation && cleanName(model).isEmpty())
+        || from.toFromConnectorArray() == null) {
+      return null;
+    }
+    for (IConnectorUIModel c : from.toFromConnectorArray()) {
+      IModelElement other = c.getModelElement();
+      if (other == null
+          || other.getId().equals(model.getId())
+          || c.getToShape() == null
+          || !c.getToShape().getId().equals(to.getId())
+          || !other.getModelType().equals(model.getModelType())
+          || !cleanName(other).equals(cleanName(model))) {
+        continue;
+      }
+      if (stereotypeNames(other).equals(stereotypeNames(model))) {
+        return c;
+      }
+    }
+    return null;
+  }
+
+  private static List<String> stereotypeNames(IModelElement model) {
+    List<String> names = new ArrayList<>();
+    IStereotype[] stereotypes = model.toStereotypeModelArray();
+    if (stereotypes != null) {
+      for (IStereotype st : stereotypes) {
+        names.add(st.getName());
+      }
+    }
+    java.util.Collections.sort(names);
+    return names;
+  }
+
+  private static String cleanName(IModelElement model) {
+    return model.getName() == null ? "" : model.getName().trim();
+  }
+
+  private static String connectorLabel(IModelElement model) {
+    StringBuilder sb = new StringBuilder(model.getModelType());
+    for (String st : stereotypeNames(model)) {
+      sb.append(" <<").append(st).append(">>");
+    }
+    String name = cleanName(model);
+    return name.isEmpty() ? sb.toString() : sb + " '" + name + "'";
+  }
+
+  private static String shapeName(IDiagramElement shape) {
+    IModelElement m = shape.getModelElement();
+    return m != null ? displayName(m) : shape.getShapeType();
   }
 
   private static List<IConnectorUIModel> pairConnectors(IShapeUIModel a, IShapeUIModel b) {
@@ -716,32 +794,110 @@ public abstract class AbstractDiagramMcpTools {
     boolean overlaid = OVERLAID.contains(connector.getId());
     int[][] bends =
         DiagramUtils.routeBends(
-            rect(first),
-            rect(second),
+            visibleRect(first),
+            visibleRect(second),
             overlaid ? 0 : Math.max(parallel.indexOf(connector.getId()), 0),
             overlaid ? 1 : parallel.size(),
             PARALLEL_STEP,
-            obstaclesBetween(from, to));
+            obstaclesBetween(from, to),
+            titleBands(from.getDiagramUIModel()));
+    // the bends run from the canonical first shape to the second one
+    List<Point> route = new ArrayList<>();
+    for (int i = 0; i < bends.length; i++) {
+      int[] bend = bends[canonical ? i : bends.length - 1 - i];
+      // VP drops points outside the canvas
+      route.add(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
+    }
+    // A package is drawn as a folder: its bounding box includes the tab, and VP clips a line at
+    // that box, so a line coming from above stops in the air over the body. Packages therefore get
+    // an explicit end on the border of their body; every other shape is anchored at its center.
+    boolean fromBody = isFolder(from);
+    boolean toBody = isFolder(to);
     Point start = center(from);
     Point end = center(to);
+    Point towardsStart = route.isEmpty() ? end : route.get(0);
+    Point towardsEnd = route.isEmpty() ? start : route.get(route.size() - 1);
+    if (fromBody) {
+      start = borderPoint(visibleRect(from), towardsStart);
+    }
+    if (toBody) {
+      end = borderPoint(visibleRect(to), towardsEnd);
+    }
     connector.clearPoints();
     connector.addPoint(start);
-    if (bends.length > 0) {
-      // the bends run from the canonical first shape to the second one
-      for (int i = 0; i < bends.length; i++) {
-        int[] bend = bends[canonical ? i : bends.length - 1 - i];
-        // VP drops points outside the canvas
-        connector.addPoint(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
-      }
-      connector.addPoint(end);
+    for (Point p : route) {
+      connector.addPoint(p);
+    }
+    connector.addPoint(end);
+    if (fromBody || toBody) {
+      // a rebuild would anchor the package at its center again
+      connector.setUseFromShapeCenter(!fromBody);
+      connector.setUseToShapeCenter(!toBody);
+      connector.setRequestRebuild(false);
+      return;
+    }
+    if (!route.isEmpty()) {
       // a (pending) rebuild would straighten the route; VP clips both legs at the borders
       connector.setRequestRebuild(false);
       return;
     }
-    connector.addPoint(end);
     connector.setUseFromShapeCenter(true);
     connector.setUseToShapeCenter(true);
     connector.setRequestRebuild(true);
+  }
+
+  /** Height of the band at the top of a package frame that holds its tab and title. */
+  private static final int FRAME_TITLE_BAND = 26;
+
+  /**
+   * The title bands of every package frame of the diagram: a bend (and with it the label drawn at
+   * the bend) of a connector must not lie in one, or its label reads as part of the frame's title.
+   */
+  private static List<int[]> titleBands(IDiagramUIModel diagram) {
+    List<int[]> bands = new ArrayList<>();
+    if (diagram == null) {
+      return bands;
+    }
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (isFolder(s) && s.getWidth() > 0) {
+        bands.add(new int[] {s.getX(), s.getY(), s.getWidth(), FRAME_TITLE_BAND});
+      }
+    }
+    return bands;
+  }
+
+  /** Height of a package's folder tab; a connector meets the package at the body below it. */
+  private static final int FOLDER_TAB = 19;
+
+  private static boolean isFolder(IShapeUIModel shape) {
+    return shape.getModelElement() instanceof com.vp.plugin.model.IPackage;
+  }
+
+  /**
+   * The part of a shape a connector can meet: its bounds, except for a package, whose folder tab
+   * sticks out above the body.
+   */
+  private static int[] visibleRect(IShapeUIModel shape) {
+    int[] r = rect(shape);
+    if (isFolder(shape) && r[3] > 2 * FOLDER_TAB) {
+      return new int[] {r[0], r[1] + FOLDER_TAB, r[2], r[3] - FOLDER_TAB};
+    }
+    return r;
+  }
+
+  /** Where the line from a rectangle's center towards {@code target} crosses its border. */
+  private static Point borderPoint(int[] r, Point target) {
+    double cx = r[0] + r[2] / 2.0;
+    double cy = r[1] + r[3] / 2.0;
+    double dx = target.x - cx;
+    double dy = target.y - cy;
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
+      return new Point((int) cx, (int) cy);
+    }
+    double tx = Math.abs(dx) < 1e-9 ? Double.MAX_VALUE : (r[2] / 2.0) / Math.abs(dx);
+    double ty = Math.abs(dy) < 1e-9 ? Double.MAX_VALUE : (r[3] / 2.0) / Math.abs(dy);
+    double t = Math.min(tx, ty);
+    return new Point((int) Math.round(cx + dx * t), (int) Math.round(cy + dy * t));
   }
 
   /**
@@ -765,6 +921,13 @@ public abstract class AbstractDiagramMcpTools {
     while (!pending.isEmpty()) {
       IShapeUIModel s = pending.poll();
       if (s == null || !seen.add(s.getId())) {
+        continue;
+      }
+      // the line ends at the border of its end shapes: what they hold does not block it, and
+      // ports sit on the border of their component, where its connectors arrive
+      if (s.getId().equals(from.getId())
+          || s.getId().equals(to.getId())
+          || s.getModelElement() instanceof com.vp.plugin.model.IPort) {
         continue;
       }
       IShapeUIModel[] children = s.toChildArray();
@@ -795,6 +958,31 @@ public abstract class AbstractDiagramMcpTools {
   /** Ids of connectors drawn on top of each other (a two-way exchange), never spread apart. */
   private static final java.util.Set<String> OVERLAID =
       java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+  /**
+   * Mark a connector as routed by hand: it is not counted among the parallel connectors of its two
+   * shapes, so the others between them are not bent away from a line that is not there.
+   *
+   * @param connector the connector with its own route
+   */
+  protected static void keepRoute(IConnectorUIModel connector) {
+    OVERLAID.add(connector.getId());
+  }
+
+  /**
+   * Re-anchor the connectors between two shapes except one.
+   *
+   * @param a one shape
+   * @param b the other shape
+   * @param exceptId id of the connector to leave alone
+   */
+  protected static void recenterPair(IShapeUIModel a, IShapeUIModel b, String exceptId) {
+    for (IConnectorUIModel c : pairConnectors(a, b)) {
+      if (!c.getId().equals(exceptId)) {
+        centerConnector(c);
+      }
+    }
+  }
 
   /**
    * Draw two opposite connectors between the same shapes on one line, so they read as a single
@@ -1073,11 +1261,8 @@ public abstract class AbstractDiagramMcpTools {
     }
     List<IShapeUIModel> siblings = new ArrayList<>();
     for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      // containers keep their place: moving a frame through the API leaves its children behind
-      if (s.getModelElement() != null
-          && sameParent(s, grown)
-          && s.getWidth() > 0
-          && s.childrenCount() == 0) {
+      // a container moves with everything it holds (moveShapeTree)
+      if (s.getModelElement() != null && sameParent(s, grown) && s.getWidth() > 0) {
         siblings.add(s);
       }
     }
@@ -1095,14 +1280,14 @@ public abstract class AbstractDiagramMcpTools {
         if (shift[0] == 0 && shift[1] == 0) {
           continue;
         }
-        b.setLocation(b.getX() + shift[0], b.getY() + shift[1]);
+        moveShapeTree(b, shift[0], shift[1]);
         moved.add(b.getId());
         queue.add(b);
       }
     }
     for (IShapeUIModel s : siblings) {
       if (moved.contains(s.getId())) {
-        recenterConnectorsOf(s);
+        recenterTree(s);
       }
     }
     return moved.size();
@@ -1159,11 +1344,12 @@ public abstract class AbstractDiagramMcpTools {
         shifted.add(s);
       }
     }
+    // a shifted container (a component with ports...) takes what it holds along
     for (IShapeUIModel s : shifted) {
-      s.setLocation(s.getX() + dx, s.getY() + dy);
+      moveShapeTree(s, dx, dy);
     }
     for (IShapeUIModel s : shifted) {
-      recenterConnectorsOf(s);
+      recenterTree(s);
     }
   }
 
@@ -1522,6 +1708,111 @@ public abstract class AbstractDiagramMcpTools {
     return model != null ? displayName(model) : shape.getShapeType();
   }
 
+  @Tool(
+      name = "addNote",
+      description =
+          "Add a note (a comment box with a folded corner) to any diagram, e.g. to explain a"
+              + " relation, a message or a state. attachedTo (the name of a shape on the diagram,"
+              + " \"\" = free-standing) joins it to that shape with a dashed anchor line. x/y (>0)"
+              + " place it; otherwise it goes beside the attached shape, or below everything on"
+              + " the diagram. The box is sized to its text (about 30 characters per line)")
+  public String addNote(String diagramName, String text, String attachedTo, int x, int y) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = DiagramUtils.findDiagramByName(diagramName);
+            if (diagram == null) {
+              return diagramNotFound(diagramName);
+            }
+            if (text == null || text.trim().isEmpty()) {
+              return "Note text must not be empty";
+            }
+            IShapeUIModel target = null;
+            if (attachedTo != null && !attachedTo.trim().isEmpty()) {
+              IDiagramElement found = findDiagramElementByName(diagram, attachedTo.trim());
+              if (!(found instanceof IShapeUIModel)) {
+                return "Shape not on diagram: " + attachedTo;
+              }
+              target = (IShapeUIModel) found;
+            }
+            // lines of about 30 characters
+            String[] words = text.trim().split("\\s+");
+            List<String> lines = new ArrayList<>();
+            StringBuilder line = new StringBuilder();
+            for (String word : words) {
+              if (line.length() > 0 && line.length() + word.length() + 1 > 30) {
+                lines.add(line.toString());
+                line.setLength(0);
+              }
+              line.append(line.length() > 0 ? " " : "").append(word);
+            }
+            lines.add(line.toString());
+            int widest = 0;
+            for (String l : lines) {
+              widest = Math.max(widest, l.length());
+            }
+            int width = Math.max(100, widest * 7 + 24);
+            int height = Math.max(40, lines.size() * 16 + 20);
+
+            com.vp.plugin.model.INOTE note = getModelElementFactory().createNOTE();
+            note.setDescription(text.trim());
+            IDiagramElement de = getDiagramManager().createDiagramElement(diagram, note);
+            if (!(de instanceof IShapeUIModel)) {
+              note.delete();
+              return "Error adding note: Visual Paradigm did not draw a note on '"
+                  + diagramName
+                  + "'";
+            }
+            IShapeUIModel shape = (IShapeUIModel) de;
+            int px = x;
+            int py = y;
+            if (x <= 0 && y <= 0) {
+              if (target != null) {
+                px = target.getX() + target.getWidth() + 70;
+                py = Math.max(5, target.getY() - 10);
+              } else {
+                int bottom = 0;
+                for (IShapeUIModel other : diagram.toShapeUIModelArray()) {
+                  if (!other.getId().equals(shape.getId()) && other.getParent() == null) {
+                    bottom = Math.max(bottom, other.getY() + other.getHeight());
+                  }
+                }
+                px = 40;
+                py = bottom + 40;
+              }
+            }
+            shape.setBounds(Math.max(px, 0), Math.max(py, 0), width, height);
+            shape.resetCaption();
+            String anchored = "";
+            if (target != null) {
+              com.vp.plugin.model.IAnchor anchor = getModelElementFactory().createAnchor();
+              anchor.setFrom(note);
+              anchor.setTo(target.getModelElement());
+              IDiagramElement link = connectCentered(diagram, anchor, shape, target);
+              anchored =
+                  link != null
+                      ? " attached to '" + attachedTo.trim() + "'"
+                      : " (Visual Paradigm refused the anchor line to '" + attachedTo.trim() + "')";
+            }
+            return "Added note '"
+                + (text.trim().length() > 40 ? text.trim().substring(0, 40) + "..." : text.trim())
+                + "' to diagram '"
+                + diagramName
+                + "' at "
+                + shape.getX()
+                + ","
+                + shape.getY()
+                + " "
+                + width
+                + "x"
+                + height
+                + anchored;
+          });
+    } catch (Exception e) {
+      return "Error adding note: " + e.getMessage();
+    }
+  }
+
   /**
    * Whether an element is one of the invisible helper shapes of a sequence diagram: the small
    * per-message activations VP draws, which the tools make fully transparent under the long bar of
@@ -1661,19 +1952,26 @@ public abstract class AbstractDiagramMcpTools {
       StringBuilder text = new StringBuilder();
       collectDialogParts(window, buttons, text);
       String message = text.toString();
-      if (!message.contains("no referenced view")) {
+      // "X has no referenced view. Delete X from the repository?": No (the view goes, the model
+      // stays); "Do you want to mark X stopped?" after a destroy message: Yes (the X marker)
+      boolean unreferenced = message.contains("no referenced view");
+      boolean stopped = message.contains("stopped");
+      if (!unreferenced && !stopped) {
         continue;
       }
       javax.swing.AbstractButton answer = null;
       for (javax.swing.AbstractButton b : buttons) {
         String label = b.getText() == null ? "" : b.getText().trim();
-        if (label.equalsIgnoreCase("No to all")) {
+        if (unreferenced && label.equalsIgnoreCase("No to all")) {
           answer = b;
           break;
         }
-        if (label.equalsIgnoreCase("No") && answer == null) {
+        if (label.equalsIgnoreCase(unreferenced ? "No" : "Yes") && answer == null) {
           answer = b;
         }
+      }
+      if (answer == null && stopped && !buttons.isEmpty()) {
+        answer = buttons.get(0); // the first button of the dialog is its "Yes"
       }
       int quote = message.indexOf('"');
       int end = message.indexOf('"', quote + 1);

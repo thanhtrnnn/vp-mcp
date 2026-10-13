@@ -445,11 +445,20 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               + "class is created (\"\" = untyped object, no slots allowed). slots is "
               + "'attr=value;attr2=value2' (\"\" for none); each attr must be an attribute of the "
               + "class or one of its superclasses (missing ones are added only to a class this "
-              + "call created). objectName is the handle used by addObjectLink. x/y (>0) place "
-              + "it explicitly, otherwise it is auto-placed in rows of 3. The box is fitted to "
-              + "its content")
+              + "call created). When several classes of the project carry that name (one per "
+              + "layer package), modelPackage names the package of the one to use; without it "
+              + "the class shown on this diagram, else the one that has all the slot "
+              + "attributes, is taken and the result names its owner. objectName is the handle "
+              + "used by addObjectLink. x/y (>0) place it explicitly, otherwise it is "
+              + "auto-placed in rows of 3. The box is fitted to its content")
   public String addObject(
-      String diagramName, String objectName, String className, String slots, int x, int y) {
+      String diagramName,
+      String objectName,
+      String className,
+      String slots,
+      int x,
+      int y,
+      String modelPackage) {
     try {
       return runOnEdt(
           () -> {
@@ -483,12 +492,19 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
 
             // Resolve the classifier and every slot's attribute before creating anything.
             IClass cls = null;
+            String classNote = "";
             boolean createdClass = false;
             List<IAttribute> features = new ArrayList<>();
             List<String> addedAttributes = new ArrayList<>();
             if (typed) {
               String clsName = className.trim();
-              cls = findClassForObject(diagram, clsName);
+              ClassChoice choice =
+                  findClassForObject(diagram, clsName, modelPackage, slotValues.keySet());
+              if (choice.error != null) {
+                return choice.error;
+              }
+              cls = choice.cls;
+              classNote = choice.note;
               if (cls == null) {
                 cls = getModelElementFactory().createClass();
                 cls.setName(clsName);
@@ -578,6 +594,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               }
               result.append(" with slots [").append(String.join("; ", lines)).append("]");
             }
+            result.append(classNote);
             if (createdClass) {
               result.append("; created class '").append(cls.getName()).append("'");
               if (!addedAttributes.isEmpty()) {
@@ -783,13 +800,106 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
     return null;
   }
 
-  /** The class an object is typed by: a class shown on this diagram first, then project-wide. */
-  private IClass findClassForObject(IDiagramUIModel diagram, String className) {
+  /** The class an object is typed by, or why none could be chosen. */
+  private static final class ClassChoice {
+    private final IClass cls;
+    private final String note;
+    private final String error;
+
+    private ClassChoice(IClass cls, String note, String error) {
+      this.cls = cls;
+      this.note = note;
+      this.error = error;
+    }
+  }
+
+  /**
+   * The class called {@code className} an object is typed by. Several classes of one name may exist
+   * (the layers of a design each own one): {@code modelPackage} picks by owner, otherwise the class
+   * shown on this diagram, otherwise the first class that has every slot attribute.
+   */
+  private ClassChoice findClassForObject(
+      IDiagramUIModel diagram, String className, String modelPackage, Set<String> attributes) {
+    List<IClass> candidates = new ArrayList<>();
     IShapeUIModel shown = findShape(diagram, className, IClass.class);
     if (shown != null) {
-      return (IClass) shown.getModelElement();
+      candidates.add((IClass) shown.getModelElement());
     }
-    return DiagramUtils.findModelElementByName(className, IClass.class);
+    for (IClass c : DiagramUtils.findAllModelElements(IClass.class)) {
+      if (className.equals(c.getName()) && candidates.stream().noneMatch(k -> sameModel(k, c))) {
+        candidates.add(c);
+      }
+    }
+    if (PackageObjectDiagramUtils.isValidName(modelPackage)) {
+      for (IClass c : candidates) {
+        if (modelPackage.trim().equals(ownerName(c))) {
+          return new ClassChoice(c, " (class of package '" + modelPackage.trim() + "')", null);
+        }
+      }
+      return new ClassChoice(
+          null,
+          "",
+          candidates.isEmpty()
+              ? null
+              : "No class '"
+                  + className
+                  + "' in package '"
+                  + modelPackage.trim()
+                  + "' (owners: "
+                  + owners(candidates)
+                  + ")");
+    }
+    if (candidates.isEmpty()) {
+      return new ClassChoice(null, "", null);
+    }
+    IClass chosen = null;
+    for (IClass c : candidates) {
+      boolean complete = true;
+      for (String a : attributes) {
+        complete &= findAttribute(c, a) != null;
+      }
+      if (complete) {
+        chosen = c;
+        break;
+      }
+    }
+    if (chosen == null) {
+      // keep the single/shown class: the caller reports its missing attributes
+      if (candidates.size() == 1) {
+        return new ClassChoice(candidates.get(0), "", null);
+      }
+      return new ClassChoice(
+          null,
+          "",
+          "None of the "
+              + candidates.size()
+              + " classes named '"
+              + className
+              + "' (owners: "
+              + owners(candidates)
+              + ") has the slot attribute(s) "
+              + String.join(", ", attributes)
+              + "; add them to the class first or pick one with modelPackage");
+    }
+    return new ClassChoice(
+        chosen, candidates.size() > 1 ? " (class of '" + ownerName(chosen) + "')" : "", null);
+  }
+
+  private static boolean sameModel(IModelElement a, IModelElement b) {
+    return a.getId().equals(b.getId());
+  }
+
+  private static String ownerName(IModelElement element) {
+    IModelElement owner = element.getParent();
+    return owner == null ? "(project)" : owner.getName();
+  }
+
+  private static String owners(List<IClass> classes) {
+    List<String> names = new ArrayList<>();
+    for (IClass c : classes) {
+      names.add(ownerName(c));
+    }
+    return String.join(", ", names);
   }
 
   /** An attribute of the class or of one of its superclasses (VP: generalization from = parent). */
@@ -897,6 +1007,9 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
       int[] grown = PackageObjectDiagramUtils.encloseChildren(old, children, INNER_PAD);
       if (grown[2] != old[2] || grown[3] != old[3]) {
         current.setBounds(grown[0], grown[1], grown[2], grown[3]);
+        // the frames beside it move away (with what they hold): a dependency between two of them
+        // needs room for its <<keyword>> between the boxes
+        pushApart(current, PACKAGE_PUSH_GAP);
       }
       IDiagramElement parent = current.getParent();
       current =
@@ -905,6 +1018,9 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               : null;
     }
   }
+
+  /** Free space kept between package frames that a grown frame pushed aside. */
+  private static final int PACKAGE_PUSH_GAP = 100;
 
   private static int[] bounds(IDiagramElement de) {
     return new int[] {de.getX(), de.getY(), de.getWidth(), de.getHeight()};

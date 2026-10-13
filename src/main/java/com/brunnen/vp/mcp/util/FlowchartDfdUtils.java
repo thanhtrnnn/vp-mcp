@@ -274,19 +274,26 @@ public final class FlowchartDfdUtils {
    * @return the next ID
    */
   public static String nextDfdId(List<String> existingIds, String defaultPrefix) {
-    // Level-0 numbering 1.0, 2.0, 3.0 continues with the next whole number
+    // Level-0 numbering 1.0, 2.0, 3.0 continues with the next whole number, also when a plain
+    // "1" is among them ([1, 5.0] -> 6.0)
     if (existingIds != null && !existingIds.isEmpty()) {
       long maxWhole = -1;
       boolean allWhole = true;
+      boolean anyLevelZero = false;
       for (String id : existingIds) {
-        Matcher m = id == null ? null : LEVEL_ZERO.matcher(id.trim());
-        if (m == null || !m.matches()) {
+        String trimmed = id == null ? "" : id.trim();
+        Matcher m = LEVEL_ZERO.matcher(trimmed);
+        if (m.matches()) {
+          anyLevelZero = true;
+          maxWhole = Math.max(maxWhole, parseOrZero(m.group(1)));
+        } else if (trimmed.matches("\\d+")) {
+          maxWhole = Math.max(maxWhole, parseOrZero(trimmed));
+        } else {
           allWhole = false;
           break;
         }
-        maxWhole = Math.max(maxWhole, parseOrZero(m.group(1)));
       }
-      if (allWhole) {
+      if (allWhole && anyLevelZero) {
         return (maxWhole + 1) + ".0";
       }
     }
@@ -310,6 +317,35 @@ public final class FlowchartDfdUtils {
       }
     }
     return prefix + (max + 1);
+  }
+
+  /**
+   * Next marker letter for an external entity: {@code [] -> a}, {@code [a, b] -> c}; after z the
+   * markers continue as aa, ab... Ids that are not letters are ignored.
+   *
+   * @param existingIds the markers already used on the diagram
+   * @return the next free marker
+   */
+  public static String nextEntityId(List<String> existingIds) {
+    java.util.Set<String> used = new java.util.HashSet<>();
+    if (existingIds != null) {
+      for (String id : existingIds) {
+        if (id != null) {
+          used.add(id.trim().toLowerCase(java.util.Locale.ROOT));
+        }
+      }
+    }
+    for (int n = 0; ; n++) {
+      StringBuilder sb = new StringBuilder();
+      int v = n;
+      do {
+        sb.insert(0, (char) ('a' + v % 26));
+        v = v / 26 - 1;
+      } while (v >= 0);
+      if (!used.contains(sb.toString())) {
+        return sb.toString();
+      }
+    }
   }
 
   /**
@@ -512,5 +548,42 @@ public final class FlowchartDfdUtils {
       return t.substring(1);
     }
     return t;
+  }
+
+  /**
+   * Column layout of a data flow diagram: one column per role (entities, processes, stores; empty
+   * columns collapse), the elements of a column ordered by where the elements they exchange data
+   * with stand, and spread so linked elements face each other when they can.
+   *
+   * @param columns column of each element (0 left)
+   * @param widths width of each element
+   * @param heights height of each element
+   * @param edges pairs {a, b} of elements joined by a flow (indexes)
+   * @param colGap free space between columns (room for the flow labels)
+   * @param rowGap free space between the elements of a column
+   * @param originX left edge of the layout
+   * @param originY top edge of the layout
+   * @return the top-left corner {x, y} of each element
+   */
+  public static int[][] columnLayout(
+      int[] columns,
+      int[] widths,
+      int[] heights,
+      int[][] edges,
+      int colGap,
+      int rowGap,
+      int originX,
+      int originY) {
+    // the same layering as a communication diagram, turned a quarter: columns are its rows
+    // the processes keep their order: entities and stores line up with the processes they feed
+    int[][] turned =
+        CommunicationDiagramUtils.layeredLayout(
+            columns, heights, widths, edges, rowGap, colGap, originY, originX, 1);
+    int[][] result = new int[turned.length][2];
+    for (int i = 0; i < turned.length; i++) {
+      result[i][0] = turned[i][1];
+      result[i][1] = turned[i][0];
+    }
+    return result;
   }
 }

@@ -3,6 +3,7 @@ package com.brunnen.vp.mcp.util;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -262,7 +263,7 @@ public class BpmnUtilsTest {
         BpmnUtils.newPoolBounds(0, 0, 0, 0, Collections.<Rectangle>emptyList()));
     assertEquals(
         "Next pool below the lowest one",
-        new Rectangle(40, 380, 900, 160),
+        new Rectangle(40, 340 + BpmnUtils.POOL_GAP, 900, 160),
         BpmnUtils.newPoolBounds(0, 0, 0, 0, Arrays.asList(new Rectangle(40, 40, 900, 300))));
     assertEquals(
         "Explicit bounds are kept",
@@ -474,5 +475,82 @@ public class BpmnUtilsTest {
     Point last = route.get(route.size() - 1);
     org.junit.Assert.assertTrue(
         "ends on the target's border", last.x == 400 || last.x == 510 || last.y == 420);
+  }
+
+  @Test
+  public void branchesOfOneGatewayLeaveThroughDifferentVertices() {
+    Rectangle gateway = new Rectangle(300, 300, 40, 40);
+    Rectangle up = new Rectangle(420, 100, 90, 45);
+    Rectangle loopBack = new Rectangle(100, 98, 90, 45);
+    java.util.Set<Integer> used = new java.util.HashSet<>();
+    BpmnUtils.FlowRoute first =
+        BpmnUtils.routeFlow(gateway, true, up, false, used, new java.util.ArrayList<>());
+    assertEquals(BpmnUtils.EXIT_TOP, first.exit());
+    used.add(first.exit());
+    BpmnUtils.FlowRoute second =
+        BpmnUtils.routeFlow(gateway, true, loopBack, false, used, new java.util.ArrayList<>());
+    assertEquals("the top vertex is taken", BpmnUtils.EXIT_LEFT, second.exit());
+    assertNotEquals(first.points().get(0), second.points().get(0));
+  }
+
+  @Test
+  public void aFlowAvoidsAnElementInTheWayOfItsVertex() {
+    Rectangle event = new Rectangle(500, 300, 30, 30);
+    Rectangle target = new Rectangle(620, 100, 90, 45);
+    // another event sits straight above the source: the top vertex route runs through it
+    java.util.List<Rectangle> obstacles = java.util.Arrays.asList(new Rectangle(500, 200, 30, 30));
+    BpmnUtils.FlowRoute route =
+        BpmnUtils.routeFlow(event, true, target, false, new java.util.HashSet<>(), obstacles);
+    assertEquals(BpmnUtils.EXIT_RIGHT, route.exit());
+  }
+
+  @Test
+  public void aResponseMessageFlowRunsBesideItsRequest() {
+    Rectangle a = new Rectangle(100, 100, 90, 45);
+    Rectangle b = new Rectangle(100, 300, 90, 45);
+    java.util.List<Point> request =
+        BpmnUtils.messageRoute(a, b, 220, new java.util.ArrayList<>(), 0);
+    java.util.List<Point> response =
+        BpmnUtils.messageRoute(b, a, 220, new java.util.ArrayList<>(), 1);
+    assertNotEquals("legs apart", request.get(0).x, response.get(response.size() - 1).x);
+    assertNotEquals("gap lines apart", request.get(1).y, response.get(1).y);
+  }
+
+  @Test
+  public void unknownKindsAreNotMistakenForKnownOnes() {
+    assertNull(BpmnUtils.parseGatewayKind("xor2"));
+    assertNull(BpmnUtils.parseGatewayKind("or3"));
+    assertEquals(BpmnUtils.GatewayKind.EXCLUSIVE, BpmnUtils.parseGatewayKind("XOR"));
+    assertEquals(BpmnUtils.GatewayKind.EVENT_BASED, BpmnUtils.parseGatewayKind("event-based"));
+    assertEquals(
+        BpmnUtils.GatewayKind.EVENT_BASED, BpmnUtils.parseGatewayKind("Event Based Gateway"));
+  }
+
+  @Test
+  public void aLongTaskNameWrapsIntoABoxOfReadableWidth() {
+    int[] size = BpmnUtils.taskSize(410, 45, "Kiem tra tinh trang phong hat va gia gio cao diem");
+    assertEquals(BpmnUtils.MAX_TASK_WIDTH, size[0]);
+    assertTrue("taller to hold the extra lines", size[1] > 45);
+  }
+
+  @Test
+  public void aFullRowContinuesOnASecondRow() {
+    Rectangle body = new Rectangle(70, 240, 870, 160);
+    List<Rectangle> row = new java.util.ArrayList<>();
+    row.add(new Rectangle(100, 298, 90, 45));
+    row.add(new Rectangle(820, 298, 90, 45));
+    Point next = BpmnUtils.nextNodePosition(row, body, 90, 45);
+    assertEquals("back at the start of the row", body.x + BpmnUtils.FIRST_NODE_INSET, next.x);
+    assertTrue("below the lowest node", next.y >= 298 + 45 + BpmnUtils.NODE_GAP);
+  }
+
+  @Test
+  public void aFlowBackToTheNextRowEntersTheTopOfItsTarget() {
+    Rectangle end = new Rectangle(880, 98, 90, 45);
+    Rectangle start = new Rectangle(100, 202, 90, 45);
+    assertEquals(
+        Arrays.asList(
+            new Point(925, 143), new Point(925, 172), new Point(145, 172), new Point(145, 202)),
+        BpmnUtils.route(end, false, start, false, false));
   }
 }

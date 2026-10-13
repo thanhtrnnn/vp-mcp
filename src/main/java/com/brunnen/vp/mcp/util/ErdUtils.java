@@ -120,7 +120,23 @@ public final class ErdUtils {
       String sc = args.length > 1 ? args[1].trim() : String.valueOf(scale);
       return new String[] {t.substring(0, open).trim(), l, sc};
     }
-    return new String[] {t, String.valueOf(length), String.valueOf(scale)};
+    // a varchar without a length would be an unbounded "varchar" in the DDL: the book's 255
+    int len = "varchar".equalsIgnoreCase(t) && length <= 0 ? DEFAULT_VARCHAR_LENGTH : length;
+    return new String[] {t, String.valueOf(len), String.valueOf(scale)};
+  }
+
+  /** Length given to a varchar column that names none. */
+  public static final int DEFAULT_VARCHAR_LENGTH = 255;
+
+  /**
+   * Whether a table or column name is a plain SQL identifier: a letter or underscore, then letters,
+   * digits and underscores, ASCII only (the DDL writes names unquoted).
+   *
+   * @param name the name
+   * @return true for a plain identifier
+   */
+  public static boolean isSqlIdentifier(String name) {
+    return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
   }
 
   /**
