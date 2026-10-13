@@ -119,6 +119,93 @@ public final class DiagramUtils {
     getDiagramManager().openDiagram(diagram);
   }
 
+  private static final java.util.Map<String, String[]> TYPE_ALIASES = typeAliases();
+
+  private static java.util.Map<String, String[]> typeAliases() {
+    java.util.Map<String, String[]> m = new java.util.LinkedHashMap<>();
+    m.put("usecase", new String[] {"UseCaseDiagram"});
+    m.put("uc", new String[] {"UseCaseDiagram"});
+    m.put("class", new String[] {"ClassDiagram"});
+    m.put("sequence", new String[] {"InteractionDiagram"});
+    m.put("interaction", new String[] {"InteractionDiagram"});
+    m.put("communication", new String[] {"CommunicationDiagram"});
+    m.put("collaboration", new String[] {"CommunicationDiagram"});
+    m.put("state", new String[] {"StateDiagram"});
+    m.put("statemachine", new String[] {"StateDiagram"});
+    m.put("activity", new String[] {"ActivityDiagram"});
+    m.put("component", new String[] {"ComponentDiagram"});
+    m.put("deployment", new String[] {"DeploymentDiagram"});
+    m.put("package", new String[] {"PackageDiagram"});
+    m.put("object", new String[] {"ObjectDiagram"});
+    m.put("er", new String[] {"ERDiagram"});
+    m.put("erd", new String[] {"ERDiagram"});
+    m.put("entityrelationship", new String[] {"ERDiagram"});
+    m.put("bpmn", new String[] {"BusinessProcessDiagram"});
+    m.put("businessprocess", new String[] {"BusinessProcessDiagram"});
+    m.put("flowchart", new String[] {"Flowchart"});
+    m.put(
+        "dfd",
+        new String[] {
+          "DataFlowDiagram", "GaneSarsonDFD", "YourdonAndCoadDFD", "YourdonDeMarcoDFD"
+        });
+    m.put(
+        "dataflow",
+        new String[] {
+          "DataFlowDiagram", "GaneSarsonDFD", "YourdonAndCoadDFD", "YourdonDeMarcoDFD"
+        });
+    return java.util.Collections.unmodifiableMap(m);
+  }
+
+  /**
+   * The exact Visual Paradigm diagram type names a {@code listDiagrams} filter stands for. A
+   * friendly name (sequence, state machine, ER, communication, BPMN, DFD...), a type name with or
+   * without its "Diagram" suffix, case, spaces and dashes ignored. Never a substring match: "ER" is
+   * the entity relationship diagram only, not every type that contains the letters.
+   *
+   * @param filter the filter text
+   * @return the matching type names; empty for a blank filter (no filtering) or an unknown name
+   */
+  public static List<String> diagramTypesFor(String filter) {
+    List<String> result = new ArrayList<>();
+    if (filter == null) {
+      return result;
+    }
+    String key = filter.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z]", "");
+    if (key.isEmpty()) {
+      return result;
+    }
+    String[] alias = TYPE_ALIASES.get(key);
+    if (alias == null && key.endsWith("diagram")) {
+      alias = TYPE_ALIASES.get(key.substring(0, key.length() - "diagram".length()));
+    }
+    if (alias != null) {
+      result.addAll(java.util.Arrays.asList(alias));
+    }
+    return result;
+  }
+
+  /**
+   * Whether a diagram of Visual Paradigm type {@code diagramType} passes a {@code listDiagrams}
+   * filter: a blank filter passes everything, a known friendly name passes its exact types, any
+   * other text must equal the type name (ignoring case and a trailing "Diagram").
+   *
+   * @param diagramType VP's type name of the diagram
+   * @param filter the filter text, may be blank
+   * @return true when the diagram is listed
+   */
+  public static boolean matchesTypeFilter(String diagramType, String filter) {
+    if (filter == null || filter.trim().isEmpty()) {
+      return true;
+    }
+    List<String> exact = diagramTypesFor(filter);
+    if (!exact.isEmpty()) {
+      return exact.contains(diagramType);
+    }
+    String key = filter.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z]", "");
+    String type = diagramType == null ? "" : diagramType.toLowerCase(java.util.Locale.ROOT);
+    return type.equals(key) || type.equals(key + "diagram");
+  }
+
   public static boolean isValidName(String name) {
     return name != null && !name.trim().isEmpty();
   }

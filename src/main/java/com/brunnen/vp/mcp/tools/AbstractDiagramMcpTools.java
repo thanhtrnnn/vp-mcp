@@ -50,6 +50,81 @@ public abstract class AbstractDiagramMcpTools {
 
   private final java.util.Map<String, Integer> elementZoneCounts = new HashMap<>();
 
+  /** The tool instance of each family the server registered, for the cross-family tools. */
+  private static final java.util.Map<Class<?>, AbstractDiagramMcpTools> FAMILIES =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  protected AbstractDiagramMcpTools() {
+    FAMILIES.putIfAbsent(getClass(), this);
+  }
+
+  /**
+   * The registered instance of a tool family (it holds that family's per-diagram state), or a fresh
+   * one when none was registered, e.g. in a unit test.
+   */
+  protected static <T extends AbstractDiagramMcpTools> T familyOf(
+      Class<T> type, java.util.function.Supplier<T> fallback) {
+    AbstractDiagramMcpTools registered = FAMILIES.get(type);
+    return registered != null ? type.cast(registered) : fallback.get();
+  }
+
+  /**
+   * Hook of {@code setElementBounds}: a family that lays out its own diagram type (it knows what a
+   * moved or resized shape drags along) moves {@code shape} itself and returns the result text. The
+   * default returns null: the diagram is not this family's, the shared move applies.
+   *
+   * @param diagram the diagram
+   * @param shape the shape called {@code name}
+   * @param name the name the caller used
+   * @param x new left edge
+   * @param y new top edge
+   * @param width new width, {@code <= 0} to fit the content
+   * @param height new height, {@code <= 0} to fit the content
+   * @return the result text, or null when the diagram is not this family's
+   */
+  protected String moveOwnShape(
+      IDiagramUIModel diagram,
+      IDiagramElement shape,
+      String name,
+      int x,
+      int y,
+      int width,
+      int height) {
+    return null;
+  }
+
+  /**
+   * Hook of {@code rerouteConnectors}: a family with its own connector routing re-routes the whole
+   * diagram. The default returns -1: the diagram is not this family's.
+   *
+   * @param diagram the diagram
+   * @return the number of connectors rerouted, or -1 when the diagram is not this family's
+   */
+  protected int rerouteOwnConnectors(IDiagramUIModel diagram) {
+    return -1;
+  }
+
+  /**
+   * Hook of {@code autoLayoutDiagram}: a family that knows how to arrange its own diagram type does
+   * it and returns the result text. The default returns null: Visual Paradigm's generic layout
+   * applies.
+   *
+   * @param diagram the diagram
+   * @return the result text, or null when the diagram is not this family's
+   */
+  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
+    return null;
+  }
+
+  /**
+   * Every tool family registered with the server, for the tools that act on any diagram type.
+   *
+   * @return the registered tool instances
+   */
+  protected static List<AbstractDiagramMcpTools> families() {
+    return new ArrayList<>(FAMILIES.values());
+  }
+
   /**
    * Run a callable on the Swing EDT and return the result.
    *
@@ -799,6 +874,174 @@ public abstract class AbstractDiagramMcpTools {
     return new Point(shape.getX() + shape.getWidth() / 2, shape.getY() + shape.getHeight() / 2);
   }
 
+  // --- Shape trees and bounds ---
+
+  /** Space kept between a container's border and the shapes it holds when it is resized. */
+  protected static final int CONTAINER_PAD = 12;
+
+  /**
+   * Every shape nested in {@code shape} at any depth, parents before their children.
+   *
+   * @param shape the container
+   * @return its descendants
+   */
+  protected static List<IShapeUIModel> nestedShapes(IShapeUIModel shape) {
+    List<IShapeUIModel> result = new ArrayList<>();
+    collectNested(shape, result, new java.util.HashSet<>());
+    return result;
+  }
+
+  private static void collectNested(
+      IShapeUIModel shape, List<IShapeUIModel> out, java.util.Set<String> seen) {
+    IShapeUIModel[] children = shape.toChildArray();
+    if (children == null) {
+      return;
+    }
+    for (IShapeUIModel child : children) {
+      if (child != null && seen.add(child.getId())) {
+        out.add(child);
+        collectNested(child, out, seen);
+      }
+    }
+  }
+
+  /**
+   * Move a shape and everything nested in it by (dx, dy). Moving a container through the API leaves
+   * the shapes inside it where they were, so each descendant that did not follow is moved
+   * explicitly; connectors are not touched.
+   *
+   * @param shape the container
+   * @param dx horizontal shift
+   * @param dy vertical shift
+   */
+  protected static void moveShapeTree(IShapeUIModel shape, int dx, int dy) {
+    List<IShapeUIModel> nested = nestedShapes(shape);
+    int[][] before = new int[nested.size()][];
+    for (int i = 0; i < before.length; i++) {
+      before[i] = rect(nested.get(i));
+    }
+    shape.setBounds(shape.getX() + dx, shape.getY() + dy, shape.getWidth(), shape.getHeight());
+    for (int i = 0; i < before.length; i++) {
+      IShapeUIModel d = nested.get(i);
+      if (d.getX() == before[i][0] && d.getY() == before[i][1]) {
+        d.setBounds(before[i][0] + dx, before[i][1] + dy, before[i][2], before[i][3]);
+      }
+    }
+  }
+
+  /**
+   * Move and/or resize a shape the way {@code setElementBounds} promises: a container (package,
+   * node, component, boundary...) takes the shapes nested in it along, and is never smaller than
+   * they need ({@link #CONTAINER_PAD} beyond the farthest one); a shape without children is fitted
+   * to its content when {@code width} or {@code height} is {@code <= 0}, a container then keeps its
+   * size (it is sized by what it holds, not by its label).
+   *
+   * @param de the shape
+   * @param x new left edge
+   * @param y new top edge
+   * @param width new width, {@code <= 0} to fit
+   * @param height new height, {@code <= 0} to fit
+   * @return a note for the result text, empty when nothing needs saying
+   */
+  protected String applyBounds(IDiagramElement de, int x, int y, int width, int height) {
+    if (!(de instanceof IShapeUIModel)) {
+      if (width <= 0 || height <= 0) {
+        de.setBounds(x, y, de.getWidth(), de.getHeight());
+      } else {
+        de.setBounds(x, y, width, height);
+      }
+      return "";
+    }
+    IShapeUIModel shape = (IShapeUIModel) de;
+    List<IShapeUIModel> nested = nestedShapes(shape);
+    int w = width;
+    int h = height;
+    if (width <= 0 || height <= 0) {
+      if (!holdsShapes(nested)) {
+        fitShape(shape);
+      }
+      w = shape.getWidth();
+      h = shape.getHeight();
+    }
+    int dx = x - shape.getX();
+    int dy = y - shape.getY();
+    String note = "";
+    if (holdsShapes(nested)) {
+      int right = 0;
+      int bottom = 0;
+      IShapeUIModel[] direct = shape.toChildArray();
+      for (IShapeUIModel child : direct == null ? new IShapeUIModel[0] : direct) {
+        if (child.getModelElement() instanceof com.vp.plugin.model.IPort) {
+          continue; // ports straddle the border by design
+        }
+        right = Math.max(right, child.getX() + dx + child.getWidth());
+        bottom = Math.max(bottom, child.getY() + dy + child.getHeight());
+      }
+      if (right > x + w || bottom > y + h) {
+        w = Math.max(w, right + CONTAINER_PAD - x);
+        h = Math.max(h, bottom + CONTAINER_PAD - y);
+        note = " (grown to enclose its contents)";
+      }
+    }
+    int[][] before = new int[nested.size()][];
+    for (int i = 0; i < before.length; i++) {
+      before[i] = rect(nested.get(i));
+    }
+    shape.setBounds(x, y, w, h);
+    for (int i = 0; i < before.length; i++) {
+      IShapeUIModel d = nested.get(i);
+      if (d.getX() == before[i][0] && d.getY() == before[i][1] && (dx != 0 || dy != 0)) {
+        d.setBounds(before[i][0] + dx, before[i][1] + dy, before[i][2], before[i][3]);
+      }
+    }
+    return note;
+  }
+
+  /** Whether nested shapes include more than ports (a container is sized by what it holds). */
+  private static boolean holdsShapes(List<IShapeUIModel> nested) {
+    for (IShapeUIModel n : nested) {
+      if (!(n.getModelElement() instanceof com.vp.plugin.model.IPort)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Re-anchor the connectors of a shape and of everything nested in it (VP does not reroute
+   * connectors when bounds change through the API).
+   *
+   * @param shape the moved shape
+   */
+  protected static void recenterTree(IDiagramElement shape) {
+    recenterConnectorsOf(shape);
+    if (shape instanceof IShapeUIModel) {
+      for (IShapeUIModel inner : nestedShapes((IShapeUIModel) shape)) {
+        recenterConnectorsOf(inner);
+      }
+    }
+  }
+
+  /**
+   * The result text of a bounds change.
+   *
+   * @param elementName the name the caller used
+   * @param de the shape
+   * @return {@code Bounds of 'name': x,y WxH}
+   */
+  protected static String boundsResult(String elementName, IDiagramElement de) {
+    return "Bounds of '"
+        + elementName
+        + "': "
+        + de.getX()
+        + ","
+        + de.getY()
+        + " "
+        + de.getWidth()
+        + "x"
+        + de.getHeight();
+  }
+
   // --- Overlap resolution ---
 
   /** Free space kept between neighbouring shapes when they are pushed apart. */
@@ -980,8 +1223,11 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "listDiagrams",
       description =
-          "List all diagrams in the project, optionally filtered by type (UseCase, Class,"
-              + " Sequence, ER, State)")
+          "List all diagrams in the project, optionally filtered by type: UseCase, Class,"
+              + " Sequence (= Interaction), Communication (= Collaboration), State (= StateMachine),"
+              + " Activity, Component, Deployment, Package, Object, ER (= ERD), BPMN, Flowchart,"
+              + " DFD, or the exact type shown in the list. The type is matched exactly, never as"
+              + " part of another name")
   public String listDiagrams(String type) {
     try {
       return runOnEdt(
@@ -994,9 +1240,7 @@ public abstract class AbstractDiagramMcpTools {
               if (obj instanceof IDiagramUIModel) {
                 IDiagramUIModel d = (IDiagramUIModel) obj;
                 String diagramType = d.getType();
-                if (type == null
-                    || type.trim().isEmpty()
-                    || diagramType.toLowerCase().contains(type.toLowerCase())) {
+                if (DiagramUtils.matchesTypeFilter(diagramType, type)) {
                   diagrams.add(d.getName() + " (" + diagramType + ")");
                 }
               }
@@ -1043,6 +1287,9 @@ public abstract class AbstractDiagramMcpTools {
                 .append(elements.size())
                 .append("):\n");
             for (IDiagramElement de : elements) {
+              if (isHiddenStub(de)) {
+                continue;
+              }
               IModelElement model = de.getModelElement();
               String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
               String name = model != null ? model.getName() : "(unnamed)";
@@ -1160,6 +1407,133 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   @Tool(
+      name = "getDiagramGeometry",
+      description =
+          "Dump the geometry of any diagram: every shape with its bounds (nested shapes indented"
+              + " under their container, with the owner of a port) and every connector with its"
+              + " end shapes, its points and the bounds of its caption. For checking a layout"
+              + " without a picture: connector ends, label positions, shapes inside their frame")
+  public String getDiagramGeometry(String diagramName) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = DiagramUtils.findDiagramByName(diagramName);
+            if (diagram == null) {
+              return diagramNotFound(diagramName);
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("Geometry of '")
+                .append(diagramName)
+                .append("' (")
+                .append(diagram.getType())
+                .append("):\n");
+            for (IShapeUIModel top : diagram.toShapeUIModelArray()) {
+              if (top.getParent() == null) {
+                describeShape(sb, top, 1);
+              }
+            }
+            for (IDiagramElement de : getDiagramElementsList(diagram)) {
+              if (de instanceof IConnectorUIModel) {
+                describeConnectorGeometry(sb, (IConnectorUIModel) de);
+              }
+            }
+            return sb.toString();
+          });
+    } catch (Exception e) {
+      return "Error reading geometry: " + e.getMessage();
+    }
+  }
+
+  private static void describeShape(StringBuilder sb, IShapeUIModel shape, int depth) {
+    if (isHiddenStub(shape)) {
+      return;
+    }
+    IModelElement model = shape.getModelElement();
+    String indent = "  ".repeat(depth);
+    sb.append(indent)
+        .append(model != null ? getSemanticTypeName(model) : shape.getShapeType())
+        .append(": ")
+        .append(model != null ? displayName(model) : shape.getCustomText())
+        .append(" ")
+        .append(shape.getX())
+        .append(",")
+        .append(shape.getY())
+        .append(" ")
+        .append(shape.getWidth())
+        .append("x")
+        .append(shape.getHeight());
+    com.vp.plugin.diagram.ICaptionUIModel cap = shape.getCaptionUIModel();
+    if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+      sb.append(" caption ")
+          .append(cap.getX())
+          .append(",")
+          .append(cap.getY())
+          .append(" ")
+          .append(cap.getWidth())
+          .append("x")
+          .append(cap.getHeight());
+    }
+    sb.append("\n");
+    IShapeUIModel[] children = shape.toChildArray();
+    if (children != null) {
+      for (IShapeUIModel child : children) {
+        if (child != null) {
+          describeShape(sb, child, depth + 1);
+        }
+      }
+    }
+  }
+
+  private static void describeConnectorGeometry(StringBuilder sb, IConnectorUIModel c) {
+    IModelElement model = c.getModelElement();
+    sb.append("  ")
+        .append(model != null ? getSemanticTypeName(model) : c.getShapeType())
+        .append(
+            model != null && model.getName() != null && !model.getName().isEmpty()
+                ? " '" + model.getName() + "'"
+                : "")
+        .append(": ")
+        .append(c.getFromShape() != null ? shapeLabel(c.getFromShape()) : "?")
+        .append(" -> ")
+        .append(c.getToShape() != null ? shapeLabel(c.getToShape()) : "?")
+        .append(" points");
+    Point[] points = c.getPoints();
+    if (points != null) {
+      for (Point p : points) {
+        sb.append(" (").append(p.x).append(",").append(p.y).append(")");
+      }
+    }
+    com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
+    if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+      sb.append(" caption ")
+          .append(cap.getX())
+          .append(",")
+          .append(cap.getY())
+          .append(" ")
+          .append(cap.getWidth())
+          .append("x")
+          .append(cap.getHeight());
+    }
+    sb.append("\n");
+  }
+
+  private static String shapeLabel(IShapeUIModel shape) {
+    IModelElement model = shape.getModelElement();
+    return model != null ? displayName(model) : shape.getShapeType();
+  }
+
+  /**
+   * Whether an element is one of the invisible helper shapes of a sequence diagram: the small
+   * per-message activations VP draws, which the tools make fully transparent under the long bar of
+   * their lifeline. They would bury the lifelines and messages in the element list.
+   */
+  private static boolean isHiddenStub(IDiagramElement de) {
+    return de instanceof com.vp.plugin.diagram.shape.IActivationUIModel
+        && ((IShapeUIModel) de).getFillColor() != null
+        && ((IShapeUIModel) de).getFillColor().getTransparency() >= 100;
+  }
+
+  @Tool(
       name = "autoLayoutDiagram",
       description =
           "Apply structured layout to a diagram. MUST be called AFTER adding all elements. "
@@ -1172,6 +1546,12 @@ public abstract class AbstractDiagramMcpTools {
             IDiagramUIModel diagram = DiagramUtils.findDiagramByName(diagramName);
             if (diagram == null) {
               return "Diagram not found: " + diagramName;
+            }
+            for (AbstractDiagramMcpTools family : families()) {
+              String done = family.layoutOwnDiagram(diagram);
+              if (done != null) {
+                return done;
+              }
             }
             layoutDiagram(diagram);
             return "Auto-layout applied to diagram: " + diagramName;
@@ -1189,9 +1569,9 @@ public abstract class AbstractDiagramMcpTools {
       name = "removeDiagramElement",
       description =
           "Remove an element (shape or connector) from a diagram by its model element name. Only"
-              + " the view goes (with the connectors attached to a removed shape); the model"
-              + " element stays in the project, except lifelines, links and messages, which exist"
-              + " on their diagram only")
+              + " the view goes (with the connectors attached to a removed shape and the shapes"
+              + " nested in it); the model element stays in the project, except lifelines, links"
+              + " and messages, which exist on their diagram only")
   public String removeDiagramElement(String diagramName, String elementName) {
     try {
       return runOnEdt(
@@ -1208,22 +1588,117 @@ public abstract class AbstractDiagramMcpTools {
             if (!(element instanceof IBaseDiagramElement)) {
               return "Error removing element: cannot remove '" + elementName + "'";
             }
-            if (isDiagramOwned(element.getModelElement())) {
-              // Lifelines, links and messages live on their diagram only: removing just the view
-              // makes VP ask "has no referenced view. Delete from the repository?" in a modal
-              // dialog that blocks the call. The classifier a lifeline stands for stays.
-              ((IBaseDiagramElement) element).deleteModel();
-            } else {
-              ((IBaseDiagramElement) element).deleteViewOnly();
-            }
+            IBaseDiagramElement target = (IBaseDiagramElement) element;
+            boolean owned = isDiagramOwned(element.getModelElement());
+            // Visual Paradigm asks "X has no referenced view. Delete X from the repository?" in a
+            // modal dialog for every model left without a view (connectors of a removed shape,
+            // nested shapes, ports, lifelines...), which would block this call for good. The
+            // dialogs are answered "No to all": only the views go.
+            List<String> prompts = new ArrayList<>();
+            answeringDeletePrompts(
+                () -> {
+                  if (owned) {
+                    // Lifelines, links and messages live on their diagram only. The classifier a
+                    // lifeline stands for stays.
+                    target.deleteModel();
+                  } else {
+                    target.deleteViewOnly();
+                  }
+                  return null;
+                },
+                prompts);
             IDiagramElement left = findDiagramElementByName(diagram, elementName);
             if (left != null && left.getId().equals(element.getId())) {
               return "Error removing element: Visual Paradigm kept '" + elementName + "'";
             }
-            return "Removed element '" + elementName + "' from diagram '" + diagramName + "'";
+            return "Removed element '"
+                + elementName
+                + "' from diagram '"
+                + diagramName
+                + "'"
+                + (prompts.isEmpty()
+                    ? ""
+                    : " (Visual Paradigm asked to delete "
+                        + prompts.size()
+                        + " model(s) left without a view, answered No: "
+                        + String.join(", ", prompts)
+                        + " stay in the project)");
           });
     } catch (Exception e) {
       return "Error removing element: " + e.getMessage();
+    }
+  }
+
+  /**
+   * Run a Visual Paradigm call that may open its "has no referenced view. Delete from the
+   * repository?" prompt and answer every such prompt "No to all" from the EDT's own event loop (the
+   * prompt is modal: the call would otherwise never return). Other dialogs are left alone.
+   *
+   * @param call the call
+   * @param prompts receives the name of each model the prompt asked about
+   * @param <T> the result type
+   * @return the call's result
+   * @throws Exception whatever the call throws
+   */
+  protected <T> T answeringDeletePrompts(Callable<T> call, List<String> prompts) throws Exception {
+    javax.swing.Timer watch = new javax.swing.Timer(100, e -> answerDeletePrompts(prompts));
+    watch.start();
+    try {
+      return call.call();
+    } finally {
+      watch.stop();
+    }
+  }
+
+  private static void answerDeletePrompts(List<String> prompts) {
+    for (java.awt.Window window : java.awt.Window.getWindows()) {
+      if (!window.isShowing()
+          || !(window instanceof java.awt.Dialog)
+          || !((java.awt.Dialog) window).isModal()) {
+        continue;
+      }
+      List<javax.swing.AbstractButton> buttons = new ArrayList<>();
+      StringBuilder text = new StringBuilder();
+      collectDialogParts(window, buttons, text);
+      String message = text.toString();
+      if (!message.contains("no referenced view")) {
+        continue;
+      }
+      javax.swing.AbstractButton answer = null;
+      for (javax.swing.AbstractButton b : buttons) {
+        String label = b.getText() == null ? "" : b.getText().trim();
+        if (label.equalsIgnoreCase("No to all")) {
+          answer = b;
+          break;
+        }
+        if (label.equalsIgnoreCase("No") && answer == null) {
+          answer = b;
+        }
+      }
+      int quote = message.indexOf('"');
+      int end = message.indexOf('"', quote + 1);
+      prompts.add(quote >= 0 && end > quote ? message.substring(quote + 1, end) : "?");
+      if (answer != null) {
+        answer.doClick();
+      } else {
+        window.dispose();
+      }
+    }
+  }
+
+  private static void collectDialogParts(
+      java.awt.Component component, List<javax.swing.AbstractButton> buttons, StringBuilder text) {
+    if (component instanceof javax.swing.AbstractButton) {
+      buttons.add((javax.swing.AbstractButton) component);
+    } else if (component instanceof javax.swing.JLabel) {
+      text.append(((javax.swing.JLabel) component).getText()).append(' ');
+    } else if (component instanceof javax.swing.text.JTextComponent) {
+      text.append(((javax.swing.text.JTextComponent) component).getText()).append(' ');
+    }
+    if (component instanceof java.awt.Container) {
+      for (java.awt.Component child : ((java.awt.Container) component).getComponents()) {
+        collectDialogParts(child, buttons, text);
+      }
     }
   }
 
@@ -1430,7 +1905,7 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /** Stereotypes of an element, except VP's built-in one named like the element type. */
-  private static void appendStereotypes(StringBuilder sb, IModelElement model, String type) {
+  protected static void appendStereotypes(StringBuilder sb, IModelElement model, String type) {
     IStereotype[] stereotypes = model.toStereotypeModelArray();
     if (stereotypes != null) {
       for (IStereotype st : stereotypes) {
@@ -1442,12 +1917,12 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /** A multiplicity worth printing: empty for unset or VP's "Unspecified". */
-  private static String multiplicityText(String multiplicity) {
+  protected static String multiplicityText(String multiplicity) {
     return multiplicity == null || "Unspecified".equalsIgnoreCase(multiplicity) ? "" : multiplicity;
   }
 
   /** UML visibility symbol (+ - # ~) for VP's visibility keyword, empty when unset. */
-  private static String visibilitySymbol(String visibility) {
+  protected static String visibilitySymbol(String visibility) {
     if (visibility == null) {
       return "";
     }

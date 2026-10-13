@@ -1023,10 +1023,10 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     for (IShapeUIModel d : descendants) {
       moved.add(d.getId());
     }
-    moveShapeTree(lane, 0, dy);
+    moveShapeWithCaptions(lane, 0, dy);
     for (IShapeUIModel kid : kids) {
       if (!moved.contains(kid.getId())) {
-        moveShapeTree(kid, 0, dy);
+        moveShapeWithCaptions(kid, 0, dy);
       }
     }
   }
@@ -1047,7 +1047,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     for (IShapeUIModel shape : below) {
-      moveShapeTree(shape, 0, dy);
+      moveShapeWithCaptions(shape, 0, dy);
     }
     return !below.isEmpty();
   }
@@ -1057,7 +1057,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
    * not documented, so each descendant that did not follow is moved explicitly. Captions are reset
    * because event and gateway names are detached labels that do not follow their shape.
    */
-  private void moveShapeTree(IShapeUIModel shape, int dx, int dy) {
+  private void moveShapeWithCaptions(IShapeUIModel shape, int dx, int dy) {
     List<IShapeUIModel> descendants = new ArrayList<>();
     collectDescendants(shape, descendants, new HashSet<>());
     int[][] before = new int[descendants.size()][];
@@ -1153,7 +1153,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     if (x == to.getX() && y == to.getY()) {
       return null;
     }
-    moveShapeTree(to, x - to.getX(), y - to.getY());
+    moveShapeWithCaptions(to, x - to.getX(), y - to.getY());
     IShapeUIModel pool = poolOf(diagram, to);
     if (pool != null) {
       relayoutPools(diagram, pool);
@@ -1195,7 +1195,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
         }
       }
       if (free && y > 0) {
-        moveShapeTree(data, x - data.getX(), y - data.getY());
+        moveShapeWithCaptions(data, x - data.getX(), y - data.getY());
         data.resetCaption();
         IShapeUIModel pool = poolOf(diagram, data);
         if (pool != null) {

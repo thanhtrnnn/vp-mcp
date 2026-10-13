@@ -253,4 +253,64 @@ public class CommunicationDiagramUtilsTest {
     assertTrue("arrow below the loop", slot[1] > 140 + CommunicationDiagramUtils.SELF_LOOP_HEIGHT);
     assertTrue("caption below the arrow", slot[3] > slot[1]);
   }
+
+  @Test
+  public void layeredLayoutPutsTheActorOnTopAndEntitiesUnderTheirBoundary() {
+    // 0 actor, 1 and 2 boundaries chained, 3 and 4 entities of boundary 1 and 2
+    int[] layers = {0, 1, 1, 3, 3};
+    int[] widths = {60, 100, 100, 80, 80};
+    int[] heights = {70, 60, 60, 60, 60};
+    int[][] edges = {{0, 1}, {1, 2}, {1, 3}, {2, 4}};
+    int[][] pos =
+        CommunicationDiagramUtils.layeredLayout(layers, widths, heights, edges, 200, 150, 50, 40);
+    assertEquals("actor row at the top", 40, pos[0][1]);
+    assertTrue(
+        "boundaries on one row below the actor", pos[1][1] == pos[2][1] && pos[1][1] > pos[0][1]);
+    assertTrue("entities below the boundaries", pos[3][1] > pos[1][1] && pos[3][1] == pos[4][1]);
+    assertTrue("chained boundaries keep their gap", pos[2][0] - (pos[1][0] + 100) >= 200);
+    assertTrue("entity 3 under boundary 1, entity 4 under boundary 2", pos[3][0] < pos[4][0]);
+    for (int[] p : pos) {
+      assertTrue("never left of the origin", p[0] >= 50);
+    }
+  }
+
+  @Test
+  public void layeredLayoutCollapsesEmptyLayersAndOrdersByLinks() {
+    // no control row; entity A is linked to the second boundary, entity B to the first
+    int[] layers = {1, 1, 3, 3};
+    int[] w = {100, 100, 80, 80};
+    int[] h = {60, 60, 60, 60};
+    int[][] pos =
+        CommunicationDiagramUtils.layeredLayout(
+            layers, w, h, new int[][] {{0, 3}, {1, 2}}, 200, 150, 0, 0);
+    assertEquals(0, pos[0][1]);
+    assertEquals("entities directly one row below", 60 + 150, pos[2][1]);
+    assertTrue("entity 3 (linked to boundary 0) left of entity 2", pos[3][0] < pos[2][0]);
+    assertTrue("boundaries keep their creation order", pos[0][0] < pos[1][0]);
+  }
+
+  @Test
+  public void layerOfFollowsTheBookNotation() {
+    assertEquals(
+        CommunicationDiagramUtils.LAYER_ACTOR, CommunicationDiagramUtils.layerOf(true, ""));
+    assertEquals(
+        CommunicationDiagramUtils.LAYER_BOUNDARY,
+        CommunicationDiagramUtils.layerOf(false, "boundary"));
+    assertEquals(
+        CommunicationDiagramUtils.LAYER_BOUNDARY, CommunicationDiagramUtils.layerOf(false, ""));
+    assertEquals(
+        CommunicationDiagramUtils.LAYER_ENTITY, CommunicationDiagramUtils.layerOf(false, "entity"));
+  }
+
+  @Test
+  public void layeredLayoutReadsAChainOfScreensAlongItsLinks() {
+    // actor 0 -> screens 1, 2, 3 created in that order but chained 1 - 3 - 2
+    int[] layers = {0, 1, 1, 1};
+    int[] w = {60, 100, 100, 100};
+    int[] h = {70, 60, 60, 60};
+    int[][] edges = {{0, 1}, {1, 3}, {3, 2}};
+    int[][] pos = CommunicationDiagramUtils.layeredLayout(layers, w, h, edges, 200, 150, 0, 0);
+    assertTrue("chain order 1, 3, 2", pos[1][0] < pos[3][0] && pos[3][0] < pos[2][0]);
+    assertEquals("one row of screens", pos[1][1], pos[2][1]);
+  }
 }

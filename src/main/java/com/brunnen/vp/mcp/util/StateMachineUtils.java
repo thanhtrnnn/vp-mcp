@@ -30,6 +30,19 @@ public final class StateMachineUtils {
     return trimmed.isEmpty() ? null : trimmed;
   }
 
+  /**
+   * Whether two transition labels are the same (null and blank are both "no label").
+   *
+   * @param a one label, may be null
+   * @param b the other label, may be null
+   * @return true when both are empty or both read the same
+   */
+  public static boolean sameLabel(String a, String b) {
+    String x = normalizeTransitionLabel(a);
+    String y = normalizeTransitionLabel(b);
+    return x == null ? y == null : x.equals(y);
+  }
+
   /** How far a self-transition loops out to the right of its state. */
   public static final int SELF_LOOP_WIDTH = 36;
 
@@ -83,9 +96,27 @@ public final class StateMachineUtils {
    */
   public static int[] spotNextTo(
       int[] source, int w, int h, java.util.List<int[]> others, int gap, int maxBottom) {
+    return spotNextTo(source, w, h, others, gap, Math.max(60, gap * 2 / 3), maxBottom);
+  }
+
+  /**
+   * {@link #spotNextTo(int[], int, int, java.util.List, int, int)} with its own vertical gap: the
+   * label of a vertical transition sits beside the line, so only a sideways neighbour needs room
+   * for the label's width.
+   *
+   * @param source the source rectangle {x, y, w, h}
+   * @param w width of the state to place
+   * @param h height of the state to place
+   * @param others rectangles of the obstacles (not the state being placed)
+   * @param gap free space between the source and a state placed beside it
+   * @param vgap free space between the source and a state placed above or below it
+   * @param maxBottom lowest bottom edge a state placed below may have
+   * @return {x, y}, or null when every side is blocked
+   */
+  public static int[] spotNextTo(
+      int[] source, int w, int h, java.util.List<int[]> others, int gap, int vgap, int maxBottom) {
     int cx = source[0] + source[2] / 2;
     int cy = source[1] + source[3] / 2;
-    int vgap = Math.max(60, gap * 2 / 3);
     int[][] candidates = {
       {cx - w / 2, source[1] + source[3] + vgap},
       {source[0] + source[2] + gap, cy - h / 2},
@@ -121,6 +152,50 @@ public final class StateMachineUtils {
       }
     }
     return null;
+  }
+
+  /**
+   * Top-left corner for a state that several states lead to (the common final state): centered
+   * below all of them, {@code vgap} under the lowest, so every transition runs downwards instead of
+   * one of them cutting across the diagram. Null when that spot overlaps an obstacle or one of the
+   * straight transitions would cross one.
+   *
+   * @param sources the rectangles {x, y, w, h} of the states leading to it
+   * @param w width of the state to place
+   * @param h height of the state to place
+   * @param others rectangles of the obstacles (not the sources and not the state being placed)
+   * @param vgap free space under the lowest source
+   * @return {x, y}, or null when the spot is blocked
+   */
+  public static int[] spotBelowAll(
+      java.util.List<int[]> sources, int w, int h, java.util.List<int[]> others, int vgap) {
+    if (sources.isEmpty()) {
+      return null;
+    }
+    int sum = 0;
+    int bottom = Integer.MIN_VALUE;
+    for (int[] s : sources) {
+      sum += s[0] + s[2] / 2;
+      bottom = Math.max(bottom, s[1] + s[3]);
+    }
+    int cx = sum / sources.size();
+    int[] spot = {Math.max(cx - w / 2, 0), bottom + vgap};
+    int[] rect = {spot[0], spot[1], w, h};
+    for (int[] o : others) {
+      if (o[0] < rect[0] + w + 20
+          && rect[0] < o[0] + o[2] + 20
+          && o[1] < rect[1] + h + 20
+          && rect[1] < o[1] + o[3] + 20) {
+        return null;
+      }
+      for (int[] s : sources) {
+        if (DiagramUtils.segmentHitsRect(
+            s[0] + s[2] / 2.0, s[1] + s[3] / 2.0, spot[0] + w / 2.0, spot[1] + h / 2.0, o, 4)) {
+          return null;
+        }
+      }
+    }
+    return spot;
   }
 
   /**

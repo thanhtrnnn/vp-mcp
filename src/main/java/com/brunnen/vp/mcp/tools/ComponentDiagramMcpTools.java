@@ -530,6 +530,36 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  @Override
+  protected String moveOwnShape(
+      IDiagramUIModel diagram,
+      IDiagramElement de,
+      String name,
+      int x,
+      int y,
+      int width,
+      int height) {
+    if (!(diagram instanceof IComponentDiagramUIModel)
+        || !(de instanceof IShapeUIModel)
+        || kindOf(de) == Kind.PORT) {
+      return null;
+    }
+    // a component takes its nested components and ports along; its ports sit on its new edges
+    IShapeUIModel shape = (IShapeUIModel) de;
+    String note = applyBounds(shape, x, y, width, height);
+    snapPorts(shape);
+    for (IShapeUIModel port : portsOf(shape)) {
+      port.resetCaption();
+      placePortCaption(shape, port);
+    }
+    IShapeUIModel up = parentShapeOf(shape);
+    if (up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE)) {
+      encloseUpwards(up); // a shape moved or grown out of its frame pulls the frame along
+    }
+    recenterTree(shape);
+    return boundsResult(name, shape) + note;
+  }
+
   @Tool(
       name = "addComponentPackage",
       description =

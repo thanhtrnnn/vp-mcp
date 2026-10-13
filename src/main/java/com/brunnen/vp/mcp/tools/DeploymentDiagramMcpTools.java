@@ -610,6 +610,29 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
         occupied, w, h, originX, originY, maxRight, INNER_GAP);
   }
 
+  @Override
+  protected String moveOwnShape(
+      IDiagramUIModel diagram,
+      IDiagramElement de,
+      String name,
+      int x,
+      int y,
+      int width,
+      int height) {
+    if (!(diagram instanceof IDeploymentDiagramUIModel) || !(de instanceof IShapeUIModel)) {
+      return null;
+    }
+    // a node takes its nested nodes, artifacts and components along; a frame it left grows
+    IShapeUIModel shape = (IShapeUIModel) de;
+    String note = applyBounds(shape, x, y, width, height);
+    IShapeUIModel parent = parentShapeOf(shape);
+    if (parent != null) {
+      growContainers(diagram, shape, parent);
+    }
+    recenterTree(shape);
+    return boundsResult(name, shape) + note;
+  }
+
   /**
    * Grow {@code parent} and every container above it so each encloses its children, pushing
    * siblings that a grown container would overlap.
@@ -649,26 +672,6 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       container = outer;
     }
     return pushed;
-  }
-
-  /**
-   * Move a shape and its descendants. Whether VP moves child shapes along with their container is
-   * not documented, so each descendant that did not follow is moved explicitly.
-   */
-  private void moveShapeTree(IShapeUIModel shape, int dx, int dy) {
-    List<IShapeUIModel> descendants = new ArrayList<>();
-    collectDescendants(shape, descendants, new HashSet<>());
-    int[][] before = new int[descendants.size()][];
-    for (int i = 0; i < descendants.size(); i++) {
-      before[i] = boundsOf(descendants.get(i));
-    }
-    shape.setBounds(shape.getX() + dx, shape.getY() + dy, shape.getWidth(), shape.getHeight());
-    for (int i = 0; i < descendants.size(); i++) {
-      IShapeUIModel d = descendants.get(i);
-      if (d.getX() == before[i][0] && d.getY() == before[i][1]) {
-        d.setBounds(before[i][0] + dx, before[i][1] + dy, before[i][2], before[i][3]);
-      }
-    }
   }
 
   /**

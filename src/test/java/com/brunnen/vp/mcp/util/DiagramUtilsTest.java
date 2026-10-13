@@ -158,4 +158,28 @@ public class DiagramUtilsTest {
         "above or below the containers, clear of them",
         bends[0][1] < 40 - 6 || bends[0][1] > 340 + 6);
   }
+
+  @Test
+  public void typeFilterAcceptsFriendlyNamesForTheExactType() {
+    assertTrue(DiagramUtils.matchesTypeFilter("InteractionDiagram", "Sequence"));
+    assertTrue(DiagramUtils.matchesTypeFilter("InteractionDiagram", "sequence diagram"));
+    assertTrue(DiagramUtils.matchesTypeFilter("StateDiagram", "StateMachine"));
+    assertTrue(DiagramUtils.matchesTypeFilter("StateDiagram", "State Machine"));
+    assertTrue(DiagramUtils.matchesTypeFilter("CommunicationDiagram", "Collaboration"));
+    assertTrue(DiagramUtils.matchesTypeFilter("ERDiagram", "ER"));
+    assertTrue(DiagramUtils.matchesTypeFilter("GaneSarsonDFD", "DFD"));
+    assertTrue(DiagramUtils.matchesTypeFilter("ClassDiagram", ""));
+    assertTrue(DiagramUtils.matchesTypeFilter("ClassDiagram", null));
+  }
+
+  @Test
+  public void typeFilterNeverMatchesPartOfAnotherTypeName() {
+    // "ER" used to match "InteractionDiagram" (inteRactionDiagram) as a substring
+    assertFalse(DiagramUtils.matchesTypeFilter("InteractionDiagram", "ER"));
+    assertFalse(DiagramUtils.matchesTypeFilter("ClassDiagram", "Diagram"));
+    assertFalse(DiagramUtils.matchesTypeFilter("StateDiagram", "Sequence"));
+    assertTrue(DiagramUtils.matchesTypeFilter("Flowchart", "flowchart"));
+    assertTrue(DiagramUtils.matchesTypeFilter("ObjectDiagram", "ObjectDiagram"));
+    assertTrue(DiagramUtils.diagramTypesFor("bogus").isEmpty());
+  }
 }

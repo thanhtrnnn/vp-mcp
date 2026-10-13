@@ -12,7 +12,6 @@ import com.vp.plugin.ExportDiagramAsImageOption;
 import com.vp.plugin.ExportDiagramAsImageWatermark;
 import com.vp.plugin.diagram.ICaptionUIModel;
 import com.vp.plugin.diagram.IClassDiagramUIModel;
-import com.vp.plugin.diagram.ICommunicationDiagramUIModel;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
@@ -54,6 +53,15 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
   /** Free space between classes, room for association names and multiplicities. */
   private static final int CLASS_GAP = 80;
+
+  /**
+   * Room reserved for an auto-placed class: members are usually added after the class, so its box
+   * is still the size of its name when the next class is placed. Reserving a realistic box keeps
+   * about three classes in a row once the members grow the boxes.
+   */
+  private static final int CLASS_SLOT_W = 220;
+
+  private static final int CLASS_SLOT_H = 140;
 
   @Tool(name = "createClassDiagram", description = "Create a new class diagram in Visual Paradigm")
   public String createClassDiagram(String diagramName) {
@@ -109,6 +117,28 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (findClassOnDiagram(diagram, className) != null) {
               return "Class already on diagram: " + className;
             }
+            // the generalization and realizations are drawn to classes that are on this diagram:
+            // refuse before anything is created rather than leave a class without its relations
+            List<String> supers = new ArrayList<>();
+            if (isSet(extendsClass)) {
+              supers.add(extendsClass.trim());
+            }
+            if (isSet(implementsInterfaces)) {
+              for (String name : implementsInterfaces.split(",")) {
+                if (!name.trim().isEmpty()) {
+                  supers.add(name.trim());
+                }
+              }
+            }
+            for (String name : supers) {
+              if (findClassOnDiagram(diagram, name) == null) {
+                return "Error adding class: '"
+                    + name
+                    + "' (extends/implements) is not on diagram '"
+                    + diagramName
+                    + "'; add it first or leave it out";
+              }
+            }
             // Visual Paradigm keeps names unique per owner: a class of that name in the same
             // owner is the same class, so it is reused (a new view) instead of being created again
             // and silently renamed "Class2".
@@ -147,11 +177,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               classDe.setBounds(x, y, classDe.getWidth(), classDe.getHeight());
             } else {
               // keep the layer row of the zone (forms / DAOs / entities) but never overlap
-              int rowY = classDe.getY();
-              int[] spot = freeSpot(diagram, classDe, 50, rowY, AUTO_ROW_RIGHT, CLASS_GAP);
+              int[] spot = classSlot(diagram, classDe, 50, classDe.getY());
               classDe.setBounds(spot[0], spot[1], classDe.getWidth(), classDe.getHeight());
             }
-            List<String> unresolved = new ArrayList<>();
 
             // Set package fill color if provided
             if (packageName != null
@@ -168,45 +196,27 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             // Create generalization (extends) if provided
-            if (extendsClass != null && !extendsClass.trim().isEmpty()) {
-              IClass parent = findModelElement(extendsClass.trim(), IClass.class, diagram);
-              if (parent != null) {
-                IDiagramElement parentDe = findDiagramElementByName(diagram, extendsClass.trim());
-                if (parentDe != null) {
-                  // VP stores a generalization as from = general (parent), to = specific
-                  IGeneralization gen = getModelElementFactory().createGeneralization();
-                  gen.setFrom(parent);
-                  gen.setTo(cls);
-                  connectCentered(diagram, gen, parentDe, classDe);
-                } else {
-                  unresolved.add(extendsClass.trim());
-                }
-              } else {
-                unresolved.add(extendsClass.trim());
-              }
+            if (isSet(extendsClass)) {
+              IClass parent = findClassOnDiagram(diagram, extendsClass.trim());
+              IDiagramElement parentDe = findDiagramElementByName(diagram, extendsClass.trim());
+              // VP stores a generalization as from = general (parent), to = specific
+              IGeneralization gen = getModelElementFactory().createGeneralization();
+              gen.setFrom(parent);
+              gen.setTo(cls);
+              connectCentered(diagram, gen, parentDe, classDe);
             }
 
             // Create realization (implements) if provided
-            if (implementsInterfaces != null && !implementsInterfaces.trim().isEmpty()) {
-              for (String ifaceName : implementsInterfaces.split(",")) {
-                String trimmed = ifaceName.trim();
-                if (!trimmed.isEmpty()) {
-                  IClass iface = findModelElement(trimmed, IClass.class, diagram);
-                  if (iface != null) {
-                    IDiagramElement ifaceDe = findDiagramElementByName(diagram, trimmed);
-                    if (ifaceDe != null) {
-                      IRealization real = getModelElementFactory().createRealization();
-                      real.setFrom(iface); // VP: supplier -> client
-                      real.setTo(cls);
-                      connectCentered(diagram, real, ifaceDe, classDe);
-                    } else {
-                      unresolved.add(trimmed);
-                    }
-                  } else {
-                    unresolved.add(trimmed);
-                  }
-                }
+            for (String ifaceName : supers) {
+              if (isSet(extendsClass) && ifaceName.equals(extendsClass.trim())) {
+                continue;
               }
+              IClass iface = findClassOnDiagram(diagram, ifaceName);
+              IDiagramElement ifaceDe = findDiagramElementByName(diagram, ifaceName);
+              IRealization real = getModelElementFactory().createRealization();
+              real.setFrom(iface); // VP: supplier -> client
+              real.setTo(cls);
+              connectCentered(diagram, real, ifaceDe, classDe);
             }
 
             StringBuilder result = new StringBuilder();
@@ -230,12 +240,6 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             result.append(" at ").append(classDe.getX()).append(",").append(classDe.getY());
             result.append(" ").append(classDe.getWidth()).append("x").append(classDe.getHeight());
-            if (!unresolved.isEmpty()) {
-              result
-                  .append(
-                      "; WARNING: not on this diagram, so no generalization/realization drawn: ")
-                  .append(String.join(", ", unresolved));
-            }
             return result.toString();
           });
     } catch (Exception e) {
@@ -276,6 +280,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Class not found: " + className;
             }
 
+            if (!isSet(attributeName)) {
+              return "Attribute name must not be empty";
+            }
             // Duplicate attribute guard
             Iterator<?> existingAttrs = cls.attributeIterator();
             while (existingAttrs.hasNext()) {
@@ -352,6 +359,15 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Class not found: " + className;
             }
 
+            if (!isSet(operationName)) {
+              return "Operation name must not be empty";
+            }
+            String badParam = firstBadParameter(params);
+            if (badParam != null) {
+              return "Bad parameter '"
+                  + badParam
+                  + "': write params as 'name: Type, name2: Type2' (a name may be used alone)";
+            }
             // Duplicate operation guard
             Iterator<?> existingOps = cls.operationIterator();
             while (existingOps.hasNext()) {
@@ -441,6 +457,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Class not on diagram: " + (fromElement == null ? fromClass : toClass);
             }
 
+            String badMultiplicity = firstBadMultiplicity(fromMultiplicity, toMultiplicity);
+            if (badMultiplicity != null) {
+              return badMultiplicity;
+            }
             IAssociation assoc = getModelElementFactory().createAssociation();
             assoc.setFrom(source);
             assoc.setTo(target);
@@ -544,6 +564,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Class not on diagram: " + (fromElement == null ? fromClass : toClass);
             }
 
+            String badMultiplicity = firstBadMultiplicity(fromMultiplicity, toMultiplicity);
+            if (badMultiplicity != null) {
+              return badMultiplicity;
+            }
             IAssociation assoc = getModelElementFactory().createAssociation();
             assoc.setFrom(source);
             assoc.setTo(target);
@@ -595,6 +619,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Class not on diagram: " + (fromElement == null ? fromClass : toClass);
             }
 
+            String badMultiplicity = firstBadMultiplicity(fromMultiplicity, toMultiplicity);
+            if (badMultiplicity != null) {
+              return badMultiplicity;
+            }
             IAssociation assoc = getModelElementFactory().createAssociation();
             assoc.setFrom(source);
             assoc.setTo(target);
@@ -928,9 +956,14 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Element is not a shape: " + className;
             }
 
+            Color color;
+            try {
+              color = Color.decode(backgroundColor == null ? "" : backgroundColor.trim());
+            } catch (NumberFormatException e) {
+              return "Unknown color '" + backgroundColor + "': use #RRGGBB, e.g. #7AD2FF";
+            }
             IShapeUIModel shape = (IShapeUIModel) de;
             IShapeUIModelFillColor fill = shape.getFillColor();
-            Color color = Color.decode(backgroundColor.trim());
             fill.setColor1(color, true);
 
             return "Set color of '" + className + "' to " + backgroundColor.trim();
@@ -992,11 +1025,16 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                   break;
                 }
               }
+              StringBuilder header = new StringBuilder("  - ");
               if (isInterface) {
-                report.append("  - Interface: ").append(className).append("\n");
-              } else {
-                report.append("  - ").append(className).append("\n");
+                header.append("Interface: ");
               }
+              header.append(className);
+              appendStereotypes(header, cls, "Interface");
+              if (cls.isAbstract()) {
+                header.append(" (abstract)");
+              }
+              report.append(header).append("\n");
 
               // Attributes
               List<String> attrs = new ArrayList<>();
@@ -1005,11 +1043,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 Object attrObj = attrIter.next();
                 if (attrObj instanceof IAttribute) {
                   IAttribute attr = (IAttribute) attrObj;
-                  String vis = attr.getVisibility();
                   String attrStr =
-                      (vis != null ? vis : "")
+                      visibilitySymbol(attr.getVisibility())
                           + attr.getName()
-                          + (attr.getType() != null ? ":" + attr.getType() : "");
+                          + (attr.getType() != null ? " : " + attr.getType() : "");
                   attrs.add(attrStr);
                 }
               }
@@ -1025,10 +1062,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 if (opObj instanceof IOperation) {
                   IOperation op = (IOperation) opObj;
                   StringBuilder opStr = new StringBuilder();
-                  String opVis = op.getVisibility();
-                  if (opVis != null) {
-                    opStr.append(opVis);
-                  }
+                  opStr.append(visibilitySymbol(op.getVisibility()));
                   opStr.append(op.getName()).append("(");
                   List<String> params = new ArrayList<>();
                   Iterator<?> paramIter = op.parameterIterator();
@@ -1038,14 +1072,14 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                       IParameter p = (IParameter) paramObj;
                       String paramText = p.getName();
                       if (p.getType() != null) {
-                        paramText += ":" + p.getType();
+                        paramText += " : " + p.getType();
                       }
                       params.add(paramText);
                     }
                   }
                   opStr.append(String.join(", ", params)).append(")");
                   if (op.getReturnType() != null) {
-                    opStr.append(":").append(op.getReturnType());
+                    opStr.append(" : ").append(op.getReturnType());
                   }
                   ops.add(opStr.toString());
                 }
@@ -1055,7 +1089,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
-            // Relationships
+            // Relationships. Visual Paradigm stores a generalization general -> specific and a
+            // realization interface -> implementation: the report names the subclass and the
+            // implementing class first, the way the arrow is drawn.
             List<String> relationships = new ArrayList<>();
             Iterator<?> elemIter = diagram.diagramElementIterator();
             while (elemIter.hasNext()) {
@@ -1064,55 +1100,27 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 IModelElement model = ((IDiagramElement) obj).getModelElement();
                 if (model instanceof IGeneralization) {
                   IGeneralization gen = (IGeneralization) model;
-                  String from =
-                      gen.getFrom() != null
-                          ? nameMap.getOrDefault(gen.getFrom(), gen.getFrom().getName())
-                          : "?";
-                  String to =
-                      gen.getTo() != null
-                          ? nameMap.getOrDefault(gen.getTo(), gen.getTo().getName())
-                          : "?";
-                  relationships.add("Generalization: " + from + " extends " + to);
+                  relationships.add(
+                      "Generalization: "
+                          + reportName(nameMap, gen.getTo())
+                          + " extends "
+                          + reportName(nameMap, gen.getFrom()));
                 } else if (model instanceof IAssociation) {
-                  IAssociation assoc = (IAssociation) model;
-                  String from =
-                      assoc.getFrom() != null
-                          ? nameMap.getOrDefault(assoc.getFrom(), assoc.getFrom().getName())
-                          : "?";
-                  String to =
-                      assoc.getTo() != null
-                          ? nameMap.getOrDefault(assoc.getTo(), assoc.getTo().getName())
-                          : "?";
-                  IAssociationEnd toEnd = (IAssociationEnd) assoc.getToEnd();
-                  String mult =
-                      toEnd != null && toEnd.getMultiplicity() != null
-                          ? " [" + toEnd.getMultiplicity() + "]"
-                          : "";
-                  String relName =
-                      assoc.getName() != null ? " (name: " + assoc.getName() + ")" : "";
-                  relationships.add("Association: " + from + " -> " + to + mult + relName);
+                  relationships.add(describeAssociation((IAssociation) model, nameMap));
                 } else if (model instanceof IDependency) {
                   IDependency dep = (IDependency) model;
-                  String from =
-                      dep.getFrom() != null
-                          ? nameMap.getOrDefault(dep.getFrom(), dep.getFrom().getName())
-                          : "?";
-                  String to =
-                      dep.getTo() != null
-                          ? nameMap.getOrDefault(dep.getTo(), dep.getTo().getName())
-                          : "?";
-                  relationships.add("Dependency: " + from + " -> " + to);
+                  relationships.add(
+                      "Dependency: "
+                          + reportName(nameMap, dep.getFrom())
+                          + " -> "
+                          + reportName(nameMap, dep.getTo()));
                 } else if (model instanceof IRealization) {
                   IRealization real = (IRealization) model;
-                  String from =
-                      real.getFrom() != null
-                          ? nameMap.getOrDefault(real.getFrom(), real.getFrom().getName())
-                          : "?";
-                  String to =
-                      real.getTo() != null
-                          ? nameMap.getOrDefault(real.getTo(), real.getTo().getName())
-                          : "?";
-                  relationships.add("Realization: " + from + " implements " + to);
+                  relationships.add(
+                      "Realization: "
+                          + reportName(nameMap, real.getTo())
+                          + " implements "
+                          + reportName(nameMap, real.getFrom()));
                 }
               }
             }
@@ -1130,11 +1138,100 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  /** A multiplicity VP understands: {@code n}, {@code *}, {@code n..m}, {@code n..*}. */
+  private static final java.util.regex.Pattern MULTIPLICITY =
+      java.util.regex.Pattern.compile("(\\d+|\\*|[nm])(\\.\\.(\\d+|\\*|[nm]))?");
+
+  /** An error text for the first multiplicity that is not {@code n}, {@code *} or {@code n..m}. */
+  private static String firstBadMultiplicity(String... multiplicities) {
+    for (String m : multiplicities) {
+      if (isSet(m) && !MULTIPLICITY.matcher(m.trim()).matches()) {
+        return "Bad multiplicity '"
+            + m.trim()
+            + "': use a number, *, n, m or a range such as 0..1, 1..*, 2..n";
+      }
+    }
+    return null;
+  }
+
+  /** The first entry of a {@code name: Type, ...} list that is not a plain identifier. */
+  private static String firstBadParameter(String params) {
+    if (!isSet(params)) {
+      return null;
+    }
+    for (String param : params.split(",")) {
+      String trimmed = param.trim();
+      if (trimmed.isEmpty()) {
+        continue;
+      }
+      String name =
+          trimmed.contains(":") ? trimmed.substring(0, trimmed.indexOf(':')).trim() : trimmed;
+      if (!name.matches("[\\p{L}_][\\p{L}\\p{N}_]*")) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
+
+  private static String reportName(
+      java.util.Map<IModelElement, String> nameMap, IModelElement element) {
+    return element == null ? "?" : nameMap.getOrDefault(element, element.getName());
+  }
+
+  /**
+   * One report line for an association: its kind (association, aggregation or composition with the
+   * whole named), the ends, the multiplicity at both ends, role names and the name.
+   */
+  private static String describeAssociation(
+      IAssociation assoc, java.util.Map<IModelElement, String> nameMap) {
+    IAssociationEnd fromEnd = (IAssociationEnd) assoc.getFromEnd();
+    IAssociationEnd toEnd = (IAssociationEnd) assoc.getToEnd();
+    String kind = "Association";
+    String whole = null;
+    for (IAssociationEnd end : new IAssociationEnd[] {fromEnd, toEnd}) {
+      String aggregation = aggregationOf(end);
+      if (aggregation != null) {
+        kind = "composite".equals(aggregation) ? "Composition" : "Aggregation";
+        whole = reportName(nameMap, end.getModelElement());
+      }
+    }
+    StringBuilder line = new StringBuilder(kind);
+    line.append(": ")
+        .append(reportName(nameMap, assoc.getFrom()))
+        .append(" -> ")
+        .append(reportName(nameMap, assoc.getTo()));
+    if (whole != null) {
+      line.append(" (whole: ").append(whole).append(")");
+    }
+    String multFrom = fromEnd != null ? multiplicityText(fromEnd.getMultiplicity()) : "";
+    String multTo = toEnd != null ? multiplicityText(toEnd.getMultiplicity()) : "";
+    if (!multFrom.isEmpty() || !multTo.isEmpty()) {
+      line.append(" [").append(multFrom.isEmpty() ? "-" : multFrom);
+      line.append(" .. ").append(multTo.isEmpty() ? "-" : multTo).append("]");
+    }
+    String fromRole = fromEnd != null ? fromEnd.getName() : null;
+    String toRole = toEnd != null ? toEnd.getName() : null;
+    if (isSet(fromRole) || isSet(toRole)) {
+      line.append(" roles ")
+          .append(isSet(fromRole) ? fromRole : "-")
+          .append(" / ")
+          .append(isSet(toRole) ? toRole : "-");
+    }
+    if (isSet(assoc.getName())) {
+      line.append(" (name: ").append(assoc.getName()).append(")");
+    }
+    return line.toString();
+  }
+
   @Tool(
       name = "setElementBounds",
       description =
-          "Move/resize a shape on a diagram. width or height <= 0 keeps the position and fits the"
-              + " shape to its content (e.g. after adding attributes)")
+          "Move/resize a shape on a diagram. width or height <= 0 fits the shape to its content"
+              + " (a container such as a package, node or component keeps its size, and always"
+              + " stays big enough for what it holds). A container takes the shapes nested in it"
+              + " along (ports, artifacts, classes...); a lifeline of a sequence diagram takes its"
+              + " messages and activation bar along; control nodes, pseudo-states and"
+              + " BPMN/flowchart/DFD symbols keep their notation sizes")
   public String setElementBounds(
       String diagramName, String elementName, int x, int y, int width, int height) {
     try {
@@ -1144,61 +1241,29 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
-            if (diagram instanceof ICommunicationDiagramUIModel) {
-              // a participant's links and message arrows have to follow it
-              ICommunicationDiagramUIModel comm = (ICommunicationDiagramUIModel) diagram;
-              IShapeUIModel participant = communication.findParticipant(comm, elementName);
-              if (participant != null) {
-                if (width <= 0 || height <= 0) {
-                  fitShape(participant);
-                }
-                communication.moveParticipant(
-                    comm,
-                    participant,
-                    x,
-                    y,
-                    width > 0 && height > 0 ? width : participant.getWidth(),
-                    width > 0 && height > 0 ? height : participant.getHeight());
-                return boundsResult(elementName, participant);
-              }
-            }
             IDiagramElement de = findDiagramElementByName(diagram, elementName);
             if (de == null) {
               return "Element not on diagram: " + elementName;
             }
-            if (width <= 0 || height <= 0) {
-              fitShape(de);
-              de.setBounds(x, y, de.getWidth(), de.getHeight());
-            } else {
-              de.setBounds(x, y, width, height);
+            // a family that lays out its own diagram type knows what a moved shape drags along
+            for (AbstractDiagramMcpTools family : families()) {
+              String done = family.moveOwnShape(diagram, de, elementName, x, y, width, height);
+              if (done != null) {
+                return done;
+              }
             }
+            String note = applyBounds(de, x, y, width, height);
             if (de.getModelElement() instanceof com.vp.plugin.model.IActor) {
               // An actor's name is a detached label that stays behind when the figure moves.
               de.resetCaption();
             }
             // VP does not reroute connectors when bounds change through the API
-            recenterConnectorsOf(de);
-            return boundsResult(elementName, de);
+            recenterTree(de);
+            return boundsResult(elementName, de) + note;
           });
     } catch (Exception e) {
       return "Error setting bounds: " + e.getMessage();
     }
-  }
-
-  /** The communication tools, which re-lay a moved participant's message arrows out. */
-  private final CommunicationDiagramMcpTools communication = new CommunicationDiagramMcpTools();
-
-  private static String boundsResult(String elementName, IDiagramElement de) {
-    return "Bounds of '"
-        + elementName
-        + "': "
-        + de.getX()
-        + ","
-        + de.getY()
-        + " "
-        + de.getWidth()
-        + "x"
-        + de.getHeight();
   }
 
   @Tool(
@@ -1557,7 +1622,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
   @Tool(
       name = "exportDiagramImage",
-      description = "Open a diagram and export it as a PNG image to an absolute file path")
+      description =
+          "Open a diagram and export it as an image to an absolute file path ending in .png, .jpg"
+              + " or .jpeg (a relative path would land inside Visual Paradigm's own folder)")
   public String exportDiagramImage(String diagramName, String filePath) {
     try {
       return runOnEdt(
@@ -1570,6 +1637,14 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "filePath is required";
             }
             File file = new File(filePath.trim());
+            if (!file.isAbsolute()) {
+              return "filePath must be absolute: " + filePath.trim();
+            }
+            String lower = file.getName().toLowerCase(Locale.ROOT);
+            boolean jpg = lower.endsWith(".jpg") || lower.endsWith(".jpeg");
+            if (!jpg && !lower.endsWith(".png")) {
+              return "filePath must end in .png, .jpg or .jpeg: " + filePath.trim();
+            }
             File dir = file.getAbsoluteFile().getParentFile();
             if (dir != null && !dir.isDirectory() && !dir.mkdirs()) {
               return "Cannot create directory: " + dir;
@@ -1580,7 +1655,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Diagram could not be activated: " + diagramName;
             }
             ExportDiagramAsImageOption exportOption =
-                new ExportDiagramAsImageOption(ExportDiagramAsImageOption.IMAGE_TYPE_PNG);
+                new ExportDiagramAsImageOption(
+                    jpg
+                        ? ExportDiagramAsImageOption.IMAGE_TYPE_JPG
+                        : ExportDiagramAsImageOption.IMAGE_TYPE_PNG);
             ExportDiagramAsImageWatermark emptyWatermark = (graphics, width, height) -> {};
             exportOption.setWatermark(emptyWatermark);
             ApplicationManager.instance()
@@ -1726,12 +1804,22 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
+            // a family with its own connector routing (BPMN, activity...) re-routes its diagram
+            for (AbstractDiagramMcpTools family : families()) {
+              int done = family.rerouteOwnConnectors(diagram);
+              if (done >= 0) {
+                return "Rerouted " + done + " connector(s) on '" + diagramName + "'";
+              }
+            }
             int count = 0;
             for (IDiagramElement de : getDiagramElementsList(diagram)) {
               if (de instanceof IConnectorUIModel) {
                 centerConnector((IConnectorUIModel) de);
                 count++;
               }
+            }
+            if (diagram instanceof IClassDiagramUIModel) {
+              layoutAssociationLabels(diagram, false);
             }
             return "Rerouted " + count + " connector(s) on '" + diagramName + "'";
           });
@@ -1796,16 +1884,26 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
       double fy = from.getY() + from.getHeight() / 2.0;
       double tx = to.getX() + to.getWidth() / 2.0;
       double ty = to.getY() + to.getHeight() / 2.0;
-      double len = Math.hypot(tx - fx, ty - fy);
-      if (len < 1) {
+      if (Math.hypot(tx - fx, ty - fy) < 1) {
         continue;
       }
-      double dx = (tx - fx) / len;
-      double dy = (ty - fy) / len;
+      // The labels follow the drawn route: a connector routed around a shape bends, and its ends
+      // leave the boxes along the first and last leg, not along the straight line between them.
+      List<double[]> route = routeOf(conn, fx, fy, tx, ty);
+      double[] first = route.get(0);
+      double[] second = route.get(1);
+      double[] last = route.get(route.size() - 1);
+      double[] beforeLast = route.get(route.size() - 2);
+      double len1 = Math.hypot(second[0] - first[0], second[1] - first[1]);
+      double lenN = Math.hypot(beforeLast[0] - last[0], beforeLast[1] - last[1]);
+      double dx = (second[0] - first[0]) / Math.max(len1, 1);
+      double dy = (second[1] - first[1]) / Math.max(len1, 1);
+      double ex = (beforeLast[0] - last[0]) / Math.max(lenN, 1);
+      double ey = (beforeLast[1] - last[1]) / Math.max(lenN, 1);
       double nx = -dy;
       double ny = dx;
       double exitFrom = borderDistance(from, dx, dy);
-      double exitTo = borderDistance(to, -dx, -dy);
+      double exitTo = borderDistance(to, ex, ey);
       int ox = relative ? conn.getX() : 0;
       int oy = relative ? conn.getY() : 0;
       IAssociation assoc =
@@ -1820,22 +1918,31 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
       conn.setMultiplicityARectangle(
           labelRect(multA, fx + dx * alongA + nx * 12, fy + dy * alongA + ny * 12, ox, oy));
       conn.setMultiplicityBRectangle(
-          labelRect(multB, tx - dx * alongB + nx * 12, ty - dy * alongB + ny * 12, ox, oy));
+          labelRect(multB, tx + ex * alongB + ey * 12, ty + ey * alongB - ex * 12, ox, oy));
       conn.setShowFromRoleName(false);
       conn.setShowToRoleName(false);
       ICaptionUIModel cap = conn.getCaptionUIModel();
       String name = assoc == null ? null : assoc.getName();
       if (cap != null && name != null && !name.isEmpty()) {
-        int[] fan =
-            fromRank.get(conn)[1] >= toRank.get(conn)[1] ? fromRank.get(conn) : toRank.get(conn);
-        boolean fromSide = fan == fromRank.get(conn);
-        double t = fan[1] > 1 ? 0.3 + 0.1 * (fan[2] % 5) : 0.5;
-        if (!fromSide) {
-          t = 1 - t;
+        // the name sits on the longest visible leg (the whole line when it is straight)
+        double[] leg = nameLeg(route, from, to);
+        double sx = leg[0];
+        double sy = leg[1];
+        double legDx = leg[2];
+        double legDy = leg[3];
+        double span = leg[4];
+        double legNx = -legDy;
+        double legNy = legDx;
+        double t = 0.5;
+        if (route.size() == 2) {
+          int[] fan =
+              fromRank.get(conn)[1] >= toRank.get(conn)[1] ? fromRank.get(conn) : toRank.get(conn);
+          boolean fromSide = fan == fromRank.get(conn);
+          t = fan[1] > 1 ? 0.3 + 0.1 * (fan[2] % 5) : 0.5;
+          if (!fromSide) {
+            t = 1 - t;
+          }
         }
-        double sx = fx + dx * exitFrom;
-        double sy = fy + dy * exitFrom;
-        double span = len - exitFrom - exitTo;
         int w = Math.max(cap.getWidth(), textWidth(name));
         int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
         // keep the name off this association's multiplicities and off every class box: try the
@@ -1855,8 +1962,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
         int[] chosen = null;
         for (double[] option : tries) {
           double side = option[1];
-          double mx = sx + dx * span * option[0] + nx * clearance * side;
-          double my = sy + dy * span * option[0] + ny * clearance * side;
+          double mx = sx + legDx * span * option[0] + legNx * clearance * side;
+          double my = sy + legDy * span * option[0] + legNy * clearance * side;
           int[] r = {(int) Math.round(mx - w / 2.0), (int) Math.round(my - h / 2.0), w, h};
           if (chosen == null) {
             chosen = r;
@@ -1872,6 +1979,77 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
       count++;
     }
     return count;
+  }
+
+  /**
+   * Top-left corner for an auto-placed class: the first spot from (x0, y0), row by row, where a
+   * {@link #CLASS_SLOT_W} x {@link #CLASS_SLOT_H} slot (or the class's own size when larger) keeps
+   * {@link #CLASS_GAP} from the slots of the other top-level shapes.
+   */
+  private static int[] classSlot(IDiagramUIModel diagram, IDiagramElement self, int x0, int y0) {
+    List<int[]> occupied = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getId().equals(self.getId()) || s.getParent() != null || s.getWidth() <= 0) {
+        continue;
+      }
+      int[] r = rect(s);
+      if (s.getModelElement() instanceof IClass) {
+        r[2] = Math.max(r[2], CLASS_SLOT_W);
+        r[3] = Math.max(r[3], CLASS_SLOT_H);
+      }
+      occupied.add(r);
+    }
+    return DiagramUtils.firstFreeSpot(
+        occupied,
+        x0,
+        y0,
+        Math.max(self.getWidth(), CLASS_SLOT_W),
+        Math.max(self.getHeight(), CLASS_SLOT_H),
+        AUTO_ROW_RIGHT,
+        CLASS_GAP);
+  }
+
+  /**
+   * The drawn route of an association as center points: the two shape centers with the connector's
+   * bend points between them (at least two points).
+   */
+  private static List<double[]> routeOf(
+      IAssociationUIModel conn, double fx, double fy, double tx, double ty) {
+    List<double[]> route = new ArrayList<>();
+    route.add(new double[] {fx, fy});
+    Point[] points = conn.getPoints();
+    if (points != null && points.length > 2) {
+      for (int i = 1; i < points.length - 1; i++) {
+        route.add(new double[] {points[i].x, points[i].y});
+      }
+    }
+    route.add(new double[] {tx, ty});
+    return route;
+  }
+
+  /**
+   * {startX, startY, unitDx, unitDy, length} of the leg a connector's name goes on: the longest
+   * visible one, i.e. between the points where the line leaves the first box and enters the last.
+   */
+  private static double[] nameLeg(List<double[]> route, IShapeUIModel from, IShapeUIModel to) {
+    double[] best = null;
+    for (int i = 0; i + 1 < route.size(); i++) {
+      double[] a = route.get(i);
+      double[] b = route.get(i + 1);
+      double len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < 1) {
+        continue;
+      }
+      double ux = (b[0] - a[0]) / len;
+      double uy = (b[1] - a[1]) / len;
+      double startCut = i == 0 ? borderDistance(from, ux, uy) : 0;
+      double endCut = i + 2 == route.size() ? borderDistance(to, -ux, -uy) : 0;
+      double visible = len - startCut - endCut;
+      if (best == null || visible > best[4]) {
+        best = new double[] {a[0] + ux * startCut, a[1] + uy * startCut, ux, uy, visible};
+      }
+    }
+    return best != null ? best : new double[] {route.get(0)[0], route.get(0)[1], 1, 0, 0};
   }
 
   /**

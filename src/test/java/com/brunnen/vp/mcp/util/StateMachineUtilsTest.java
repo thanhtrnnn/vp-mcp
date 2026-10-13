@@ -93,4 +93,44 @@ public class StateMachineUtilsTest {
         StateMachineUtils.transitionLabelSpot(
             new int[][] {{100, 100}, {200, 140}, {300, 100}}, 100, 14));
   }
+
+  @Test
+  public void testSpotBelowAllCentersUnderBothSources() {
+    java.util.List<int[]> sources = new java.util.ArrayList<>();
+    sources.add(new int[] {100, 100, 100, 40});
+    sources.add(new int[] {500, 250, 100, 40});
+    int[] spot = StateMachineUtils.spotBelowAll(sources, 30, 30, new java.util.ArrayList<>(), 70);
+    org.junit.Assert.assertArrayEquals(new int[] {335, 360}, spot);
+  }
+
+  @Test
+  public void testSpotBelowAllIsNullWhenTheLineWouldCrossAState() {
+    java.util.List<int[]> sources = new java.util.ArrayList<>();
+    sources.add(new int[] {100, 100, 100, 40});
+    sources.add(new int[] {500, 100, 100, 40});
+    java.util.List<int[]> others = new java.util.ArrayList<>();
+    others.add(new int[] {260, 200, 100, 40}); // between the sources and the spot below them
+    assertNull(StateMachineUtils.spotBelowAll(sources, 30, 30, others, 70));
+  }
+
+  @Test
+  public void testSpotNextToTakesAnOwnVerticalGap() {
+    java.util.List<int[]> others = new java.util.ArrayList<>();
+    int[] source = {100, 100, 100, 40};
+    others.add(source);
+    org.junit.Assert.assertArrayEquals(
+        new int[] {110, 213}, StateMachineUtils.spotNextTo(source, 80, 40, others, 300, 73, 2000));
+    others.add(new int[] {110, 213, 80, 40});
+    // beside it, a label-wide gap away
+    org.junit.Assert.assertArrayEquals(
+        new int[] {400, 100}, StateMachineUtils.spotNextTo(source, 80, 40, others, 200, 73, 2000));
+  }
+
+  @Test
+  public void testSameLabel() {
+    assertTrue(StateMachineUtils.sameLabel(null, " "));
+    assertTrue(StateMachineUtils.sameLabel("a [b]", " a [b] "));
+    assertFalse(StateMachineUtils.sameLabel("a", "b"));
+    assertFalse(StateMachineUtils.sameLabel("a", null));
+  }
 }

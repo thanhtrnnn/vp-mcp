@@ -1,6 +1,7 @@
 package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
+import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.StateMachineUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.ICaptionUIModel;
@@ -35,7 +36,7 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
   /** Smallest state box: short names still get a readable rounded rectangle. */
   private static final int STATE_MIN_WIDTH = 100;
 
-  private static final int STATE_MIN_HEIGHT = 40;
+  private static final int STATE_MIN_HEIGHT = 30;
 
   /** Default size of the initial/final pseudo state circles. */
   private static final int PSEUDO_SIZE = 30;
@@ -203,6 +204,17 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
               return "A final state cannot have outgoing transitions: " + fromState;
             }
             String caption = StateMachineUtils.normalizeTransitionLabel(label);
+            if (transitionExists(fromElement, toElement, caption)) {
+              return "A transition '"
+                  + fromState
+                  + "' -> '"
+                  + toState
+                  + "'"
+                  + (caption == null ? "" : " " + caption)
+                  + " already exists on diagram '"
+                  + diagramName
+                  + "'";
+            }
             ITransition2 transition = getModelElementFactory().createTransition2();
             IDiagramElement connector = null;
             try {
@@ -214,7 +226,7 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
               if (fromElement.getId().equals(toElement.getId())) {
                 connector = connectSelf(diagram, transition, fromElement);
               } else {
-                placeNextTo(diagram, fromElement, toElement);
+                placeNextTo(diagram, fromElement, toElement, caption);
                 connector = connectCentered(diagram, transition, fromElement, toElement);
               }
             } finally {
@@ -231,6 +243,11 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
               placeLabels(fromElement);
               placeLabels(toElement);
             }
+            // a long label bent to the left of a pair of states can reach past the canvas edge:
+            // the whole diagram then moves right to make room for it
+            makeRoomLeft(diagram);
+            // the name of an initial/final state hangs on a side no transition uses
+            placePseudoCaptions(diagram);
 
             String suffix = caption == null ? "" : " " + caption;
             return "Added transition '" + fromState + "' -> '" + toState + "'" + suffix;
@@ -354,9 +371,12 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
       for (int i = 0; i < points.length; i++) {
         pts[i] = new int[] {points[i].x, points[i].y};
       }
-      int[] spot = StateMachineUtils.transitionLabelSpot(pts, cap.getWidth(), cap.getHeight());
+      // the caption box can be narrower than a long label's text, which then runs past its end
+      String text = c.getModelElement() == null ? null : c.getModelElement().getName();
+      int w = Math.max(cap.getWidth(), text == null ? 0 : text.length() * 7 + 8);
+      int[] spot = StateMachineUtils.transitionLabelSpot(pts, w, cap.getHeight());
       // never left of / above the canvas, where the export would clip it
-      cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), cap.getWidth(), cap.getHeight());
+      cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, cap.getHeight());
     }
   }
 
@@ -434,6 +454,20 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
             // that reads well on the diagram (e.g. "Start"/"End"); it is also the handle used by
             // addTransition. The label is detached and laid out where the caption is reset.
             de.resetCaption();
+            placePseudoCaptions(diagram);
+            String another = "";
+            if (initial) {
+              for (IShapeUIModel other : diagram.toShapeUIModelArray()) {
+                if (other.getModelElement() instanceof IInitialPseudoState
+                    && !other.getId().equals(de.getId())) {
+                  another =
+                      "; WARNING: the diagram already has an initial state ('"
+                          + other.getModelElement().getName()
+                          + "'), a state machine has one";
+                  break;
+                }
+              }
+            }
 
             return "Added "
                 + kind
@@ -444,7 +478,8 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
                 + "' at "
                 + de.getX()
                 + ","
-                + de.getY();
+                + de.getY()
+                + another;
           });
     } catch (Exception e) {
       return "Error adding " + kind + ": " + e.getMessage();
@@ -474,9 +509,13 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
    * @return true when the state was moved
    */
   private boolean placeNextTo(
-      IDiagramUIModel diagram, IDiagramElement source, IDiagramElement target) {
-    if (!autoPlaced.contains(target.getId()) || hasIncoming(target)) {
+      IDiagramUIModel diagram, IDiagramElement source, IDiagramElement target, String label) {
+    if (!autoPlaced.contains(target.getId())) {
       return false;
+    }
+    boolean converging = hasIncoming(target);
+    if (converging && hasOutgoing(target)) {
+      return false; // a state that already leads on stays where its first source put it
     }
     List<int[]> others = new ArrayList<>();
     for (int[] r : obstacles(diagram, target)) {
@@ -491,10 +530,36 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
         others.removeIf(r -> r[0] == s.getX() && r[1] == s.getY() && r[2] == s.getWidth());
       }
     }
-    int[] spot =
-        StateMachineUtils.spotNextTo(
-            rect(source), target.getWidth(), target.getHeight(), others, GRID_GAP, FLOW_BOTTOM);
-    if (spot == null) {
+    int[] spot;
+    if (converging) {
+      // a second source: the target goes under both (a common final state), not on one of them
+      List<int[]> sources = new ArrayList<>();
+      sources.add(rect(source));
+      IConnectorUIModel[] incoming = target.toToConnectorArray();
+      for (IConnectorUIModel c : incoming == null ? new IConnectorUIModel[0] : incoming) {
+        IShapeUIModel from = c.getFromShape();
+        if (from != null && !from.getId().equals(source.getId())) {
+          sources.add(rect(from));
+        }
+      }
+      others.removeIf(r -> sources.stream().anyMatch(q -> java.util.Arrays.equals(q, r)));
+      spot =
+          StateMachineUtils.spotBelowAll(
+              sources, target.getWidth(), target.getHeight(), others, GRID_VGAP);
+    } else {
+      // a sideways neighbour needs room for the transition's label between the two boxes
+      int labelWidth = label == null ? 0 : label.length() * 7 + 14;
+      spot =
+          StateMachineUtils.spotNextTo(
+              rect(source),
+              target.getWidth(),
+              target.getHeight(),
+              others,
+              Math.max(GRID_GAP, labelWidth + 50),
+              GRID_VGAP,
+              FLOW_BOTTOM);
+    }
+    if (spot == null || (spot[0] == target.getX() && spot[1] == target.getY())) {
       return false;
     }
     target.setBounds(spot[0], spot[1], target.getWidth(), target.getHeight());
@@ -507,6 +572,248 @@ public class StateMachineDiagramMcpTools extends AbstractDiagramMcpTools {
       placeLabels(s);
     }
     return true;
+  }
+
+  /** Vertical space between a state and the one placed below it (the label sits beside it). */
+  private static final int GRID_VGAP = 73;
+
+  /** Whether {@code from} already has a transition to {@code to} with the same label. */
+  private static boolean transitionExists(
+      IDiagramElement from, IDiagramElement to, String caption) {
+    IConnectorUIModel[] outgoing = from.toFromConnectorArray();
+    for (IConnectorUIModel c : outgoing == null ? new IConnectorUIModel[0] : outgoing) {
+      IShapeUIModel end = c.getToShape();
+      IModelElement model = c.getModelElement();
+      if (end != null
+          && end.getId().equals(to.getId())
+          && model instanceof ITransition2
+          && StateMachineUtils.sameLabel(model.getName(), caption)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether a state has a transition leaving it for another state. */
+  private static boolean hasOutgoing(IDiagramElement state) {
+    IConnectorUIModel[] outgoing = state.toFromConnectorArray();
+    if (outgoing != null) {
+      for (IConnectorUIModel c : outgoing) {
+        IShapeUIModel to = c.getToShape();
+        if (to != null && !to.getId().equals(state.getId())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Hang the name of each initial/final state on a side that no transition, state or label uses.
+   * Visual Paradigm draws it under the circle, which is where a transition arrives or leaves in a
+   * top-to-bottom flow: the line then runs through the name and hides the arrowhead.
+   */
+  private void placePseudoCaptions(IDiagramUIModel diagram) {
+    for (IShapeUIModel pseudo : diagram.toShapeUIModelArray()) {
+      IModelElement model = pseudo.getModelElement();
+      boolean initial = model instanceof IInitialPseudoState;
+      if (!initial && !(model instanceof IFinalState2)) {
+        continue;
+      }
+      ICaptionUIModel cap = pseudo.getCaptionUIModel();
+      if (cap == null || cap.getWidth() <= 0) {
+        continue;
+      }
+      int w = cap.getWidth();
+      int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
+      int x = pseudo.getX();
+      int y = pseudo.getY();
+      int sw = pseudo.getWidth();
+      int sh = pseudo.getHeight();
+      int[] below = {x + sw / 2 - w / 2, y + sh + 4};
+      int[] right = {x + sw + 8, y + sh / 2 - h / 2};
+      int[] left = {x - w - 8, y + sh / 2 - h / 2};
+      int[] above = {x + sw / 2 - w / 2, y - h - 4};
+      int[][] order =
+          initial
+              ? new int[][] {right, left, below, above}
+              : new int[][] {below, right, left, above};
+      List<int[]> blockers = new ArrayList<>(obstacles(diagram, pseudo));
+      List<int[][]> lines = new ArrayList<>();
+      for (IConnectorUIModel c : attached(pseudo)) {
+        Point[] points = c.getPoints();
+        for (int i = 0; points != null && i + 1 < points.length; i++) {
+          lines.add(new int[][] {{points[i].x, points[i].y}, {points[i + 1].x, points[i + 1].y}});
+        }
+      }
+      int[] chosen = null;
+      for (int[] spot : order) {
+        int[] r = {Math.max(spot[0], 2), Math.max(spot[1], 2), w, h};
+        if (chosen == null) {
+          chosen = r;
+        }
+        if (!hitsAny(r, blockers) && !crossesLine(r, lines)) {
+          chosen = r;
+          break;
+        }
+      }
+      cap.setBounds(chosen[0], chosen[1], w, h);
+    }
+  }
+
+  /** Left margin kept between the canvas edge and the leftmost label or shape. */
+  private static final int LEFT_MARGIN = 10;
+
+  /**
+   * Move every shape right when a label (or shape) would start left of {@link #LEFT_MARGIN}: a
+   * label placed there is clamped to the canvas edge and runs over its own transitions.
+   */
+  private void makeRoomLeft(IDiagramUIModel diagram) {
+    int minX = Integer.MAX_VALUE;
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getModelElement() != null && s.getWidth() > 0) {
+        minX = Math.min(minX, s.getX());
+      }
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        ICaptionUIModel cap = ((IConnectorUIModel) de).getCaptionUIModel();
+        if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+          minX = Math.min(minX, cap.getX());
+        }
+      }
+    }
+    if (minX == Integer.MAX_VALUE || minX >= LEFT_MARGIN) {
+      return;
+    }
+    // a label that does not fit left of its bend was clamped to x = 2: find how much it needs
+    int need = LEFT_MARGIN - minX;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        ICaptionUIModel cap = c.getCaptionUIModel();
+        Point[] points = c.getPoints();
+        String text = c.getModelElement() == null ? null : c.getModelElement().getName();
+        if (cap != null && points != null && points.length >= 3 && text != null) {
+          int w = Math.max(cap.getWidth(), text.length() * 7 + 8);
+          int wanted = points[points.length / 2].x - w - 6;
+          need = Math.max(need, LEFT_MARGIN - wanted);
+        }
+      }
+    }
+    List<IShapeUIModel> shapes = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getParent() == null && s.getWidth() > 0) {
+        shapes.add(s);
+      }
+    }
+    for (IShapeUIModel s : shapes) {
+      s.setLocation(s.getX() + need, s.getY());
+    }
+    for (IShapeUIModel s : shapes) {
+      s.resetCaption();
+      recenterConnectorsOf(s);
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel && hasSelfLoop((IConnectorUIModel) de)) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        Point[] points = c.getPoints();
+        c.clearPoints();
+        for (Point p : points) {
+          c.addPoint(new Point(p.x + need, p.y));
+        }
+        ICaptionUIModel cap = c.getCaptionUIModel();
+        if (cap != null) {
+          cap.setBounds(cap.getX() + need, cap.getY(), cap.getWidth(), cap.getHeight());
+        }
+      }
+    }
+    for (IShapeUIModel s : shapes) {
+      placeLabels(s);
+    }
+  }
+
+  private static boolean hasSelfLoop(IConnectorUIModel c) {
+    return c.getFromShape() != null
+        && c.getToShape() != null
+        && c.getFromShape().getId().equals(c.getToShape().getId());
+  }
+
+  /** The connectors attached to a state, in either direction. */
+  private static List<IConnectorUIModel> attached(IDiagramElement state) {
+    List<IConnectorUIModel> connectors = new ArrayList<>();
+    if (state.toFromConnectorArray() != null) {
+      connectors.addAll(java.util.Arrays.asList(state.toFromConnectorArray()));
+    }
+    if (state.toToConnectorArray() != null) {
+      connectors.addAll(java.util.Arrays.asList(state.toToConnectorArray()));
+    }
+    return connectors;
+  }
+
+  private static boolean crossesLine(int[] r, List<int[][]> lines) {
+    for (int[][] line : lines) {
+      if (DiagramUtils.segmentHitsRect(line[0][0], line[0][1], line[1][0], line[1][1], r, 3)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @Override
+  protected String moveOwnShape(
+      IDiagramUIModel diagram,
+      IDiagramElement de,
+      String name,
+      int x,
+      int y,
+      int width,
+      int height) {
+    if (!(diagram instanceof IStateDiagramUIModel) || !(de instanceof IShapeUIModel)) {
+      return null;
+    }
+    IShapeUIModel shape = (IShapeUIModel) de;
+    IModelElement model = shape.getModelElement();
+    String note = "";
+    if (model instanceof IInitialPseudoState || model instanceof IFinalState2) {
+      // the circles keep their notation size (fitting would shrink them to the name's size)
+      shape.setBounds(
+          x, y, width > 0 ? width : shape.getWidth(), height > 0 ? height : shape.getHeight());
+    } else {
+      note = applyBounds(shape, x, y, width, height);
+      if (width <= 0 || height <= 0) {
+        shape.setBounds(
+            shape.getX(),
+            shape.getY(),
+            Math.max(shape.getWidth(), STATE_MIN_WIDTH),
+            Math.max(shape.getHeight(), STATE_MIN_HEIGHT));
+      }
+    }
+    // the name is a detached label, the transitions and their labels follow the state
+    shape.resetCaption();
+    recenterConnectorsOf(shape);
+    placeLabels(shape);
+    placePseudoCaptions(diagram);
+    return boundsResult(name, shape) + note;
+  }
+
+  @Override
+  protected int rerouteOwnConnectors(IDiagramUIModel diagram) {
+    if (!(diagram instanceof IStateDiagramUIModel)) {
+      return -1;
+    }
+    int count = 0;
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        centerConnector((IConnectorUIModel) de);
+        count++;
+      }
+    }
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      placeLabels(s);
+    }
+    placePseudoCaptions(diagram);
+    return count;
   }
 
   /** Whether a state already has an incoming transition from another state. */

@@ -427,4 +427,250 @@ public final class CommunicationDiagramUtils {
     int capY = (int) Math.round(ay - captionHeight / 2.0);
     return new int[] {(int) Math.round(ax), (int) Math.round(ay), capX, capY};
   }
+
+  /** Layer of an actor in the book's layout: the top row. */
+  public static final int LAYER_ACTOR = 0;
+
+  /** Layer of boundary objects and plain objects: one row of screens chained by links. */
+  public static final int LAYER_BOUNDARY = 1;
+
+  /** Layer of control objects. */
+  public static final int LAYER_CONTROL = 2;
+
+  /** Layer of entity objects: the row below the boundaries that use them. */
+  public static final int LAYER_ENTITY = 3;
+
+  /**
+   * The layer a participant goes in, by the notation of the book's analysis diagrams (Hình 3.10):
+   * actor on top, boundary icons in one row, entities in the row below.
+   *
+   * @param actor whether the participant is an actor
+   * @param lifelineType "boundary", "control", "entity" or empty for a plain object
+   * @return one of the {@code LAYER_*} constants
+   */
+  public static int layerOf(boolean actor, String lifelineType) {
+    if (actor) {
+      return LAYER_ACTOR;
+    }
+    if ("control".equals(lifelineType)) {
+      return LAYER_CONTROL;
+    }
+    if ("entity".equals(lifelineType)) {
+      return LAYER_ENTITY;
+    }
+    return LAYER_BOUNDARY;
+  }
+
+  /**
+   * Layered layout of a communication diagram: one row per layer (empty layers collapse), the
+   * participants of a row ordered by where the participants they are linked to sit in the other
+   * rows, and each row spread so linked participants stand under or over each other when they can
+   * and never closer than {@code hGap}.
+   *
+   * @param layers layer of each participant ({@code LAYER_*})
+   * @param widths width of each participant
+   * @param heights height of each participant
+   * @param edges pairs {a, b} of linked participants (indexes)
+   * @param hGap free space between neighbours of a row
+   * @param vGap free space between rows
+   * @param originX left edge of the whole layout
+   * @param originY top edge of the whole layout
+   * @return the top-left corner {x, y} of each participant
+   */
+  public static int[][] layeredLayout(
+      int[] layers,
+      int[] widths,
+      int[] heights,
+      int[][] edges,
+      int hGap,
+      int vGap,
+      int originX,
+      int originY) {
+    int n = layers.length;
+    int[][] result = new int[n][2];
+    if (n == 0) {
+      return result;
+    }
+    // collapse empty layers
+    java.util.TreeSet<Integer> used = new java.util.TreeSet<>();
+    for (int layer : layers) {
+      used.add(layer);
+    }
+    java.util.List<Integer> layerIds = new java.util.ArrayList<>(used);
+    int[] row = new int[n];
+    java.util.List<java.util.List<Integer>> rows = new java.util.ArrayList<>();
+    for (int i = 0; i < layerIds.size(); i++) {
+      rows.add(new java.util.ArrayList<>());
+    }
+    for (int i = 0; i < n; i++) {
+      row[i] = layerIds.indexOf(layers[i]);
+      rows.get(row[i]).add(i);
+    }
+    java.util.List<java.util.List<Integer>> neighbours = new java.util.ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      neighbours.add(new java.util.ArrayList<>());
+    }
+    for (int[] e : edges) {
+      if (e[0] != e[1]) {
+        neighbours.get(e[0]).add(e[1]);
+        neighbours.get(e[1]).add(e[0]);
+      }
+    }
+    // A row whose participants are linked to each other (the chain of screens) reads along that
+    // chain, left to right, starting at a participant linked to the row above; every other row is
+    // ordered by where the participants above it that it is linked to stand.
+    boolean[] chained = new boolean[rows.size()];
+    for (int ri = 0; ri < rows.size(); ri++) {
+      java.util.List<Integer> r = rows.get(ri);
+      for (int node : r) {
+        for (int nb : neighbours.get(node)) {
+          if (row[nb] == ri) {
+            chained[ri] = true;
+          }
+        }
+      }
+      if (chained[ri]) {
+        java.util.List<Integer> starts = new java.util.ArrayList<>(r);
+        final int rowIndex = ri;
+        starts.sort(
+            (a, b) -> {
+              boolean upperA = neighbours.get(a).stream().anyMatch(nb -> row[nb] < rowIndex);
+              boolean upperB = neighbours.get(b).stream().anyMatch(nb -> row[nb] < rowIndex);
+              return upperA == upperB ? Integer.compare(a, b) : upperA ? -1 : 1;
+            });
+        java.util.List<Integer> chain = new java.util.ArrayList<>();
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        for (int start : starts) {
+          followChain(start, ri, row, neighbours, seen, chain);
+        }
+        rows.set(ri, chain);
+      }
+    }
+    double[] pos = new double[n];
+    for (java.util.List<Integer> r : rows) {
+      for (int k = 0; k < r.size(); k++) {
+        pos[r.get(k)] = k;
+      }
+    }
+    for (int sweep = 0; sweep < 3; sweep++) {
+      for (int ri = 1; ri < rows.size(); ri++) {
+        if (chained[ri]) {
+          continue;
+        }
+        java.util.List<Integer> r = rows.get(ri);
+        final double[] key = new double[n];
+        for (int node : r) {
+          double sum = 0;
+          int count = 0;
+          for (int nb : neighbours.get(node)) {
+            if (row[nb] < ri) {
+              sum += pos[nb] / Math.max(1, rows.get(row[nb]).size() - 1);
+              count++;
+            }
+          }
+          key[node] = count > 0 ? sum / count : pos[node] / Math.max(1, r.size() - 1);
+        }
+        r.sort((a, b) -> Double.compare(key[a], key[b]));
+        for (int k = 0; k < r.size(); k++) {
+          pos[r.get(k)] = k;
+        }
+      }
+    }
+    // x: rows packed left to right, then each row moved toward the centers of its neighbours
+    double[] center = new double[n];
+    double widest = 0;
+    for (java.util.List<Integer> r : rows) {
+      double w = -hGap;
+      for (int node : r) {
+        w += widths[node] + hGap;
+      }
+      widest = Math.max(widest, w);
+    }
+    for (java.util.List<Integer> r : rows) {
+      double w = -hGap;
+      for (int node : r) {
+        w += widths[node] + hGap;
+      }
+      double x = (widest - w) / 2;
+      for (int node : r) {
+        center[node] = x + widths[node] / 2.0;
+        x += widths[node] + hGap;
+      }
+    }
+    for (int pass = 0; pass < 3; pass++) {
+      for (int step = 0; step < rows.size(); step++) {
+        int ri = pass % 2 == 0 ? step : rows.size() - 1 - step;
+        java.util.List<Integer> r = rows.get(ri);
+        double[] want = new double[r.size()];
+        for (int k = 0; k < r.size(); k++) {
+          int node = r.get(k);
+          double sum = 0;
+          int count = 0;
+          for (int nb : neighbours.get(node)) {
+            if (row[nb] != ri) {
+              sum += center[nb];
+              count++;
+            }
+          }
+          want[k] = count > 0 ? sum / count : center[node];
+        }
+        // keep the order, never closer than hGap: left to right, then pull back right to left
+        double[] c = new double[r.size()];
+        for (int k = 0; k < r.size(); k++) {
+          int node = r.get(k);
+          double min =
+              k == 0
+                  ? Double.NEGATIVE_INFINITY
+                  : c[k - 1] + widths[r.get(k - 1)] / 2.0 + hGap + widths[node] / 2.0;
+          c[k] = Math.max(want[k], min);
+        }
+        double shift = 0;
+        for (int k = 0; k < r.size(); k++) {
+          shift += want[k] - c[k];
+        }
+        shift = r.isEmpty() ? 0 : Math.min(0, shift / r.size());
+        for (int k = 0; k < r.size(); k++) {
+          c[k] += shift;
+          center[r.get(k)] = c[k];
+        }
+      }
+    }
+    double minLeft = Double.MAX_VALUE;
+    for (int i = 0; i < n; i++) {
+      minLeft = Math.min(minLeft, center[i] - widths[i] / 2.0);
+    }
+    int y = originY;
+    for (java.util.List<Integer> r : rows) {
+      int tallest = 0;
+      for (int node : r) {
+        tallest = Math.max(tallest, heights[node]);
+      }
+      for (int node : r) {
+        result[node][0] = (int) Math.round(originX + center[node] - widths[node] / 2.0 - minLeft);
+        result[node][1] = y + (tallest - heights[node]) / 2;
+      }
+      y += tallest + vGap;
+    }
+    return result;
+  }
+
+  private static void followChain(
+      int node,
+      int rowIndex,
+      int[] row,
+      java.util.List<java.util.List<Integer>> neighbours,
+      java.util.Set<Integer> seen,
+      java.util.List<Integer> out) {
+    if (!seen.add(node)) {
+      return;
+    }
+    out.add(node);
+    java.util.List<Integer> next = new java.util.ArrayList<>(neighbours.get(node));
+    java.util.Collections.sort(next);
+    for (int nb : next) {
+      if (row[nb] == rowIndex) {
+        followChain(nb, rowIndex, row, neighbours, seen, out);
+      }
+    }
+  }
 }
