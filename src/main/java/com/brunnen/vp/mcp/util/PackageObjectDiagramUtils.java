@@ -25,6 +25,9 @@ public final class PackageObjectDiagramUtils {
   /** Stereotype of a package merge ({@code <<merge>>}). */
   public static final String KIND_MERGE = "merge";
 
+  /** A plain undirected line, no stereotype (the book's package diagram). */
+  public static final String KIND_LINE = "line";
+
   private PackageObjectDiagramUtils() {}
 
   /**
@@ -43,7 +46,7 @@ public final class PackageObjectDiagramUtils {
    * A null or blank kind defaults to {@link #KIND_USE}.
    *
    * @param kind the raw kind
-   * @return one of use, import, access, merge, or null when the kind is not recognised
+   * @return one of use, import, access, merge, line, or null when the kind is not recognised
    */
   public static String parseDependencyKind(String kind) {
     if (kind == null) {
@@ -65,6 +68,11 @@ public final class PackageObjectDiagramUtils {
         return KIND_ACCESS;
       case "merge":
         return KIND_MERGE;
+      case "line":
+      case "plain":
+      case "none":
+      case "association":
+        return KIND_LINE;
       default:
         return null;
     }

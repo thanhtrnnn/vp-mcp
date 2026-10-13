@@ -6,6 +6,7 @@ import com.brunnen.vp.mcp.util.ComponentDiagramUtils.Kind;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IComponentDiagramUIModel;
+import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -17,6 +18,7 @@ import com.vp.plugin.model.IComponent;
 import com.vp.plugin.model.IDependency;
 import com.vp.plugin.model.IJavaClassCodeDetail;
 import com.vp.plugin.model.IModelElement;
+import com.vp.plugin.model.IPackage;
 import com.vp.plugin.model.IPort;
 import com.vp.plugin.model.IRealization;
 import com.vp.plugin.model.IUsage;
@@ -30,15 +32,15 @@ import java.util.Set;
  * MCP tools for Visual Paradigm UML component diagrams.
  *
  * <p>Models the UML 2 component elements: {@link IComponent} for components (optionally nested in a
- * parent component and stereotyped, e.g. {@code <<subsystem>>}), interfaces drawn in ball
- * (lollipop) notation, {@link IPort} for ports on a component's border, and the connectors between
- * them: {@link IRealization} for a provided interface, {@link IUsage} for a required interface and
- * {@link IDependency} for a plain dependency between components.
+ * parent component or a layer {@link IPackage} frame, and stereotyped, e.g. {@code <<subsystem>>}),
+ * interfaces drawn as {@code <<interface>>} boxes, {@link IPort} for ports on a component's border,
+ * and the connectors between them: {@link IRealization} for a provided interface (dashed line,
+ * hollow triangle at the interface), {@link IUsage} for a required interface and {@link
+ * IDependency} for a plain dependency between components.
  *
- * <p>Visual Paradigm has no separate interface model on component diagrams: its interface shape
- * ({@code ComponentInterface}) shows an {@link IComponent} whose Java detail is flagged as an
- * interface and which carries the {@code Interface} stereotype. That flag is what makes VP choose
- * the interface shape instead of a component box when the model is drawn.
+ * <p>Visual Paradigm has no separate interface model on component diagrams: an interface is an
+ * {@link IComponent} with the {@code interface} keyword drawn as a plain box. VP's lollipop shape
+ * ({@code ComponentInterface}) is not rendered when it is created through the API.
  *
  * <p>Shapes are fitted to their text (VP fit-size); a component that contains nested components is
  * instead grown to enclose them, and its ports are kept on its left and right edges. Connectors are
@@ -69,17 +71,12 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            requireProject();
-            if (!ComponentDiagramUtils.isValidName(diagramName)) {
-              return "Diagram name must not be empty";
-            }
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_COMPONENT_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_COMPONENT_DIAGRAM, diagramName);
             diagram.setAutoFitShapesSize(true);
             dm.openDiagram(diagram);
-            return "Created component diagram: " + diagramName;
+            return "Created component diagram: " + diagram.getName();
           });
     } catch (Exception e) {
       return "Error creating component diagram: " + e.getMessage();
@@ -92,22 +89,26 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add a component to a component diagram. stereotype is optional (\"\" = none, e.g."
               + " \"subsystem\"; several may be comma-separated). parentComponent (a component"
               + " already on the diagram, \"\" = none) nests the new component inside it, in the"
-              + " model and on the diagram, and the parent grows to enclose it. x/y (>0) place the"
-              + " component explicitly in diagram coordinates, otherwise it is auto-placed on a"
-              + " grid (or in the parent's next free slot). The box is fitted to its text")
+              + " model and on the diagram, and the parent grows to enclose it. packageName (a"
+              + " layer frame added with addComponentPackage, \"\" = none) puts it in that"
+              + " package frame instead. x/y (>0) place the component explicitly in diagram"
+              + " coordinates, otherwise it is auto-placed on a grid (or in the container's next"
+              + " free slot); its first dependency or interface link then moves an auto-placed"
+              + " target next to its source. The box is fitted to its text")
   public String addComponent(
       String diagramName,
       String componentName,
       String stereotype,
       String parentComponent,
       int x,
-      int y) {
+      int y,
+      String packageName) {
     try {
       return runOnEdt(
           () -> {
             IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
             if (diagram == null) {
-              return "Component diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!ComponentDiagramUtils.isValidName(componentName)) {
               return "Component name must not be empty";
@@ -118,6 +119,15 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IShapeUIModel parent = null;
+            if (ComponentDiagramUtils.isValidName(packageName)) {
+              if (ComponentDiagramUtils.isValidName(parentComponent)) {
+                return "Give parentComponent or packageName, not both";
+              }
+              parent = findShape(diagram, packageName.trim(), Kind.PACKAGE);
+              if (parent == null) {
+                return "Package not on diagram: " + packageName.trim();
+              }
+            }
             if (ComponentDiagramUtils.isValidName(parentComponent)) {
               String parentName = parentComponent.trim();
               parent = resolve(diagram, parentName, Kind.COMPONENT);
@@ -132,12 +142,19 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             List<String> stereotypes = ComponentDiagramUtils.parseStereotypes(stereotype);
-            // A top-level component of that name is the same component (a new view of it); a
-            // nested one is created inside its parent before it is named.
-            IComponent component = parent == null ? findRootElement(name, IComponent.class) : null;
+            // A component of that name in the same owner (the project root, the parent component
+            // or the package) is the same component (a new view of it); a new nested one is
+            // created inside its owner before it is named.
+            IModelElement owner = parent != null ? parent.getModelElement() : null;
+            IComponent component = ownedComponent(owner, name);
+            if (component != null && isInterfaceModel(component)) {
+              return "'"
+                  + name
+                  + "' is an interface of the project; pick another name for the component";
+            }
             if (component == null) {
               component = getModelElementFactory().createComponent();
-              nameInOwner(component, parent != null ? parent.getModelElement() : null, name);
+              nameInOwner(component, owner, name);
             }
             for (String s : stereotypes) {
               if (!component.hasStereotype(s)) {
@@ -163,6 +180,8 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             if (parent != null) {
               shape.bringToFront(); // the parent was drawn first and would hide it otherwise
               encloseUpwards(parent);
+            } else if (x <= 0 && y <= 0) {
+              autoPlaced.add(shape.getId());
             }
 
             StringBuilder result = new StringBuilder("Added component '").append(name).append("'");
@@ -199,7 +218,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
             if (diagram == null) {
-              return "Component diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!ComponentDiagramUtils.isValidName(interfaceName)) {
               return "Interface name must not be empty";
@@ -210,6 +229,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IComponent iface = findRootElement(name, IComponent.class);
+            if (iface != null && !isInterfaceModel(iface)) {
+              return "'"
+                  + name
+                  + "' is a component of the project; pick another name for the interface";
+            }
             if (iface == null) {
               iface = getModelElementFactory().createComponent();
               nameInOwner(iface, null, name);
@@ -230,6 +254,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             showCaption(shape);
             int[] pos = topLevelPosition(diagram, shape, x, y);
             shape.setBounds(pos[0], pos[1], shape.getWidth(), shape.getHeight());
+            if (x <= 0 && y <= 0) {
+              autoPlaced.add(shape.getId());
+            }
 
             return "Added interface '"
                 + name
@@ -247,9 +274,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addProvidedInterface",
       description =
-          "Show that a component provides (realizes) an interface: a realization from the"
-              + " component to the interface ball (UML ball notation). componentName may also be a"
-              + " port added with addPort. Both must already be on the diagram")
+          "Show that a component provides (realizes) an interface: a dashed realization with"
+              + " the hollow triangle at the <<interface>> box. componentName may also be a port"
+              + " added with addPort. Both must already be on the diagram")
   public String addProvidedInterface(
       String diagramName, String componentName, String interfaceName) {
     try {
@@ -257,7 +284,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
             if (diagram == null) {
-              return "Component diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             IShapeUIModel[] ends = resolveInterfaceLink(diagram, componentName, interfaceName);
             if (ends == null) {
@@ -266,6 +293,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             IShapeUIModel source = ends[0];
             IShapeUIModel target = ends[1];
 
+            moveNear(diagram, target, source);
             IRealization realization = getModelElementFactory().createRealization();
             // VP stores a realization supplier -> client (proven on class diagrams): the
             // interface is the "from" end, so the realization ends on the interface.
@@ -293,9 +321,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addRequiredInterface",
       description =
-          "Show that a component requires (uses) an interface: a usage dependency from the"
-              + " component to the interface ball (UML socket notation). componentName may also"
-              + " be a port added with addPort. Both must already be on the diagram")
+          "Show that a component requires (uses) an interface: a dashed <<use>> arrow from the"
+              + " component to the <<interface>> box. componentName may also be a port added with"
+              + " addPort. Both must already be on the diagram")
   public String addRequiredInterface(
       String diagramName, String componentName, String interfaceName) {
     try {
@@ -303,7 +331,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
             if (diagram == null) {
-              return "Component diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             IShapeUIModel[] ends = resolveInterfaceLink(diagram, componentName, interfaceName);
             if (ends == null) {
@@ -312,6 +340,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             IShapeUIModel source = ends[0];
             IShapeUIModel target = ends[1];
 
+            moveNear(diagram, target, source);
             String drawnAs = "usage";
             IUsage usage = getModelElementFactory().createUsage();
             usage.setFrom(source.getModelElement());
@@ -361,7 +390,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
             if (diagram == null) {
-              return "Component diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!ComponentDiagramUtils.isValidName(fromComponent)
                 || !ComponentDiagramUtils.isValidName(toComponent)) {
@@ -389,6 +418,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               return "fromComponent and toComponent must be different elements";
             }
 
+            moveNear(diagram, to, from);
             List<String> stereotypes = ComponentDiagramUtils.parseStereotypes(stereotype);
             IDependency dependency = getModelElementFactory().createDependency();
             dependency.setFrom(from.getModelElement());
@@ -429,7 +459,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
             if (diagram == null) {
-              return "Component diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!ComponentDiagramUtils.isValidName(componentName)) {
               return "Component name must not be empty";
@@ -478,10 +508,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             // reset the captions of all the owner's ports now that they sit on its edges
             for (IShapeUIModel p : portsOf(owner)) {
               p.resetCaption();
+              placePortCaption(owner, p);
             }
             portShape.bringToFront();
             IShapeUIModel up = parentShapeOf(owner);
-            if (up != null && kindOf(up) == Kind.COMPONENT) {
+            if (up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE)) {
               encloseUpwards(up); // the owner may have grown to fit its ports
             }
 
@@ -497,6 +528,232 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding port: " + e.getMessage();
     }
+  }
+
+  @Tool(
+      name = "addComponentPackage",
+      description =
+          "Add a package (layer) frame to a component diagram, e.g. \"Presentation Layer\","
+              + " \"Data Layer\". Components added with packageName go inside it and the frame"
+              + " grows to enclose them. parentPackage (\"\" = none) nests it in another package"
+              + " frame. x/y (>0) place it explicitly, otherwise it is auto-placed on the grid;"
+              + " width/height (>0) set its size, otherwise it starts at 200x100. A package of"
+              + " that name already in the project (same owner) is reused")
+  public String addComponentPackage(
+      String diagramName,
+      String packageName,
+      String parentPackage,
+      int x,
+      int y,
+      int width,
+      int height) {
+    try {
+      return runOnEdt(
+          () -> {
+            IComponentDiagramUIModel diagram = findComponentDiagram(diagramName);
+            if (diagram == null) {
+              return diagramNotFound(diagramName);
+            }
+            if (!ComponentDiagramUtils.isValidName(packageName)) {
+              return "Package name must not be empty";
+            }
+            String name = packageName.trim();
+            if (findShape(diagram, name, Kind.PACKAGE) != null) {
+              return "Package already on diagram: " + name;
+            }
+            IShapeUIModel parent = null;
+            if (ComponentDiagramUtils.isValidName(parentPackage)) {
+              parent = findShape(diagram, parentPackage.trim(), Kind.PACKAGE);
+              if (parent == null) {
+                return "Parent package not on diagram: " + parentPackage.trim();
+              }
+            }
+            IPackage pkg =
+                parent == null
+                    ? findRootElement(name, IPackage.class)
+                    : ownedPackage((IPackage) parent.getModelElement(), name);
+            if (pkg == null) {
+              pkg = getModelElementFactory().createPackage();
+              nameInOwner(pkg, parent != null ? parent.getModelElement() : null, name);
+            }
+            IDiagramElement de = getDiagramManager().createDiagramElement(diagram, pkg);
+            if (!(de instanceof IShapeUIModel)) {
+              return "Error adding package: Visual Paradigm could not draw '" + name + "'";
+            }
+            IShapeUIModel shape = (IShapeUIModel) de;
+            if (parent != null) {
+              parent.addChild(shape);
+            }
+            showCaption(shape);
+            int w = width > 0 ? width : Math.max(PACKAGE_MIN_WIDTH, shape.getWidth());
+            int h = height > 0 ? height : Math.max(PACKAGE_MIN_HEIGHT, shape.getHeight());
+            shape.setBounds(shape.getX(), shape.getY(), w, h);
+            int[] pos =
+                parent != null
+                    ? childPosition(parent, shape, x, y)
+                    : topLevelPosition(diagram, shape, x, y);
+            shape.setBounds(pos[0], pos[1], w, h);
+            shape.sendToBack();
+            if (parent != null) {
+              encloseUpwards(parent);
+            }
+            return "Added package '"
+                + name
+                + "'"
+                + (parent != null ? " inside '" + parentPackage.trim() + "'" : "")
+                + " to diagram '"
+                + diagramName
+                + "' at "
+                + bounds(shape);
+          });
+    } catch (Exception e) {
+      return "Error adding package: " + e.getMessage();
+    }
+  }
+
+  /** Default size of a new package (layer) frame before components are added to it. */
+  private static final int PACKAGE_MIN_WIDTH = 200;
+
+  private static final int PACKAGE_MIN_HEIGHT = 100;
+
+  /** Ids of top-level shapes placed automatically, which their first connection may move. */
+  private final Set<String> autoPlaced = new HashSet<>();
+
+  /**
+   * Move an auto-placed top-level shape that gets its first connection next to the other end: below
+   * it, else right, left or above of it, else further along the rows below it, at the first spot
+   * clear of every other top-level shape and of the lines already drawn, from which its own line
+   * crosses no shape. Shapes placed with x/y, nested ones and already connected ones stay put.
+   */
+  private void moveNear(IDiagramUIModel diagram, IShapeUIModel shape, IShapeUIModel anchor) {
+    if (!autoPlaced.contains(shape.getId())
+        || parentShapeOf(shape) != null
+        || hasConnections(shape)) {
+      return;
+    }
+    IShapeUIModel host = anchor;
+    while (parentShapeOf(host) != null) {
+      host = parentShapeOf(host); // next to the top-level frame holding the anchor
+    }
+    int w = shape.getWidth();
+    int h = shape.getHeight();
+    int gap = 60;
+    int centerX = host.getX() + (host.getWidth() - w) / 2;
+    int below = host.getY() + host.getHeight() + gap;
+    List<int[]> spots = new ArrayList<>();
+    spots.add(new int[] {centerX, below});
+    spots.add(
+        new int[] {host.getX() + host.getWidth() + gap, host.getY() + (host.getHeight() - h) / 2});
+    spots.add(new int[] {host.getX() - gap - w, host.getY() + (host.getHeight() - h) / 2});
+    spots.add(new int[] {centerX, host.getY() - gap - h});
+    // the rows below it, nearest first: left and right of the center, then one row lower
+    for (int row = 0; row < 3; row++) {
+      for (int step = 1; step <= 3; step++) {
+        int y = below + row * (h + gap);
+        spots.add(new int[] {centerX - step * (w + gap), y});
+        spots.add(new int[] {centerX + step * (w + gap), y});
+      }
+      if (row < 2) {
+        spots.add(new int[] {centerX, below + (row + 1) * (h + gap)});
+      }
+    }
+    // lines already drawn: the shape must not land on one of them
+    List<int[]> segments = new ArrayList<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel) {
+        java.awt.Point[] pts = ((IConnectorUIModel) de).getPoints();
+        for (int i = 0; pts != null && i + 1 < pts.length; i++) {
+          segments.add(new int[] {pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y});
+        }
+      }
+    }
+    int anchorX = anchor.getX() + anchor.getWidth() / 2;
+    int anchorY = anchor.getY() + anchor.getHeight() / 2;
+    for (int[] spot : spots) {
+      if (spot[0] < 10 || spot[1] < 10) {
+        continue;
+      }
+      int[] candidate = {spot[0], spot[1], w, h};
+      boolean free = true;
+      for (IShapeUIModel other : allShapes(diagram)) {
+        if (sameShape(other, shape)
+            || parentShapeOf(other) != null
+            || !hasSize(other)
+            || (autoPlaced.contains(other.getId()) && !hasConnections(other))) {
+          // auto-placed shapes still waiting for their first connection move later
+          continue;
+        }
+        if (ComponentDiagramUtils.overlaps(candidate, rect(other), 30)
+            || (!sameShape(other, host)
+                && DiagramUtils.segmentHitsRect(
+                    anchorX, anchorY, spot[0] + w / 2.0, spot[1] + h / 2.0, rect(other), 5))) {
+          // on top of (or too close to) another shape, or its line would cross one
+          free = false;
+          break;
+        }
+      }
+      for (int i = 0; free && i < segments.size(); i++) {
+        int[] g = segments.get(i);
+        if (DiagramUtils.segmentHitsRect(g[0], g[1], g[2], g[3], candidate, 10)) {
+          free = false;
+        }
+      }
+      if (free) {
+        shape.setBounds(spot[0], spot[1], w, h);
+        autoPlaced.remove(shape.getId());
+        return;
+      }
+    }
+  }
+
+  private static boolean hasConnections(IShapeUIModel shape) {
+    IDiagramElement[] none = new IDiagramElement[0];
+    IDiagramElement[] from = shape.toFromConnectorArray();
+    IDiagramElement[] to = shape.toToConnectorArray();
+    return (from != null ? from : none).length + (to != null ? to : none).length > 0;
+  }
+
+  /**
+   * Put a port's name outside its component: left of a port on the left edge, right of one on the
+   * right edge (VP draws it under the square, across the component's border).
+   */
+  private static void placePortCaption(IShapeUIModel owner, IShapeUIModel port) {
+    com.vp.plugin.diagram.ICaptionUIModel caption = port.getCaptionUIModel();
+    if (caption == null || caption.getWidth() <= 0) {
+      return;
+    }
+    boolean left = port.getX() + port.getWidth() / 2 < owner.getX() + owner.getWidth() / 2;
+    int capX = left ? port.getX() - caption.getWidth() - 3 : port.getX() + port.getWidth() + 3;
+    int capY = port.getY() - caption.getHeight() - 1;
+    caption.setBounds(capX, capY, caption.getWidth(), caption.getHeight());
+  }
+
+  /** The component called {@code name} owned by {@code owner} (the project root when null). */
+  private static IComponent ownedComponent(IModelElement owner, String name) {
+    if (owner == null) {
+      return findRootElement(name, IComponent.class);
+    }
+    IModelElement[] children = owner.toChildArray();
+    if (children != null) {
+      for (IModelElement child : children) {
+        if (child instanceof IComponent && name.equals(child.getName())) {
+          return (IComponent) child;
+        }
+      }
+    }
+    return null;
+  }
+
+  private static IPackage ownedPackage(IPackage owner, String name) {
+    IModelElement[] children = owner.toChildArray();
+    if (children != null) {
+      for (IModelElement child : children) {
+        if (child instanceof IPackage && name.equals(child.getName())) {
+          return (IPackage) child;
+        }
+      }
+    }
+    return null;
   }
 
   // --- Lookup helpers ---
@@ -584,6 +841,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
 
   /** What a shape stands for: by its UI model type, then its shape type and model. */
   private static Kind kindOf(IDiagramElement de) {
+    if (de.getModelElement() instanceof IPackage) {
+      return Kind.PACKAGE;
+    }
     if (de instanceof IComponentInterfaceUIModel) {
       return Kind.INTERFACE;
     }
@@ -730,7 +990,8 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       current.setBounds(r[0], r[1], r[2], r[3]);
       snapPorts(current);
       IShapeUIModel up = parentShapeOf(current);
-      current = up != null && kindOf(up) == Kind.COMPONENT ? up : null;
+      current =
+          up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE) ? up : null;
     }
   }
 

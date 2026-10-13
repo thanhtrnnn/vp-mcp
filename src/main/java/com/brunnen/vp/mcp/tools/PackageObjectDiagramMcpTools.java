@@ -8,7 +8,10 @@ import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IObjectDiagramUIModel;
+import com.vp.plugin.diagram.IShapeTypeConstants;
 import com.vp.plugin.diagram.IShapeUIModel;
+import com.vp.plugin.diagram.connector.IArrowHead;
+import com.vp.plugin.diagram.connector.IGenericConnectorUIModel;
 import com.vp.plugin.diagram.shape.IClassUIModel;
 import com.vp.plugin.diagram.shape.IInstanceSpecificationUIModel;
 import com.vp.plugin.diagram.shape.IPackageUIModel;
@@ -23,6 +26,7 @@ import com.vp.plugin.model.IPackage;
 import com.vp.plugin.model.IRelationship;
 import com.vp.plugin.model.ISimpleRelationship;
 import com.vp.plugin.model.ISlot;
+import java.awt.Point;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -51,9 +55,9 @@ import java.util.Set;
 public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
 
   /** Minimum size of a package frame; larger when the fitted label needs more room. */
-  private static final int PACKAGE_MIN_WIDTH = 160;
+  private static final int PACKAGE_MIN_WIDTH = 100;
 
-  private static final int PACKAGE_MIN_HEIGHT = 100;
+  private static final int PACKAGE_MIN_HEIGHT = 50;
 
   /** Margin of the first auto-placed top-level shape from the diagram origin. */
   private static final int MARGIN = 40;
@@ -71,7 +75,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
 
   private static final int INNER_HEADER = 40;
 
-  private static final int INNER_PER_ROW = 3;
+  /** Nested shapes per row: the book's view package holds its four actor packages in one row. */
+  private static final int INNER_PER_ROW = 6;
 
   /** Nesting depth limit when walking package parents or class generalizations. */
   private static final int MAX_DEPTH = 32;
@@ -91,8 +96,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM);
-            diagram.setName(diagramName.trim());
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM, diagramName.trim());
             diagram.setAutoFitShapesSize(true);
             dm.openDiagram(diagram);
             return "Created package diagram: " + diagramName.trim();
@@ -108,10 +112,12 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add a package frame to a package diagram. parentPackage (a package already on the "
               + "diagram, \"\" for none) nests it in that package, in the model and on the "
               + "diagram; the parent grows to enclose it. x/y (>0, diagram coordinates) place it "
-              + "explicitly, otherwise it is auto-placed (top level: rows of 3; nested: inside the "
-              + "parent body). width/height (>0) set the size, otherwise the frame is at least "
-              + "160x100 and wide enough for its name. Add a package's children before the next "
-              + "top-level package so auto-placed frames do not overlap")
+              + "explicitly, otherwise it is auto-placed (top level: rows of 3; nested: in one row "
+              + "of up to 6 inside the parent body). width/height (>0) set the size, otherwise "
+              + "the frame is at least 100x50 and wide enough for its name. A package of that "
+              + "name already in the project (root, or inside parentPackage) is reused: a new "
+              + "view of it is drawn. Add a package's children before the next top-level package "
+              + "so auto-placed frames do not overlap")
   public String addPackageElement(
       String diagramName,
       String packageName,
@@ -143,9 +149,13 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
-            // A top-level package of that name is the same package (a new view of it); a
-            // nested one is created inside its parent before it is named.
-            IPackage pkg = parentShape == null ? findRootElement(name, IPackage.class) : null;
+            // A package of that name in the same owner (the project root, or the parent package)
+            // is the same package: a new view of it. A new nested one is created inside its
+            // parent before it is named.
+            IPackage pkg =
+                parentShape == null
+                    ? findRootElement(name, IPackage.class)
+                    : findOwnedPackage((IPackage) parentShape.getModelElement(), name);
             boolean reused = pkg != null;
             if (!reused) {
               pkg = getModelElementFactory().createPackage();
@@ -197,10 +207,12 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addPackageDependency",
       description =
-          "Add a stereotyped dependency (dashed open arrow) from one package to another on a "
-              + "package diagram. kind is use|import|access|merge (\"\" = use): use draws a "
-              + "<<use>> usage, the others a dependency stereotyped <<import>>, <<access>> or "
-              + "<<merge>>. A class box shown in a package may also be used as an end")
+          "Add a dependency between two packages on a package diagram. kind is"
+              + " use|import|access|merge|line (\"\" = use): use draws a <<use>> usage (dashed"
+              + " open arrow), import/access/merge a dependency stereotyped <<import>>,"
+              + " <<access>> or <<merge>>, and line a plain solid line without arrowhead or"
+              + " keyword (the book's view - dao - model diagram). A class box shown in a package"
+              + " may also be used as an end")
   public String addPackageDependency(
       String diagramName, String fromPackage, String toPackage, String kind) {
     try {
@@ -215,7 +227,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             if (stereotype == null) {
               return "Unknown dependency kind '"
                   + kind
-                  + "' (use one of use, import, access, merge)";
+                  + "' (use one of use, import, access, merge, line)";
             }
             IShapeUIModel from = findPackageOrClassShape(diagram, fromPackage);
             if (from == null) {
@@ -229,6 +241,9 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               return "A package cannot depend on itself: " + fromPackage;
             }
 
+            if (PackageObjectDiagramUtils.KIND_LINE.equals(stereotype)) {
+              return plainLine(diagram, from, to, fromPackage.trim(), toPackage.trim());
+            }
             IRelationship dependency =
                 PackageObjectDiagramUtils.KIND_USE.equals(stereotype)
                     ? getModelElementFactory().createUsage()
@@ -341,6 +356,56 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
+  /**
+   * A plain solid line between two package frames: a package diagram offers no association, so it
+   * is a generic connector with both arrowheads removed.
+   */
+  private String plainLine(
+      IDiagramUIModel diagram,
+      IShapeUIModel from,
+      IShapeUIModel to,
+      String fromName,
+      String toName) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IGenericConnectorUIModel) {
+        IGenericConnectorUIModel c = (IGenericConnectorUIModel) de;
+        boolean same =
+            c.getFromShape() != null
+                && c.getToShape() != null
+                && ((sameShape(c.getFromShape(), from) && sameShape(c.getToShape(), to))
+                    || (sameShape(c.getFromShape(), to) && sameShape(c.getToShape(), from)));
+        if (same) {
+          return "A line between '" + fromName + "' and '" + toName + "' already exists";
+        }
+      }
+    }
+    activate(diagram);
+    useCenterConnectionPoints(diagram);
+    IDiagramElement created =
+        getDiagramManager()
+            .createConnector(
+                diagram,
+                IShapeTypeConstants.SHAPE_TYPE_GENERIC_CONNECTOR,
+                from,
+                to,
+                new Point[] {center(from), center(to)});
+    if (!(created instanceof IGenericConnectorUIModel)) {
+      if (created != null) {
+        created.deleteViewOnly();
+      }
+      return "Visual Paradigm did not create the line connector";
+    }
+    IGenericConnectorUIModel line = (IGenericConnectorUIModel) created;
+    if (line.getBeginArrowHead() != null) {
+      line.getBeginArrowHead().setType(IArrowHead.ARROW_NONE);
+    }
+    if (line.getEndArrowHead() != null) {
+      line.getEndArrowHead().setType(IArrowHead.ARROW_NONE);
+    }
+    centerConnector(line);
+    return "Added line between '" + fromName + "' and '" + toName + "'";
+  }
+
   // --- Object diagram ---
 
   @Tool(
@@ -356,8 +421,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM);
-            diagram.setName(diagramName.trim());
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM, diagramName.trim());
             diagram.setAutoFitShapesSize(true);
             if (diagram instanceof IObjectDiagramUIModel) {
               ((IObjectDiagramUIModel) diagram).setShowInstanceSpecificationSlots(true);
@@ -374,7 +438,9 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addObject",
       description =
           "Add an object (instance specification) to an object diagram, rendered underlined as "
-              + "'objectName : ClassName' with one compartment line per slot. className is "
+              + "'objectName : ClassName' with one compartment line per slot; objectName \"\" "
+              + "with a className draws an anonymous ': ClassName' object whose handle is the "
+              + "class name. className is "
               + "looked up on this diagram, then in the project; if no class has that name a new "
               + "class is created (\"\" = untyped object, no slots allowed). slots is "
               + "'attr=value;attr2=value2' (\"\" for none); each attr must be an attribute of the "
@@ -392,12 +458,17 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName, "object");
             }
-            if (!PackageObjectDiagramUtils.isValidName(objectName)) {
-              return "Object name must not be empty";
+            boolean typed = PackageObjectDiagramUtils.isValidName(className);
+            // An anonymous object ": Class" has no name; its class name is its handle.
+            boolean anonymous = !PackageObjectDiagramUtils.isValidName(objectName) && typed;
+            if (!PackageObjectDiagramUtils.isValidName(objectName) && !anonymous) {
+              return "Object name must not be empty (give only className for an anonymous"
+                  + " ': Class' object)";
             }
-            String name = objectName.trim();
-            if (findShape(diagram, name, IInstanceSpecification.class) != null) {
-              return "Object already on diagram: " + name;
+            String name = anonymous ? "" : objectName.trim();
+            String handle = anonymous ? className.trim() : name;
+            if (findShape(diagram, handle, IInstanceSpecification.class) != null) {
+              return "Object already on diagram: " + handle;
             }
             Map<String, String> slotValues;
             try {
@@ -405,7 +476,6 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             } catch (IllegalArgumentException e) {
               return "Invalid slots: " + e.getMessage();
             }
-            boolean typed = PackageObjectDiagramUtils.isValidName(className);
             if (!typed && !slotValues.isEmpty()) {
               return "className is required when slots are given (each slot needs a class "
                   + "attribute)";
@@ -452,7 +522,12 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
 
             IInstanceSpecification instance =
                 getModelElementFactory().createInstanceSpecification();
-            instance.setName(name);
+            if (anonymous) {
+              // VP names a fresh instance "Instance"; an anonymous object has no name at all
+              instance.setName("");
+            } else {
+              instance.setName(name);
+            }
             if (cls != null) {
               instance.addClassifier(cls);
             }
@@ -549,6 +624,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             String caption = PackageObjectDiagramUtils.isValidName(label) ? label.trim() : null;
             if (caption != null) {
               link.setName(caption);
+              // a link name sits mid-line: objects close together would put it on their boxes
+              makeRoomBetween(from, to, caption.length() * 8 + 50, 50);
             }
             IDiagramElement connector = connectCentered(diagram, link, from, to);
             if (connector == null) {
@@ -617,6 +694,21 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
         return shape;
       }
     }
+    // an anonymous object (": Class") is found by its class name, with or without the colon
+    String classifierName = wanted.startsWith(":") ? wanted.substring(1).trim() : wanted;
+    for (IShapeUIModel shape : allShapes(diagram)) {
+      IModelElement model = shape.getModelElement();
+      if (model instanceof IInstanceSpecification
+          && type.isInstance(model)
+          && (model.getName() == null || model.getName().isEmpty())) {
+        IModelElement[] classifiers = ((IInstanceSpecification) model).toClassifierArray();
+        if (classifiers != null
+            && classifiers.length > 0
+            && classifierName.equals(classifiers[0].getName())) {
+          return shape;
+        }
+      }
+    }
     return null;
   }
 
@@ -667,6 +759,18 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   // --- Model lookup ---
+
+  private static IPackage findOwnedPackage(IPackage parent, String name) {
+    IModelElement[] children = parent.toChildArray();
+    if (children != null) {
+      for (IModelElement child : children) {
+        if (child instanceof IPackage && name.equals(child.getName())) {
+          return (IPackage) child;
+        }
+      }
+    }
+    return null;
+  }
 
   private static IClass findOwnedClass(IPackage pkg, String name) {
     Iterator<?> iter = pkg.childIterator();

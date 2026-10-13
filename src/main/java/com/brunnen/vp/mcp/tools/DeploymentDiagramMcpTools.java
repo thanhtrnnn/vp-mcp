@@ -91,8 +91,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_DEPLOYMENT_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_DEPLOYMENT_DIAGRAM, diagramName);
             diagram.setAutoFitShapesSize(true);
             // Communication path protocols (HTTPS, JDBC) are connector names: always show them.
             diagram.setShowConnectorName(IDiagramUIModel.SHOW_CONNECTOR_NAME_YES);
@@ -129,7 +128,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDeploymentDiagram(diagramName);
             if (diagram == null) {
-              return "Deployment diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!DeploymentDiagramUtils.isValidName(nodeName)) {
               return "Node name must not be empty";
@@ -181,9 +180,10 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add an artifact (e.g. app.war, schema.sql) to a deployment diagram. nodeName \"\""
               + " draws it free-standing (connect it with addDeployDependency); otherwise it is"
-              + " deployed into that node: owned by the node and drawn inside it. x/y (>0, diagram"
-              + " coordinates) place it explicitly, otherwise it is auto-placed. The box is fitted"
-              + " to its caption. Artifact names must be unique on the diagram")
+              + " deployed into that node (owned by the node and drawn inside it), or drawn inside"
+              + " that artifact when nodeName names an artifact. x/y (>0, diagram coordinates)"
+              + " place it explicitly, otherwise it is auto-placed. The box is fitted to its"
+              + " caption. Artifact names must be unique on the diagram")
   public String addDeploymentArtifact(
       String diagramName, String artifactName, String nodeName, int x, int y) {
     try {
@@ -191,7 +191,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDeploymentDiagram(diagramName);
             if (diagram == null) {
-              return "Deployment diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!DeploymentDiagramUtils.isValidName(artifactName)) {
               return "Artifact name must not be empty";
@@ -203,19 +203,20 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             String hostName = DeploymentDiagramUtils.normalizeOptional(nodeName);
             IShapeUIModel hostShape = null;
             if (hostName != null) {
-              hostShape = findShape(diagram, hostName, INode.class);
+              hostShape = findHost(diagram, hostName);
               if (hostShape == null) {
-                return "Node not on diagram: " + hostName;
+                return "Node or artifact not on diagram: " + hostName;
               }
             }
 
             // Deployed into its node before it is named (named at the project root first, VP
             // would rename it when the root already has an artifact of that name); a free
             // artifact of a taken name is the same artifact, shown again.
-            IArtifact artifact = hostShape == null ? findRootElement(name, IArtifact.class) : null;
+            boolean inNode = hostShape != null && hostShape.getModelElement() instanceof INode;
+            IArtifact artifact = !inNode ? findRootElement(name, IArtifact.class) : null;
             if (artifact == null) {
               artifact = getModelElementFactory().createArtifact();
-              if (hostShape != null) {
+              if (inNode) {
                 ((INode) hostShape.getModelElement()).addArtifact(artifact);
               }
               nameInOwner(artifact, null, name);
@@ -242,15 +243,16 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add a component hosted by a node of a deployment diagram (e.g. OrderService inside"
               + " Tomcat): owned by the node and drawn inside it, auto-placed and fitted to its"
-              + " caption. nodeName \"\" draws it free-standing. Component names must be unique on"
-              + " the diagram")
+              + " caption. nodeName may also name an artifact (View/Controller/Model inside"
+              + " app.war), which then encloses the component. nodeName \"\" draws it"
+              + " free-standing. Component names must be unique on the diagram")
   public String addDeploymentComponent(String diagramName, String componentName, String nodeName) {
     try {
       return runOnEdt(
           () -> {
             IDiagramUIModel diagram = findDeploymentDiagram(diagramName);
             if (diagram == null) {
-              return "Deployment diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!DeploymentDiagramUtils.isValidName(componentName)) {
               return "Component name must not be empty";
@@ -262,17 +264,17 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             String hostName = DeploymentDiagramUtils.normalizeOptional(nodeName);
             IShapeUIModel hostShape = null;
             if (hostName != null) {
-              hostShape = findShape(diagram, hostName, INode.class);
+              hostShape = findHost(diagram, hostName);
               if (hostShape == null) {
-                return "Node not on diagram: " + hostName;
+                return "Node or artifact not on diagram: " + hostName;
               }
             }
 
-            IComponent component =
-                hostShape == null ? findRootElement(name, IComponent.class) : null;
+            boolean inNode = hostShape != null && hostShape.getModelElement() instanceof INode;
+            IComponent component = !inNode ? findRootElement(name, IComponent.class) : null;
             if (component == null) {
               component = getModelElementFactory().createComponent();
-              if (hostShape != null) {
+              if (inNode) {
                 ((INode) hostShape.getModelElement()).addComponent(component);
               }
               nameInOwner(component, null, name);
@@ -304,7 +306,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDeploymentDiagram(diagramName);
             if (diagram == null) {
-              return "Deployment diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             IShapeUIModel from = findShape(diagram, trim(fromNode), INode.class);
             if (from == null) {
@@ -363,7 +365,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDeploymentDiagram(diagramName);
             if (diagram == null) {
-              return "Deployment diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             IShapeUIModel artifactShape = findShape(diagram, trim(artifactName), IArtifact.class);
             if (artifactShape == null) {
@@ -430,6 +432,65 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
           });
     } catch (Exception e) {
       return "Error adding deploy dependency: " + e.getMessage();
+    }
+  }
+
+  @Tool(
+      name = "addDeploymentDependency",
+      description =
+          "Add a dependency (dashed open arrow) between two elements of a deployment diagram:"
+              + " components, artifacts or nodes, e.g. View -> Controller labelled \"submit\"."
+              + " label is shown on the arrow; \"<<manifest>>\" style text becomes a stereotype;"
+              + " \"\" leaves it unlabelled. Use addDeployDependency for artifact -> node"
+              + " deployments")
+  public String addDeploymentDependency(
+      String diagramName, String fromElement, String toElement, String label) {
+    try {
+      return runOnEdt(
+          () -> {
+            IDiagramUIModel diagram = findDeploymentDiagram(diagramName);
+            if (diagram == null) {
+              return diagramNotFound(diagramName);
+            }
+            IShapeUIModel from = findAnyShape(diagram, trim(fromElement));
+            if (from == null) {
+              return "Element not on diagram: " + fromElement;
+            }
+            IShapeUIModel to = findAnyShape(diagram, trim(toElement));
+            if (to == null) {
+              return "Element not on diagram: " + toElement;
+            }
+            if (sameShape(from, to)) {
+              return "A dependency needs two different elements";
+            }
+            PathLabel parsed = DeploymentDiagramUtils.parsePathLabel(label);
+            IDependency dependency = getModelElementFactory().createDependency();
+            dependency.setFrom(from.getModelElement());
+            dependency.setTo(to.getModelElement());
+            if (parsed.getName() != null) {
+              dependency.setName(parsed.getName());
+            }
+            if (parsed.getStereotype() != null) {
+              dependency.addStereotype(parsed.getStereotype());
+            }
+            if (connectCentered(diagram, dependency, from, to) == null) {
+              dependency.delete();
+              return "Visual Paradigm refused the dependency '"
+                  + fromElement
+                  + "' -> '"
+                  + toElement
+                  + "'";
+            }
+            String text = labelText(parsed);
+            return "Added dependency '"
+                + from.getModelElement().getName()
+                + "' -> '"
+                + to.getModelElement().getName()
+                + "'"
+                + (text.isEmpty() ? "" : " [" + text + "]");
+          });
+    } catch (Exception e) {
+      return "Error adding deployment dependency: " + e.getMessage();
     }
   }
 
@@ -536,9 +597,10 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
   private int[] slotFor(
       IDiagramUIModel diagram, IShapeUIModel shape, IShapeUIModel parent, int w, int h) {
     if (parent == null) {
+      // the first row with room, at its top: an artifact moved under its node must not start a
+      // new "row" that the next node would continue
       List<int[]> occupied = boundsList(content(without(topLevelShapes(diagram), shape)));
-      return DeploymentDiagramUtils.nextFlowPosition(
-          occupied, w, h, ORIGIN, ORIGIN, TOP_ROW_RIGHT, TOP_GAP);
+      return DiagramUtils.firstFreeSpot(occupied, ORIGIN, ORIGIN, w, h, TOP_ROW_RIGHT, TOP_GAP);
     }
     List<int[]> occupied = boundsList(content(without(childrenOf(parent), shape)));
     int originX = parent.getX() + PAD;
@@ -627,8 +689,9 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     int w = artifact.getWidth();
     int h = artifact.getHeight();
     int[][] spots = {
-      {host.getX() + (host.getWidth() - w) / 2, host.getY() + host.getHeight() + 50},
-      {host.getX() + host.getWidth() + 50, host.getY()}
+      // room for the <<deploy>> keyword between the node and the artifact
+      {host.getX() + (host.getWidth() - w) / 2, host.getY() + host.getHeight() + 70},
+      {host.getX() + host.getWidth() + 90, host.getY()}
     };
     for (int[] spot : spots) {
       boolean free = true;
@@ -693,6 +756,21 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return null;
+  }
+
+  /** A node, or else an artifact, called {@code name} on the diagram. */
+  private IShapeUIModel findHost(IDiagramUIModel diagram, String name) {
+    IShapeUIModel node = findShape(diagram, name, INode.class);
+    return node != null ? node : findShape(diagram, name, IArtifact.class);
+  }
+
+  /** A component, artifact or node called {@code name} on the diagram. */
+  private IShapeUIModel findAnyShape(IDiagramUIModel diagram, String name) {
+    IShapeUIModel shape = findShape(diagram, name, IComponent.class);
+    if (shape == null) {
+      shape = findShape(diagram, name, IArtifact.class);
+    }
+    return shape != null ? shape : findShape(diagram, name, INode.class);
   }
 
   /**

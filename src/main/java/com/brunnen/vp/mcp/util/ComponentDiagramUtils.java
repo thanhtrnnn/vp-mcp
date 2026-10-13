@@ -19,6 +19,7 @@ public final class ComponentDiagramUtils {
     COMPONENT("component"),
     INTERFACE("interface"),
     PORT("port"),
+    PACKAGE("package"),
     OTHER("element");
 
     private final String label;
