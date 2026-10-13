@@ -75,12 +75,12 @@ public class DiagramUtilsTest {
     int[] a = {0, 100, 100, 40};
     int[] b = {300, 100, 100, 40};
     java.util.List<int[]> none = new java.util.ArrayList<>();
-    assertEquals(null, DiagramUtils.routeBend(a, b, 0, 1, 80, none));
+    assertEquals(0, DiagramUtils.routeBends(a, b, 0, 1, 80, none).length);
     // two connectors between the pair: one each side of the straight line
-    assertArrayEquals(new int[] {200, 80}, DiagramUtils.routeBend(a, b, 0, 2, 80, none));
-    assertArrayEquals(new int[] {200, 160}, DiagramUtils.routeBend(a, b, 1, 2, 80, none));
+    assertArrayEquals(new int[] {200, 80}, DiagramUtils.routeBends(a, b, 0, 2, 80, none)[0]);
+    assertArrayEquals(new int[] {200, 160}, DiagramUtils.routeBends(a, b, 1, 2, 80, none)[0]);
     // three: the middle one stays straight
-    assertEquals(null, DiagramUtils.routeBend(a, b, 1, 3, 80, none));
+    assertEquals(0, DiagramUtils.routeBends(a, b, 1, 3, 80, none).length);
   }
 
   @Test
@@ -89,7 +89,7 @@ public class DiagramUtilsTest {
     int[] b = {400, 0, 100, 40};
     java.util.List<int[]> obstacles = new java.util.ArrayList<>();
     obstacles.add(new int[] {200, 0, 100, 40}); // right on the straight line
-    int[] bend = DiagramUtils.routeBend(a, b, 0, 1, 80, obstacles);
+    int[] bend = DiagramUtils.routeBends(a, b, 0, 1, 80, obstacles)[0];
     assertTrue("needs a bend", bend != null);
     assertFalse(DiagramUtils.segmentHitsRect(50, 20, bend[0], bend[1], obstacles.get(0), 6));
     assertFalse(DiagramUtils.segmentHitsRect(bend[0], bend[1], 450, 20, obstacles.get(0), 6));
@@ -110,7 +110,52 @@ public class DiagramUtilsTest {
     int[] b = {400, 0, 100, 40};
     java.util.List<int[]> obstacles = new java.util.ArrayList<>();
     obstacles.add(new int[] {200, 0, 100, 40});
-    int[] bend = DiagramUtils.routeBend(a, b, 0, 1, 80, obstacles);
+    int[] bend = DiagramUtils.routeBends(a, b, 0, 1, 80, obstacles)[0];
     assertTrue(bend != null && bend[1] > 0);
+  }
+
+  @Test
+  public void routeBendKeepsTheBendOutsideBothEnds() {
+    // a small node beside a big container: the centers' middle lies inside the container
+    int[] small = {20, 200, 100, 50};
+    int[] big = {300, 40, 600, 500};
+    java.util.List<int[]> none = new java.util.ArrayList<>();
+    for (int lane = 0; lane < 2; lane++) {
+      int[] bend = DiagramUtils.routeBends(small, big, lane, 2, 80, none)[0];
+      assertTrue("parallel connectors bend", bend != null);
+      assertFalse("outside the container", DiagramUtils.contains(big, bend[0], bend[1]));
+      assertFalse("outside the node", DiagramUtils.contains(small, bend[0], bend[1]));
+    }
+  }
+
+  @Test
+  public void containsIncludesBorders() {
+    int[] r = {10, 10, 20, 20};
+    assertTrue(DiagramUtils.contains(r, 10, 30));
+    assertFalse(DiagramUtils.contains(r, 31, 20));
+  }
+
+  @Test
+  public void labelSpotsAlongStartAtTheMiddleOfTheLongestSegment() {
+    java.util.List<int[]> spots =
+        DiagramUtils.labelSpotsAlong(new int[][] {{0, 0}, {0, 20}, {200, 20}}, 40, 14);
+    assertArrayEquals(new int[] {80, 13}, spots.get(0));
+    assertEquals(7, spots.size());
+  }
+
+  @Test
+  public void routeBendsGoesAroundTallContainersWithTwoBends() {
+    // two nodes on one row with tall containers between them: no single bend is clear
+    int[] a = {40, 40, 90, 50};
+    int[] b = {900, 40, 100, 50};
+    java.util.List<int[]> obstacles = new java.util.ArrayList<>();
+    obstacles.add(new int[] {200, 40, 360, 300});
+    obstacles.add(new int[] {640, 40, 200, 170});
+    int[][] bends = DiagramUtils.routeBends(a, b, 0, 1, 80, obstacles);
+    assertEquals(2, bends.length);
+    assertEquals("one horizontal leg", bends[0][1], bends[1][1]);
+    assertTrue(
+        "above or below the containers, clear of them",
+        bends[0][1] < 40 - 6 || bends[0][1] > 340 + 6);
   }
 }

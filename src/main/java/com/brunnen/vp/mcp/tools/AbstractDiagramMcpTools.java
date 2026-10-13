@@ -193,6 +193,20 @@ public abstract class AbstractDiagramMcpTools {
         }
       }
     }
+    // An anonymous object (":Classifier" lifeline of a sequence or communication diagram) has no
+    // name of its own: its classifier name, with or without the colon, is its handle.
+    String classifierName = name.startsWith(":") ? name.substring(1).trim() : name.trim();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      IModelElement model = de.getModelElement();
+      if (model instanceof IInteractionLifeLine
+          && (model.getName() == null || model.getName().trim().isEmpty())) {
+        Object classifier = ((IInteractionLifeLine) model).getBaseClassifier();
+        if (classifier instanceof IModelElement
+            && classifierName.equals(((IModelElement) classifier).getName())) {
+          return de;
+        }
+      }
+    }
     return null;
   }
 
@@ -392,6 +406,21 @@ public abstract class AbstractDiagramMcpTools {
    * @return the diagram
    */
   protected <T extends IDiagramUIModel> T findDiagram(String name, Class<T> type, String label) {
+    return findDiagramOfKind(name, type, label + " diagram");
+  }
+
+  /**
+   * {@link #findDiagram(String, Class, String)} with the full noun of the expected kind for the
+   * wrong-type message, e.g. "flowchart" or "BPMN business process diagram".
+   *
+   * @param name the diagram name
+   * @param type the expected diagram UI model interface
+   * @param noun the expected kind for the message
+   * @param <T> the diagram UI model type
+   * @return the diagram
+   */
+  protected <T extends IDiagramUIModel> T findDiagramOfKind(
+      String name, Class<T> type, String noun) {
     IDiagramUIModel typed = DiagramUtils.findDiagramByName(name, type);
     if (typed != null) {
       return type.cast(typed);
@@ -399,9 +428,56 @@ public abstract class AbstractDiagramMcpTools {
     IDiagramUIModel other = DiagramUtils.findDiagramByName(name);
     if (other != null) {
       throw new IllegalArgumentException(
-          "Diagram '" + name + "' is a " + other.getType() + ", not a " + label + " diagram");
+          "Diagram '"
+              + name
+              + "' is a "
+              + other.getType()
+              + ", not "
+              + ("aeiou".indexOf(Character.toLowerCase(noun.charAt(0))) >= 0 ? "an " : "a ")
+              + noun);
     }
     throw new IllegalArgumentException("Diagram not found: " + name);
+  }
+
+  /**
+   * Create a diagram of the given type called {@code name} (trimmed). A blank name or a name any
+   * diagram of the project already has is refused: every tool looks diagrams up by name (the last
+   * match wins), so a second diagram with that name would hide the first one. A diagram Visual
+   * Paradigm refuses to name is deleted again instead of being left as "Diagram1".
+   *
+   * @param typeConstant an {@code IDiagramTypeConstants.DIAGRAM_TYPE_*} value
+   * @param name the diagram name
+   * @return the new diagram (not opened yet)
+   */
+  protected IDiagramUIModel newDiagram(String typeConstant, String name) {
+    requireProject();
+    String trimmed = name == null ? "" : name.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException("Diagram name must not be empty");
+    }
+    IDiagramUIModel existing = DiagramUtils.findDiagramByName(trimmed);
+    if (existing != null) {
+      throw new IllegalArgumentException(
+          "A diagram named '" + trimmed + "' already exists (" + existing.getType() + ")");
+    }
+    DiagramManager dm = getDiagramManager();
+    IDiagramUIModel diagram = dm.createDiagram(typeConstant);
+    if (diagram == null) {
+      throw new IllegalStateException("Visual Paradigm could not create the diagram");
+    }
+    try {
+      diagram.setName(trimmed);
+    } catch (RuntimeException e) {
+      diagram.delete();
+      throw e;
+    }
+    if (!trimmed.equals(diagram.getName())) {
+      String given = diagram.getName();
+      diagram.delete();
+      throw new IllegalStateException(
+          "Visual Paradigm named the diagram '" + given + "' instead of '" + trimmed + "'");
+    }
+    return diagram;
   }
 
   // --- Model names ---
@@ -559,21 +635,28 @@ public abstract class AbstractDiagramMcpTools {
     IShapeUIModel first = canonical ? from : to;
     IShapeUIModel second = canonical ? to : from;
     List<String> parallel = connectorsBetween(from, to);
-    int[] bend =
-        DiagramUtils.routeBend(
+    // a two-way exchange is drawn as one line with an arrowhead at each end: never spread apart
+    parallel.removeIf(OVERLAID::contains);
+    boolean overlaid = OVERLAID.contains(connector.getId());
+    int[][] bends =
+        DiagramUtils.routeBends(
             rect(first),
             rect(second),
-            Math.max(parallel.indexOf(connector.getId()), 0),
-            parallel.size(),
+            overlaid ? 0 : Math.max(parallel.indexOf(connector.getId()), 0),
+            overlaid ? 1 : parallel.size(),
             PARALLEL_STEP,
             obstaclesBetween(from, to));
     Point start = center(from);
     Point end = center(to);
     connector.clearPoints();
     connector.addPoint(start);
-    if (bend != null) {
-      // VP drops points outside the canvas
-      connector.addPoint(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
+    if (bends.length > 0) {
+      // the bends run from the canonical first shape to the second one
+      for (int i = 0; i < bends.length; i++) {
+        int[] bend = bends[canonical ? i : bends.length - 1 - i];
+        // VP drops points outside the canvas
+        connector.addPoint(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
+      }
       connector.addPoint(end);
       // a (pending) rebuild would straighten the route; VP clips both legs at the borders
       connector.setRequestRebuild(false);
@@ -587,8 +670,10 @@ public abstract class AbstractDiagramMcpTools {
 
   /**
    * Shapes a connector between {@code from} and {@code to} should not run through: every leaf shape
-   * with a model on the diagram except the two ends (containers such as packages, lanes and nodes
-   * are skipped, the ends may sit inside them).
+   * with a model on the diagram except the two ends, and every node, artifact, component or package
+   * frame that holds neither end (a line through a deployment node it does not belong to is as bad
+   * as one through a leaf). Containers holding an end, and lanes, pools and boundaries, which flows
+   * cross by design, only contribute their children.
    */
   private static List<int[]> obstaclesBetween(IShapeUIModel from, IShapeUIModel to) {
     List<int[]> obstacles = new ArrayList<>();
@@ -596,6 +681,8 @@ public abstract class AbstractDiagramMcpTools {
     if (diagram == null) {
       return obstacles;
     }
+    Point fromCenter = center(from);
+    Point toCenter = center(to);
     java.util.Deque<IShapeUIModel> pending =
         new java.util.ArrayDeque<>(java.util.Arrays.asList(diagram.toShapeUIModelArray()));
     java.util.Set<String> seen = new java.util.HashSet<>();
@@ -606,7 +693,15 @@ public abstract class AbstractDiagramMcpTools {
       }
       IShapeUIModel[] children = s.toChildArray();
       if (children != null && children.length > 0) {
-        // a container (lane, package, node): its children are the obstacles
+        if (isSolidContainer(s.getModelElement())
+            && !s.getId().equals(from.getId())
+            && !s.getId().equals(to.getId())
+            && !DiagramUtils.contains(rect(s), fromCenter.x, fromCenter.y)
+            && !DiagramUtils.contains(rect(s), toCenter.x, toCenter.y)) {
+          obstacles.add(rect(s));
+          continue;
+        }
+        // a container holding an end, or a lane/pool/boundary: its children are the obstacles
         pending.addAll(java.util.Arrays.asList(children));
         continue;
       }
@@ -619,6 +714,32 @@ public abstract class AbstractDiagramMcpTools {
       obstacles.add(rect(s));
     }
     return obstacles;
+  }
+
+  /** Ids of connectors drawn on top of each other (a two-way exchange), never spread apart. */
+  private static final java.util.Set<String> OVERLAID =
+      java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+  /**
+   * Draw two opposite connectors between the same shapes on one line, so they read as a single
+   * double-headed arrow, and keep them that way when their shapes move.
+   *
+   * @param a one connector
+   * @param b the connector back
+   */
+  protected static void overlay(IConnectorUIModel a, IConnectorUIModel b) {
+    OVERLAID.add(a.getId());
+    OVERLAID.add(b.getId());
+    centerConnector(a);
+    centerConnector(b);
+  }
+
+  /** Containers a connector between two shapes outside them must go around. */
+  private static boolean isSolidContainer(IModelElement model) {
+    return model instanceof com.vp.plugin.model.INode
+        || model instanceof com.vp.plugin.model.IArtifact
+        || model instanceof com.vp.plugin.model.IComponent
+        || model instanceof com.vp.plugin.model.IPackage;
   }
 
   /** Perpendicular distance between parallel connectors joining the same two shapes. */
@@ -741,6 +862,65 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return moved.size();
+  }
+
+  /**
+   * Widen the gap between two shapes so a connector label fits between them: when they sit side by
+   * side the right one, and every sibling shape starting at or right of it, moves right until the
+   * gap is {@code needX}; when one is above the other the lower one and every sibling at or below
+   * it moves down until the gap is {@code needY}. Moving everything beyond keeps the gaps already
+   * widened for other labels. Connectors of moved shapes are re-anchored. Shapes that overlap
+   * diagonally or already have room stay put.
+   *
+   * @param a one shape
+   * @param b the other shape
+   * @param needX horizontal gap the label needs
+   * @param needY vertical gap the label needs
+   */
+  protected void makeRoomBetween(IDiagramElement a, IDiagramElement b, int needX, int needY) {
+    if (!(a instanceof IShapeUIModel)
+        || !(b instanceof IShapeUIModel)
+        || a.getId().equals(b.getId())) {
+      return;
+    }
+    boolean sameRow = a.getY() < b.getY() + b.getHeight() && b.getY() < a.getY() + a.getHeight();
+    boolean sameColumn = a.getX() < b.getX() + b.getWidth() && b.getX() < a.getX() + a.getWidth();
+    int dx = 0;
+    int dy = 0;
+    IDiagramElement moving = null;
+    if (sameRow) {
+      IDiagramElement left = a.getX() <= b.getX() ? a : b;
+      moving = left == a ? b : a;
+      int gap = moving.getX() - (left.getX() + left.getWidth());
+      dx = gap >= 0 && gap < needX ? needX - gap : 0;
+    } else if (sameColumn) {
+      IDiagramElement top = a.getY() <= b.getY() ? a : b;
+      moving = top == a ? b : a;
+      int gap = moving.getY() - (top.getY() + top.getHeight());
+      dy = gap >= 0 && gap < needY ? needY - gap : 0;
+    }
+    if (moving == null || (dx == 0 && dy == 0)) {
+      return;
+    }
+    IDiagramUIModel diagram = moving.getDiagramUIModel();
+    List<IShapeUIModel> shifted = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getModelElement() == null
+          || !sameParent(s, (IShapeUIModel) moving)
+          || s.getWidth() <= 0) {
+        continue;
+      }
+      boolean beyond = dx > 0 ? s.getX() >= moving.getX() : s.getY() >= moving.getY();
+      if (beyond) {
+        shifted.add(s);
+      }
+    }
+    for (IShapeUIModel s : shifted) {
+      s.setLocation(s.getX() + dx, s.getY() + dy);
+    }
+    for (IShapeUIModel s : shifted) {
+      recenterConnectorsOf(s);
+    }
   }
 
   /**
@@ -965,7 +1145,7 @@ public abstract class AbstractDiagramMcpTools {
                 if (model != null) {
                   appendStereotypes(sb, model, type);
                 }
-                sb.append(": ").append(name);
+                sb.append(": ").append(name).append(extraDetails(de, model));
                 sb.append(" at (").append(de.getX()).append(",").append(de.getY());
                 sb.append(") size ").append(de.getWidth()).append("x").append(de.getHeight());
                 sb.append("\n");
@@ -1095,6 +1275,13 @@ public abstract class AbstractDiagramMcpTools {
         to = displayName(conn.getToShape().getModelElement());
       }
     }
+    if (isStoredReversed(model)) {
+      // print the direction the arrow is drawn in: child -> parent, extension -> base,
+      // implementation -> interface
+      String swap = from;
+      from = to;
+      to = swap;
+    }
     sb.append(": ").append(from != null ? from : "?").append(" -> ").append(to != null ? to : "?");
     String guard = null;
     if (model instanceof IControlFlow) {
@@ -1116,6 +1303,19 @@ public abstract class AbstractDiagramMcpTools {
             .append(" .. ")
             .append(mb != null ? mb : "");
       }
+      // aggregation kind and the whole end (the diamond)
+      for (IAssociationEnd end : new IAssociationEnd[] {fromEnd, toEnd}) {
+        String kind = end != null ? end.getAggregationKind() : null;
+        if (kind != null
+            && (IAssociationEnd.AGGREGATION_KIND_COMPOSITED.equalsIgnoreCase(kind)
+                || IAssociationEnd.AGGREGATION_KIND_AGGREGATION.equalsIgnoreCase(kind))) {
+          boolean composite = IAssociationEnd.AGGREGATION_KIND_COMPOSITED.equalsIgnoreCase(kind);
+          sb.append(composite ? " composite" : " shared")
+              .append(" (whole: ")
+              .append(displayName(end.getModelElement()))
+              .append(")");
+        }
+      }
     }
     if (model instanceof IInteractionLifeLineLink) {
       List<String> msgs = new ArrayList<>();
@@ -1130,6 +1330,58 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return sb.toString();
+  }
+
+  /**
+   * Type-specific details for the element list: an object's classifier and slot values, the
+   * component a port sits on.
+   */
+  private static String extraDetails(IDiagramElement de, IModelElement model) {
+    StringBuilder sb = new StringBuilder();
+    if (model instanceof com.vp.plugin.model.IInstanceSpecification) {
+      com.vp.plugin.model.IInstanceSpecification instance =
+          (com.vp.plugin.model.IInstanceSpecification) model;
+      IModelElement[] classifiers = instance.toClassifierArray();
+      if (classifiers != null && classifiers.length > 0) {
+        sb.append(" : ").append(classifiers[0].getName());
+      }
+      com.vp.plugin.model.ISlot[] slots = instance.toSlotArray();
+      if (slots != null && slots.length > 0) {
+        List<String> values = new ArrayList<>();
+        for (com.vp.plugin.model.ISlot slot : slots) {
+          String feature = slot.getFeature() != null ? slot.getFeature().getName() : "?";
+          List<String> parts = new ArrayList<>();
+          com.vp.plugin.model.ICompositeValueSpecification[] specs = slot.toValueArray();
+          if (specs != null) {
+            for (com.vp.plugin.model.ICompositeValueSpecification spec : specs) {
+              parts.add(String.valueOf(spec.getValue()));
+            }
+          }
+          values.add(feature + "=" + String.join(",", parts));
+        }
+        sb.append(" {").append(String.join(", ", values)).append("}");
+      }
+    } else if (model instanceof com.vp.plugin.model.IPort
+        && de instanceof IShapeUIModel
+        && ((IShapeUIModel) de).getParent() != null
+        && ((IShapeUIModel) de).getParent().getModelElement() != null) {
+      sb.append(" on ").append(((IShapeUIModel) de).getParent().getModelElement().getName());
+    }
+    return sb.toString();
+  }
+
+  /**
+   * Whether Visual Paradigm stores the relationship against the direction its arrow is drawn in: a
+   * generalization as general -> specific, an extend as base -> extension and a realization as
+   * interface -> implementation.
+   *
+   * @param model the relationship model, may be null
+   * @return true for generalizations, extends and realizations
+   */
+  protected static boolean isStoredReversed(IModelElement model) {
+    return model instanceof IGeneralization
+        || model instanceof IExtend
+        || model instanceof com.vp.plugin.model.IRealization;
   }
 
   /** Stereotypes of an element, except VP's built-in one named like the element type. */
