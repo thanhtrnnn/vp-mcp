@@ -89,6 +89,12 @@ public class LayoutProfile {
     /** Side of the to-shape the connector may enter by, same values. */
     public int toSide = -1;
 
+    /** Side the connector prefers to leave the from-shape by (soft, routed connectors), -1 none. */
+    public int preferFromSide = -1;
+
+    /** Side the connector prefers to enter the to-shape by (soft, routed connectors), -1 none. */
+    public int preferToSide = -1;
+
     /** The labels of the connector. */
     public final List<LabelSpec> labels = new ArrayList<>();
   }

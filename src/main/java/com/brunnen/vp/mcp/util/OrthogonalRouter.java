@@ -88,6 +88,8 @@ public final class OrthogonalRouter {
     final String tgt;
     int srcSide = -1;
     int tgtSide = -1;
+    int srcPrefer = -1;
+    int tgtPrefer = -1;
 
     /**
      * A connector.
@@ -112,6 +114,20 @@ public final class OrthogonalRouter {
     public Conn sides(int srcSide, int tgtSide) {
       this.srcSide = srcSide;
       this.tgtSide = tgtSide;
+      return this;
+    }
+
+    /**
+     * Prefer (not require) a side at each end: a generalization leaves the bottom of the general
+     * class and enters the top of the specialization.
+     *
+     * @param srcPrefer side of the source shape, -1 for none
+     * @param tgtPrefer side of the target shape, -1 for none
+     * @return this
+     */
+    public Conn prefer(int srcPrefer, int tgtPrefer) {
+      this.srcPrefer = srcPrefer;
+      this.tgtPrefer = tgtPrefer;
       return this;
     }
   }
@@ -287,7 +303,7 @@ public final class OrthogonalRouter {
     // ---- ports
 
     /** Free port positions along a side, best first. */
-    List<int[]> portsOf(Shape shape, int[] other, int onlySide) {
+    List<int[]> portsOf(Shape shape, int[] other, int onlySide, int prefer) {
       int[] r = shape.rect;
       List<int[]> result = new ArrayList<>(); // {x, y, side, cost}
       double inner = shape.outline == ShapeOutline.Kind.RECT ? 0 : 0.25;
@@ -352,7 +368,9 @@ public final class OrthogonalRouter {
             continue;
           }
           int cost = Math.abs(o - length / 2) / 8;
-          if (other != null && !facing(side, r, other)) {
+          if (prefer >= 0) {
+            cost += side == prefer ? 0 : 60;
+          } else if (other != null && !facing(side, r, other)) {
             cost += 40;
           }
           result.add(new int[] {x, y, side, cost});
@@ -375,8 +393,8 @@ public final class OrthogonalRouter {
     // ---- search
 
     List<int[]> search(Conn c, Shape s, Shape t, boolean softContainers, int inflation) {
-      List<int[]> starts = portsOf(s, t.rect, c.srcSide);
-      List<int[]> goals = portsOf(t, s.rect, c.tgtSide);
+      List<int[]> starts = portsOf(s, t.rect, c.srcSide, c.srcPrefer);
+      List<int[]> goals = portsOf(t, s.rect, c.tgtSide, c.tgtPrefer);
       if (starts.isEmpty() || goals.isEmpty()) {
         return null;
       }
@@ -558,8 +576,12 @@ public final class OrthogonalRouter {
         }
       }
       int found = -1;
+      long bestTotal = Long.MAX_VALUE;
       while (!queue.isEmpty()) {
         long[] top = queue.poll();
+        if (top[0] >= bestTotal) {
+          break;
+        }
         int state = (int) top[1];
         if (top[0] > dist[state]) {
           continue;
@@ -572,13 +594,10 @@ public final class OrthogonalRouter {
         if (goal != null) {
           // the last stub joins the target port along its normal: a turn costs a bend
           boolean normalVertical = goal[2] == 0 || goal[2] == 2;
-          long extra = goal[3] + STUB + (normalVertical == (dir == 1) ? 0 : BEND_COST);
-          long total = top[0] + extra;
-          // finish: accept immediately (costs are small compared to the search order)
-          if (found < 0 || total < dist[found]) {
-            // record as a virtual end: store in a side map via prev trick
+          long total = top[0] + goal[3] + STUB + (normalVertical == (dir == 1) ? 0 : BEND_COST);
+          if (total < bestTotal) {
+            bestTotal = total;
             found = state;
-            break;
           }
         }
         // horizontal and vertical neighbours

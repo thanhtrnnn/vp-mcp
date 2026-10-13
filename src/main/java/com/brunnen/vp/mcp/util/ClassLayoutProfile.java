@@ -40,6 +40,8 @@ public final class ClassLayoutProfile extends LayoutProfile {
     if (model instanceof IGeneralization || model instanceof IRealization) {
       // VP draws both from the general class / interface down to the specialization
       spec.priority = 10;
+      spec.preferFromSide = 2; // out of the bottom of the general class
+      spec.preferToSide = 0; // into the top of the specialization
       return spec;
     }
     if (model instanceof IAssociation) {

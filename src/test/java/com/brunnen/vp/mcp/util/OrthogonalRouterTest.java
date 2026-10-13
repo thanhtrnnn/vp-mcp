@@ -1,6 +1,7 @@
 package com.brunnen.vp.mcp.util;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -138,5 +139,51 @@ public class OrthogonalRouterTest {
     for (int i = 1; i < xs.size(); i++) {
       assertTrue(xs.get(i) - xs.get(i - 1) >= OrthogonalRouter.PORT_GAP);
     }
+  }
+
+  @Test
+  public void preferredSidesAreUsed() {
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(shape("parent", 300, 50, 100, 60));
+    shapes.add(shape("child", 50, 250, 100, 60));
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    conns.add(new OrthogonalRouter.Conn("g", "parent", "child").prefer(2, 0));
+    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
+    List<int[]> r = routes.get("g");
+    assertEquals(110, r.get(0)[1]); // bottom of the parent
+    assertEquals(250, r.get(r.size() - 1)[1]); // top of the child
+    assertTrue(problems(shapes, conns, routes).isEmpty());
+  }
+
+  @Test
+  public void sideHintsRestrictTheEnds() {
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(shape("a", 100, 50, 30, 60));
+    shapes.add(shape("b", 100, 250, 30, 60));
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    conns.add(new OrthogonalRouter.Conn("g", "b", "a").sides(3, 3));
+    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
+    List<int[]> r = routes.get("g");
+    assertEquals(100, r.get(0)[0]); // west side of b
+    assertEquals(100, r.get(r.size() - 1)[0]); // west side of a
+    assertTrue(r.get(1)[0] < 100); // a bracket on the left
+    assertTrue(problems(shapes, conns, routes).isEmpty());
+  }
+
+  @Test
+  public void drawnRoutesAreKeptClearOf() {
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(shape("a", 50, 50, 100, 60));
+    shapes.add(shape("b", 300, 50, 100, 60));
+    List<OrthogonalRouter.Conn> existing = new ArrayList<>();
+    existing.add(new OrthogonalRouter.Conn("first", "a", "b"));
+    Map<String, List<int[]>> first = OrthogonalRouter.route(shapes, existing);
+    List<OrthogonalRouter.Drawn> drawn = new ArrayList<>();
+    drawn.add(new OrthogonalRouter.Drawn(existing.get(0), first.get("first")));
+    List<OrthogonalRouter.Conn> more = new ArrayList<>();
+    more.add(new OrthogonalRouter.Conn("second", "b", "a"));
+    Map<String, List<int[]>> second = OrthogonalRouter.route(shapes, more, drawn);
+    assertFalse(
+        RouteChecks.shares(first.get("first"), second.get("second"), OrthogonalRouter.LANE_GAP));
   }
 }

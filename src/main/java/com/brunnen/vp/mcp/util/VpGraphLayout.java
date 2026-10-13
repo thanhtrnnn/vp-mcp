@@ -95,7 +95,8 @@ public final class VpGraphLayout {
       LayoutProfile.EdgeSpec spec = graph.edgeSpecs.get(id);
       conns.add(
           new OrthogonalRouter.Conn(id, c.getFromShape().getId(), c.getToShape().getId())
-              .sides(spec.fromSide, spec.toSide));
+              .sides(spec.fromSide, spec.toSide)
+              .prefer(spec.preferFromSide, spec.preferToSide));
     }
     Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
     for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
@@ -484,7 +485,8 @@ public final class VpGraphLayout {
         IConnectorUIModel c = connectors.get(id);
         pending.add(
             new OrthogonalRouter.Conn(id, c.getFromShape().getId(), c.getToShape().getId())
-                .sides(spec.fromSide, spec.toSide));
+                .sides(spec.fromSide, spec.toSide)
+                .prefer(spec.preferFromSide, spec.preferToSide));
       }
       List<OrthogonalRouter.Drawn> drawn = new ArrayList<>();
       for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
