@@ -249,6 +249,26 @@ public final class ElkLayout {
     }
 
     /**
+     * Whether layers follow each other horizontally (RIGHT, LEFT).
+     *
+     * @return true for a flow to the right or left
+     */
+    public boolean horizontalFlow() {
+      return direction == Dir.RIGHT || direction == Dir.LEFT;
+    }
+
+    /**
+     * Make sure layers are at least this far apart.
+     *
+     * @param gap least gap between two layers
+     * @return this
+     */
+    public Options minLayerGap(int gap) {
+      this.layerGap = Math.max(layerGap, gap);
+      return this;
+    }
+
+    /**
      * Inner padding of containers.
      *
      * @param top top padding (room for the title)
@@ -454,6 +474,9 @@ public final class ElkLayout {
     node.setProperty(CoreOptions.SPACING_LABEL_NODE, 4.0);
     node.setProperty(CoreOptions.SPACING_COMPONENT_COMPONENT, (double) options.nodeGap);
     node.setProperty(CoreOptions.SPACING_NODE_SELF_LOOP, 24.0);
+    node.setProperty(
+        LayeredOptions.EDGE_ROUTING_SELF_LOOP_DISTRIBUTION,
+        org.eclipse.elk.alg.layered.options.SelfLoopDistributionStrategy.EQUALLY);
     node.setProperty(CoreOptions.SPACING_PORT_PORT, 14.0);
     node.setProperty(LayeredOptions.SPACING_NODE_NODE_BETWEEN_LAYERS, (double) options.layerGap);
     node.setProperty(LayeredOptions.SPACING_EDGE_EDGE_BETWEEN_LAYERS, (double) options.edgeGap);

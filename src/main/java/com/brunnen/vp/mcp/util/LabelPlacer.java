@@ -15,8 +15,8 @@ import java.util.Map;
  */
 public final class LabelPlacer {
 
-  /** Clearance between a label and its line. */
-  private static final int GAP = 3;
+  /** Clearance between a label and its line: the nearest first, then further out. */
+  private static final int[] GAPS = {3, 14, 26, 50, 80};
 
   /** Where a label belongs on its connector. */
   public enum Slot {
@@ -93,7 +93,10 @@ public final class LabelPlacer {
 
   private static int[] choose(
       Spec spec, List<int[]> route, List<int[]> shapes, List<int[]> lines, List<int[]> placed) {
-    List<int[]> candidates = candidates(spec, route);
+    List<int[]> candidates = new ArrayList<>();
+    for (int gap : GAPS) {
+      candidates.addAll(candidates(spec, route, gap));
+    }
     int[] best = null;
     int bestScore = Integer.MAX_VALUE;
     for (int i = 0; i < candidates.size(); i++) {
@@ -109,13 +112,13 @@ public final class LabelPlacer {
     }
     if (best == null) {
       int[] a = route.get(0);
-      best = new int[] {a[0] + GAP, a[1] + GAP, spec.w, spec.h}; // a route of no length
+      best = new int[] {a[0] + 3, a[1] + 3, spec.w, spec.h}; // a route of no length
     }
     return best;
   }
 
   /** Candidate rectangles in order of preference. */
-  private static List<int[]> candidates(Spec spec, List<int[]> route) {
+  private static List<int[]> candidates(Spec spec, List<int[]> route, int gap) {
     List<int[]> result = new ArrayList<>();
     int legs = route.size() - 1;
     List<Integer> order = new ArrayList<>();
@@ -152,9 +155,12 @@ public final class LabelPlacer {
           alongs.add(len / 2 + k * 6);
           alongs.add(len / 2 - k * 6);
         }
+        // a leg too short for the label (a stub of a self loop): beside the line, past either end
+        alongs.add(len + extent / 2 + 4);
+        alongs.add(-extent / 2 - 4);
         for (int along : alongs) {
           for (int side : new int[] {-1, 1}) {
-            result.add(rect(spec, a, sign, horizontal, along, side, true));
+            result.add(rect(spec, a, sign, horizontal, along, side, true, gap));
           }
         }
         continue;
@@ -165,9 +171,28 @@ public final class LabelPlacer {
       int steps = Math.max(0, (len - extent) / 6);
       for (int step = 0; step <= steps; step++) {
         for (int side : new int[] {-1, 1}) {
-          result.add(rect(spec, from, dir, horizontal, GAP + step * 6, side, false));
+          result.add(rect(spec, from, dir, horizontal, 3 + step * 6, side, false, gap));
         }
       }
+    }
+    if (spec.slot == Slot.CENTER) {
+      // last resorts: clear of the whole route, on any of its four sides
+      int minX = Integer.MAX_VALUE;
+      int minY = Integer.MAX_VALUE;
+      int maxX = Integer.MIN_VALUE;
+      int maxY = Integer.MIN_VALUE;
+      for (int[] p : route) {
+        minX = Math.min(minX, p[0]);
+        minY = Math.min(minY, p[1]);
+        maxX = Math.max(maxX, p[0]);
+        maxY = Math.max(maxY, p[1]);
+      }
+      int cx = (minX + maxX) / 2 - spec.w / 2;
+      int cy = (minY + maxY) / 2 - spec.h / 2;
+      result.add(new int[] {minX - spec.w - gap, cy, spec.w, spec.h});
+      result.add(new int[] {maxX + gap, cy, spec.w, spec.h});
+      result.add(new int[] {cx, minY - spec.h - gap, spec.w, spec.h});
+      result.add(new int[] {cx, maxY + gap, spec.w, spec.h});
     }
     return result;
   }
@@ -178,7 +203,14 @@ public final class LabelPlacer {
    * a centred label) and {@code side} the side of the line.
    */
   private static int[] rect(
-      Spec spec, int[] from, int dir, boolean horizontal, int along, int side, boolean centred) {
+      Spec spec,
+      int[] from,
+      int dir,
+      boolean horizontal,
+      int along,
+      int side,
+      boolean centred,
+      int gap) {
     int extent = horizontal ? spec.w : spec.h;
     int start;
     if (centred) {
@@ -188,9 +220,9 @@ public final class LabelPlacer {
       start = dir > 0 ? near : near - extent;
     }
     if (horizontal) {
-      return new int[] {start, side < 0 ? from[1] - GAP - spec.h : from[1] + GAP, spec.w, spec.h};
+      return new int[] {start, side < 0 ? from[1] - gap - spec.h : from[1] + gap, spec.w, spec.h};
     }
-    return new int[] {side < 0 ? from[0] - GAP - spec.w : from[0] + GAP, start, spec.w, spec.h};
+    return new int[] {side < 0 ? from[0] - gap - spec.w : from[0] + gap, start, spec.w, spec.h};
   }
 
   private static int length(List<int[]> route, int leg) {
@@ -199,17 +231,18 @@ public final class LabelPlacer {
     return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
   }
 
+  /** Cost of a spot: a label on a shape or another label is the worst, on a line less so. */
   private static int collisions(
       int[] r, List<int[]> shapes, List<int[]> lines, List<int[]> placed) {
     int n = 0;
     for (int[] s : shapes) {
       if (intersects(r, s)) {
-        n++;
+        n += 3;
       }
     }
     for (int[] p : placed) {
       if (intersects(r, p)) {
-        n++;
+        n += 3;
       }
     }
     for (int[] l : lines) {

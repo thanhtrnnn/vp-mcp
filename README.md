@@ -39,10 +39,18 @@ text, attachedTo, x, y)` (a comment box at the first free spot beside the shape 
 bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
 and matches the exact diagram type.
 
+Class and use case diagrams are laid out by a layered, orthogonal layout (the Eclipse Layout Kernel that
+Visual Paradigm bundles in `lib02.jar`): after every `add*` call the shapes, lines and labels are placed
+again, so every line is horizontal or vertical (right-angle elbows), shapes never overlap, no line runs
+through a shape or on top of another line, and labels sit beside their lines. A shape placed with x/y
+(or moved with `setElementBounds`) is pinned: lines are routed around it. `autoLayoutDiagram` lays the whole
+diagram out again; `rerouteConnectors` routes the lines around the shapes where they stand. Deployment
+nodes, devices and execution environments are flat rectangles with their keyword and name.
+
 ##### Use Case Diagram (5 tools)
 - **createUseCaseDiagram(diagramName)**: Create new use case diagrams
-- **addActor(actorName, diagramName, x, y)**: Add actors (x/y > 0 place them, else a column on the left)
-- **addUseCase(useCaseName, diagramName, x, y)**: Add use cases (x/y > 0 place them, else a column)
+- **addActor(actorName, diagramName, x, y)**: Add actors (x/y > 0 pin them, else the layout puts them in a column on the left)
+- **addUseCase(useCaseName, diagramName, x, y)**: Add use cases (x/y > 0 pin them, else the layout places them)
 - **addRelationship(diagramName, sourceName, targetName, relationshipType)**: Create Include/Extend/Generalization/Association relationships (Generalization: source = child, target = parent)
 - **generateUseCaseReport(diagramName)**: Generate use case analysis report
 

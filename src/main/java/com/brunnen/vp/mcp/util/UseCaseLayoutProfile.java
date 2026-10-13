@@ -5,6 +5,7 @@ import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
 import com.vp.plugin.model.IActor;
+import com.vp.plugin.model.IAnchor;
 import com.vp.plugin.model.IExtend;
 import com.vp.plugin.model.IGeneralization;
 import com.vp.plugin.model.IInclude;
@@ -48,6 +49,9 @@ public final class UseCaseLayoutProfile extends LayoutProfile {
       spec.growable = false;
     } else if (model instanceof IUseCase) {
       spec.outline = ShapeOutline.Kind.ELLIPSE;
+    } else if (model instanceof ISystem) {
+      // the title of the boundary is written across its top
+      spec.minSize = new int[] {TextMetrics.width(model.getName(), false) + 48, 0};
     }
     return spec;
   }
@@ -78,6 +82,10 @@ public final class UseCaseLayoutProfile extends LayoutProfile {
     IModelElement model = c.getModelElement();
     IModelElement from = c.getFromShape() == null ? null : c.getFromShape().getModelElement();
     IModelElement to = c.getToShape() == null ? null : c.getToShape().getModelElement();
+    if (model instanceof IAnchor) {
+      spec.reverse = true; // a note is drawn after what it explains: next to it, not far away
+      return spec;
+    }
     if (model instanceof IInclude || model instanceof IExtend) {
       spec.priority = 3;
       ICaptionUIModel caption = c.getCaptionUIModel();

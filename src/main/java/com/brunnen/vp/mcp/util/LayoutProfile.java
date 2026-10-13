@@ -32,6 +32,9 @@ public class LayoutProfile {
 
     /** Whether the layout may enlarge the shape when a side carries more connectors than fit. */
     public boolean growable = true;
+
+    /** Least width and height of a container (room for its title), null for none. */
+    public int[] minSize;
   }
 
   /** A label of a connector. */

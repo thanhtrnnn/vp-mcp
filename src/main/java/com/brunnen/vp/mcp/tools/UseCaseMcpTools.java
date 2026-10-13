@@ -60,9 +60,10 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addActor",
       description =
-          "Add an actor to a use case diagram. x/y (>0) place it explicitly (e.g. an abstract"
-              + " parent actor above its children); otherwise it goes below the lowest actor of"
-              + " the actor column on the left, its name clear of the next figure")
+          "Add an actor to a use case diagram. x/y (>0) place it explicitly: it stays there and"
+              + " the lines are routed around it; otherwise the layered layout puts the actors in"
+              + " one column on the left (their names hang below the figures; a specialization of"
+              + " an actor is joined to its general actor by a bracket left of the column)")
   public String addActor(String actorName, String diagramName, int x, int y) {
     try {
       return runOnEdt(
@@ -113,8 +114,8 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addUseCase",
       description =
-          "Add a use case to a use case diagram. x/y (>0) place it explicitly; otherwise it goes"
-              + " below the lowest use case of the use case column")
+          "Add a use case to a use case diagram. x/y (>0) place it explicitly (it stays there and"
+              + " the lines are routed around it); otherwise the layered layout places it")
   public String addUseCase(String useCaseName, String diagramName, int x, int y) {
     try {
       return runOnEdt(
@@ -345,9 +346,9 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       name = "addSystemBoundary",
       description =
           "Wrap all use cases of a use case diagram in a labeled system boundary rectangle "
-              + "(the module box); actors the box would cover are moved outside it. A diagram has "
-              + "one boundary: calling it again renames and re-sizes the existing box, and "
-              + "autoLayoutDiagram afterwards fits it around the laid-out use cases again.")
+              + "(the module box) and lay the diagram out around it: the box is sized to the use "
+              + "cases it holds, actors stand outside. A diagram has one boundary: calling it "
+              + "again renames it and adds the use cases added since.")
   public String addSystemBoundary(String diagramName, String systemName) {
     try {
       return runOnEdt(

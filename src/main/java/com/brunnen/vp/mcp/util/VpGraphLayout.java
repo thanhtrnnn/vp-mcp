@@ -67,6 +67,7 @@ public final class VpGraphLayout {
     graph.place(profile, result, summary);
     Map<String, List<int[]>> routes = graph.vpRoutes(result);
     graph.routeDeferred(profile, routes);
+    graph.repair(profile, routes);
     graph.draw(profile, routes, summary);
     profile.afterLayout(diagram);
     return summary;
@@ -167,6 +168,19 @@ public final class VpGraphLayout {
 
     ElkLayout.Result solve(ElkLayout.Options base) {
       options = base;
+      // a label beside the middle of a line needs a leg as long as itself between two layers
+      // (plus the stubs at both shapes and the lane of the elbow between them)
+      int widest = 0;
+      for (LayoutProfile.EdgeSpec spec : edgeSpecs.values()) {
+        for (LayoutProfile.LabelSpec l : spec.labels) {
+          if (l.slot == ElkLayout.Slot.CENTER) {
+            widest = Math.max(widest, options.horizontalFlow() ? l.w : l.h);
+          }
+        }
+      }
+      if (widest > 0) {
+        options.minLayerGap(widest + 96);
+      }
       ElkLayout.Result result = null;
       for (int pass = 0; pass < 3; pass++) {
         result = run();
@@ -189,6 +203,9 @@ public final class VpGraphLayout {
         }
         if (spec.bottomLabel != null) {
           node.bottomLabel(spec.bottomLabel[0], spec.bottomLabel[1]);
+        }
+        if (spec.minSize != null) {
+          node.minSize(spec.minSize[0], spec.minSize[1]);
         }
         nodes.add(node);
       }
@@ -393,21 +410,87 @@ public final class VpGraphLayout {
      * routes of all the others, and add them to {@code routes}.
      */
     void routeDeferred(LayoutProfile profile, Map<String, List<int[]>> routes) {
-      List<OrthogonalRouter.Conn> pending = new ArrayList<>();
+      List<String> ids = new ArrayList<>();
       for (String id : edgeOrder) {
-        LayoutProfile.EdgeSpec spec = edgeSpecs.get(id);
-        if (spec.deferred) {
-          IConnectorUIModel c = connectors.get(id);
-          pending.add(
-              new OrthogonalRouter.Conn(id, c.getFromShape().getId(), c.getToShape().getId())
-                  .sides(spec.fromSide, spec.toSide));
+        if (edgeSpecs.get(id).deferred) {
+          ids.add(id);
         }
       }
-      if (pending.isEmpty()) {
+      reroute(profile, routes, ids);
+    }
+
+    /**
+     * Check the routes of the layered layout against what the layout promises (no line through a
+     * shape that is not one of its ends, no two lines on top of each other) and route the offenders
+     * again with the router, around the shapes and the routes that are fine.
+     */
+    void repair(LayoutProfile profile, Map<String, List<int[]>> routes) {
+      List<String> bad = new ArrayList<>();
+      for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
+        IConnectorUIModel c = connectors.get(e.getKey());
+        for (IShapeUIModel s : shapes.values()) {
+          String id = s.getId();
+          if (hasChildren(id)
+              || related(c.getFromShape().getId(), id)
+              || related(c.getToShape().getId(), id)) {
+            continue;
+          }
+          if (RouteChecks.through(e.getValue(), rect(s), 2)) {
+            bad.add(e.getKey());
+            break;
+          }
+        }
+      }
+      List<String> ids = new ArrayList<>(routes.keySet());
+      for (int i = 0; i < ids.size(); i++) {
+        for (int j = i + 1; j < ids.size(); j++) {
+          if (!bad.contains(ids.get(i))
+              && !bad.contains(ids.get(j))
+              && RouteChecks.shares(
+                  routes.get(ids.get(i)), routes.get(ids.get(j)), OrthogonalRouter.LANE_GAP)) {
+            bad.add(ids.get(j));
+          }
+        }
+      }
+      reroute(profile, routes, bad);
+    }
+
+    /** Whether {@code shapeId} is the shape {@code endId} itself or sits inside or around it. */
+    private boolean related(String endId, String shapeId) {
+      if (endId.equals(shapeId)) {
+        return true;
+      }
+      for (String up = parents.get(endId); up != null; up = parents.get(up)) {
+        if (up.equals(shapeId)) {
+          return true;
+        }
+      }
+      for (String up = parents.get(shapeId); up != null; up = parents.get(up)) {
+        if (up.equals(endId)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /** Route the connectors {@code ids} again; the other routes stay and are kept clear of. */
+    private void reroute(LayoutProfile profile, Map<String, List<int[]>> routes, List<String> ids) {
+      if (ids.isEmpty()) {
         return;
+      }
+      List<OrthogonalRouter.Conn> pending = new ArrayList<>();
+      for (String id : ids) {
+        LayoutProfile.EdgeSpec spec = edgeSpecs.get(id);
+        IConnectorUIModel c = connectors.get(id);
+        pending.add(
+            new OrthogonalRouter.Conn(id, c.getFromShape().getId(), c.getToShape().getId())
+                .sides(spec.fromSide, spec.toSide));
       }
       List<OrthogonalRouter.Drawn> drawn = new ArrayList<>();
       for (Map.Entry<String, List<int[]>> e : routes.entrySet()) {
+        if (ids.contains(e.getKey())) {
+          continue;
+        }
         IConnectorUIModel c = connectors.get(e.getKey());
         drawn.add(
             new OrthogonalRouter.Drawn(

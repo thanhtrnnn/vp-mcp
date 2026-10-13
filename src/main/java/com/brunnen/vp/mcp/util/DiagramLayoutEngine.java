@@ -136,11 +136,7 @@ public final class DiagramLayoutEngine {
     }
     String type = diagram.getType();
 
-    if (IDiagramTypeConstants.DIAGRAM_TYPE_USE_CASE_DIAGRAM.equals(type)) {
-      applyUseCaseLayout(dm, diagram);
-    } else if (IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM.equals(type)) {
-      applyClassLayout(dm, diagram);
-    } else if (IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM.equals(type)) {
+    if (IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM.equals(type)) {
       applySequenceLayout(dm, diagram);
     } else if (IDiagramTypeConstants.DIAGRAM_TYPE_ER_DIAGRAM.equals(type)) {
       applyErdLayout(dm, diagram);
@@ -149,26 +145,6 @@ public final class DiagramLayoutEngine {
     } else {
       dm.autoLayout(diagram);
     }
-  }
-
-  private static void applyUseCaseLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    LayoutOption$Hierarchical opt = dm.createHierarchicalLayoutOption();
-    opt.setOrientation(LayoutOption$Orientation.LeftToRight);
-    opt.setMinimumLayerDistance(100);
-    opt.setMinimumShapeDistance(60);
-    opt.setShapePlacement(LayoutOption$ShapePlacement.Tree);
-    opt.setConnectorStyle(LayoutOption$ConnectorStyle.Polyline);
-    dm.openAndLayoutDiagram(diagram, opt);
-  }
-
-  private static void applyClassLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    LayoutOption$Hierarchical opt = dm.createHierarchicalLayoutOption();
-    opt.setOrientation(LayoutOption$Orientation.TopToBottom);
-    opt.setMinimumLayerDistance(120);
-    opt.setMinimumShapeDistance(80);
-    opt.setShapePlacement(LayoutOption$ShapePlacement.Polyline);
-    opt.setConnectorStyle(LayoutOption$ConnectorStyle.Orthogonal);
-    dm.openAndLayoutDiagram(diagram, opt);
   }
 
   private static void applySequenceLayout(DiagramManager dm, IDiagramUIModel diagram) {

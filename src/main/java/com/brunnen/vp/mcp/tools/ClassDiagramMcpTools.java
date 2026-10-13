@@ -75,9 +75,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addClass",
       description =
-          "Add a class to a class diagram. x/y (>0) place the shape explicitly, otherwise it goes"
-              + " to the first free spot of its layer row (rows wrap after about three classes)."
-              + " modelPackage puts the class inside a model package (no package shape drawn) so"
+          "Add a class to a class diagram. x/y (>0) place the shape explicitly: it stays there and"
+              + " the connectors are routed around it; otherwise the layered layout places every"
+              + " class again as things are added (generalizations decide the layers, lines are"
+              + " horizontal or vertical, nothing overlaps). modelPackage puts the class inside a model package (no package shape drawn) so"
               + " it cannot collide with same-named classes elsewhere in the project. A class of"
               + " that name already in the project (root, or in modelPackage) is reused: a new"
               + " view of it is drawn")
@@ -793,7 +794,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addInterface", description = "Add an interface to a class diagram")
+  @Tool(
+      name = "addInterface",
+      description =
+          "Add an interface to a class diagram (placed by the layered layout, like a class)")
   public String addInterface(String diagramName, String interfaceName) {
     try {
       return runOnEdt(
@@ -1312,7 +1316,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               + " along (ports, artifacts, classes...); a lifeline of a sequence diagram takes its"
               + " messages and activation bar along; control nodes, pseudo-states and"
               + " BPMN/flowchart/DFD symbols keep their notation sizes. The labels of the"
-              + " connectors of a moved shape are put beside their lines again")
+              + " connectors of a moved shape are routed again and their labels put beside the"
+              + " lines. A shape placed this way is pinned: the layered layout of class and use"
+              + " case diagrams leaves it where it is (autoLayoutDiagram releases it)")
   public String setElementBounds(
       String diagramName, String elementName, int x, int y, int width, int height) {
     try {
@@ -1343,6 +1349,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             if (profileOf(diagram) != null) {
               // explicitly placed: the layered layout leaves it here, connectors go around it
+              note += avoidOverlap(diagram, de);
               pin(de);
               relayout(diagram);
               return boundsResult(elementName, de) + note;
@@ -1475,6 +1482,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             for (IRelationship rel : matches) {
               rel.delete();
             }
+            relayout(diagram); // the lines it took away free their lanes
             return "Removed "
                 + matches.size()
                 + " "

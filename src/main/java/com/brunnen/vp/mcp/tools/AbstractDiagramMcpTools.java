@@ -132,15 +132,48 @@ public abstract class AbstractDiagramMcpTools {
     if (profile == null) {
       return;
     }
+    layoutNow(diagram, profile);
+    // Visual Paradigm fits a shape to its content (members of a class that is shown again, a
+    // renamed element) when it next repaints, i.e. after this call: a shape that changed size by
+    // then makes the layout stale, so it is laid out once more with the final sizes
+    String laidOutWith = shapeSizes(diagram);
+    afterVpSettles(
+        () -> {
+          if (!laidOutWith.equals(shapeSizes(diagram))) {
+            layoutNow(diagram, profile);
+          }
+        });
+  }
+
+  private void layoutNow(IDiagramUIModel diagram, LayoutProfile profile) {
     activate(diagram);
     java.util.Set<String> pinned = PINNED.get(diagram.getId());
     if (profile.placesShapes()
         && MANAGED.contains(diagram.getId())
         && (pinned == null || pinned.isEmpty())) {
-      VpGraphLayout.layout(diagram, profile);
-    } else {
-      VpGraphLayout.route(diagram, profile);
+      try {
+        VpGraphLayout.layout(diagram, profile);
+        return;
+      } catch (RuntimeException e) {
+        // the layered layout could not handle this graph: the shapes stay, the lines are routed
+        System.err.println("Layered layout failed on '" + diagram.getName() + "': " + e);
+      }
     }
+    VpGraphLayout.route(diagram, profile);
+  }
+
+  /** The size of every shape of the diagram, to notice that Visual Paradigm fitted one later. */
+  private static String shapeSizes(IDiagramUIModel diagram) {
+    StringBuilder sb = new StringBuilder();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      sb.append(s.getId())
+          .append(':')
+          .append(s.getWidth())
+          .append('x')
+          .append(s.getHeight())
+          .append(';');
+    }
+    return sb.toString();
   }
 
   /**
@@ -887,6 +920,101 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /**
+   * Move a shape that was placed explicitly to the nearest spot where it overlaps no sibling shape
+   * (48 px clear): the request is honoured as far as the diagram allows, shapes never overlap.
+   * Containers (packages, nodes, the system boundary) are not counted: a shape may be put inside
+   * one.
+   *
+   * @param diagram the diagram
+   * @param shape the shape just placed (with the shapes nested in it)
+   * @return a note for the tool's answer, empty when the shape stays where it was put
+   */
+  protected String avoidOverlap(IDiagramUIModel diagram, IDiagramElement shape) {
+    if (!(shape instanceof IShapeUIModel)) {
+      return "";
+    }
+    IShapeUIModel self = (IShapeUIModel) shape;
+    if (isContainerModel(self)) {
+      return "";
+    }
+    String parentId = self.getParent() == null ? null : self.getParent().getId();
+    List<int[]> others = new ArrayList<>();
+    for (IShapeUIModel other : diagram.toShapeUIModelArray()) {
+      String otherParent = other.getParent() == null ? null : other.getParent().getId();
+      if (other.getId().equals(self.getId())
+          || other.getWidth() <= 0
+          || isHiddenStub(other)
+          || other.getModelElement() == null
+          || isContainerModel(other)
+          || !java.util.Objects.equals(parentId, otherParent)) {
+        continue;
+      }
+      others.add(new int[] {other.getX(), other.getY(), other.getWidth(), other.getHeight()});
+    }
+    int w = self.getWidth();
+    int h = self.getHeight();
+    int x = self.getX();
+    int y = self.getY();
+    if (!overlapsAny(x, y, w, h, others)) {
+      return "";
+    }
+    for (int ring = 1; ring <= 80; ring++) {
+      int step = 20 * ring;
+      int[] best = null;
+      long bestDistance = Long.MAX_VALUE;
+      for (int dx = -step; dx <= step; dx += 20) {
+        for (int dy = -step; dy <= step; dy += 20) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) != step || x + dx < 20 || y + dy < 20) {
+            continue;
+          }
+          long distance = (long) dx * dx + (long) dy * dy;
+          if (distance < bestDistance && !overlapsAny(x + dx, y + dy, w, h, others)) {
+            bestDistance = distance;
+            best = new int[] {x + dx, y + dy};
+          }
+        }
+      }
+      if (best != null) {
+        moveShapeTree(self, best[0] - x, best[1] - y);
+        return " (moved from "
+            + x
+            + ","
+            + y
+            + " to "
+            + best[0]
+            + ","
+            + best[1]
+            + ": the requested place overlaps another shape)";
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Room kept between explicitly placed shapes: two stubs and a lane for the lines between them.
+   */
+  private static final int CLEARANCE = 48;
+
+  private static boolean overlapsAny(int x, int y, int w, int h, List<int[]> others) {
+    for (int[] o : others) {
+      if (x < o[0] + o[2] + CLEARANCE
+          && o[0] < x + w + CLEARANCE
+          && y < o[1] + o[3] + CLEARANCE
+          && o[1] < y + h + CLEARANCE) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isContainerModel(IShapeUIModel shape) {
+    IModelElement m = shape.getModelElement();
+    return m instanceof com.vp.plugin.model.IPackage
+        || m instanceof com.vp.plugin.model.ISystem
+        || m instanceof com.vp.plugin.model.INode;
+  }
+
+  /**
    * Put a shape that was just created at its place. An explicit x/y pins it there. Otherwise a
    * diagram the shared layout owns places it itself on the next {@link #relayout}; any other
    * diagram gets the first free spot (row by row from the top left).
@@ -899,6 +1027,7 @@ public abstract class AbstractDiagramMcpTools {
   protected void placeNew(IDiagramUIModel diagram, IDiagramElement de, int x, int y) {
     if (x > 0 || y > 0) {
       de.setBounds(Math.max(x, 0), Math.max(y, 0), de.getWidth(), de.getHeight());
+      avoidOverlap(diagram, de);
       pin(de);
       return;
     }
@@ -2274,6 +2403,17 @@ public abstract class AbstractDiagramMcpTools {
           .append("x")
           .append(cap.getHeight());
     }
+    if (c instanceof com.vp.plugin.diagram.connector.IAssociationUIModel
+        && c.getModelElement() instanceof IAssociation) {
+      // the multiplicities of an association are labels of their own
+      IAssociation assoc = (IAssociation) c.getModelElement();
+      com.vp.plugin.diagram.connector.IAssociationUIModel uiModel =
+          (com.vp.plugin.diagram.connector.IAssociationUIModel) c;
+      appendMultiplicity(
+          sb, uiModel.getMultiplicityARectangle(), (IAssociationEnd) assoc.getFromEnd());
+      appendMultiplicity(
+          sb, uiModel.getMultiplicityBRectangle(), (IAssociationEnd) assoc.getToEnd());
+    }
     sb.append("\n");
     // the messages of a communication link are shapes of their own, children of the link
     IShapeUIModel[] children = c.toChildArray();
@@ -2305,6 +2445,26 @@ public abstract class AbstractDiagramMcpTools {
             .append(childCap.getHeight());
       }
       sb.append("\n");
+    }
+  }
+
+  /** " mult x,y wxh" for the label of an association end that shows a multiplicity. */
+  private static void appendMultiplicity(
+      StringBuilder sb, java.awt.Rectangle rect, IAssociationEnd end) {
+    String text = end == null ? null : end.getMultiplicity();
+    if (rect != null
+        && rect.width > 0
+        && text != null
+        && !text.isEmpty()
+        && !"Unspecified".equalsIgnoreCase(text)) {
+      sb.append(" mult ")
+          .append(rect.x)
+          .append(",")
+          .append(rect.y)
+          .append(" ")
+          .append(rect.width)
+          .append("x")
+          .append(rect.height);
     }
   }
 
@@ -2594,8 +2754,12 @@ public abstract class AbstractDiagramMcpTools {
       name = "autoLayoutDiagram",
       description =
           "Apply structured layout to a diagram. MUST be called AFTER adding all elements. "
-              + "UC: actors left, use cases right (an existing system boundary is fitted around"
-              + " the laid-out use cases). Class: boundary/DAO/entity layers. ERD: compact organic."
+              + "Class and use case diagrams (and every diagram type that has a layout profile):"
+              + " layered, orthogonal layout of shapes, lines and labels: every line horizontal"
+              + " or vertical, no shape overlap, no line through a shape, no two lines on top of"
+              + " each other, labels beside their lines; shapes placed with x/y are not pinned"
+              + " any more. Class: generalizations decide the layers; UC: actors left, use cases"
+              + " inside the system boundary. ERD: compact organic."
               + " Communication: actor row, boundaries, entities. Component, package, object:"
               + " Visual Paradigm's orthogonal layout. State: top-to-bottom flow. DFD: entities"
               + " left, processes in the middle, data stores right. Activity, sequence,"
@@ -2716,6 +2880,7 @@ public abstract class AbstractDiagramMcpTools {
             if (left != null && left.getId().equals(element.getId())) {
               return "Error removing element: Visual Paradigm kept '" + elementName + "'";
             }
+            relayout(diagram); // the rest of the diagram closes up around the gap
             return "Removed element '"
                 + elementName
                 + "' from diagram '"
@@ -2792,6 +2957,7 @@ public abstract class AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error removing relationship: " + e.getMessage();
     }
+    relayout(diagram);
     return "Removed "
         + matches.size()
         + " connector(s) between '"
