@@ -1190,7 +1190,8 @@ public abstract class AbstractDiagramMcpTools {
       description =
           "Remove an element (shape or connector) from a diagram by its model element name. Only"
               + " the view goes (with the connectors attached to a removed shape); the model"
-              + " element stays in the project")
+              + " element stays in the project, except lifelines, links and messages, which exist"
+              + " on their diagram only")
   public String removeDiagramElement(String diagramName, String elementName) {
     try {
       return runOnEdt(
@@ -1207,7 +1208,14 @@ public abstract class AbstractDiagramMcpTools {
             if (!(element instanceof IBaseDiagramElement)) {
               return "Error removing element: cannot remove '" + elementName + "'";
             }
-            ((IBaseDiagramElement) element).deleteViewOnly();
+            if (isDiagramOwned(element.getModelElement())) {
+              // Lifelines, links and messages live on their diagram only: removing just the view
+              // makes VP ask "has no referenced view. Delete from the repository?" in a modal
+              // dialog that blocks the call. The classifier a lifeline stands for stays.
+              ((IBaseDiagramElement) element).deleteModel();
+            } else {
+              ((IBaseDiagramElement) element).deleteViewOnly();
+            }
             IDiagramElement left = findDiagramElementByName(diagram, elementName);
             if (left != null && left.getId().equals(element.getId())) {
               return "Error removing element: Visual Paradigm kept '" + elementName + "'";
@@ -1217,6 +1225,13 @@ public abstract class AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error removing element: " + e.getMessage();
     }
+  }
+
+  /** True for interaction models that exist only on the diagram that draws them. */
+  private static boolean isDiagramOwned(IModelElement model) {
+    return model instanceof IInteractionLifeLine
+        || model instanceof IInteractionLifeLineLink
+        || model instanceof IMessage;
   }
 
   @Tool(

@@ -52,7 +52,10 @@ in VP 18.1 on F2*/Z_* diagrams (exported PNGs). What changed and the quirks behi
   diagram already has is refused before VP creates anything (lookups take the last match, so a
   duplicate hid the first diagram), and a diagram VP refuses to name is deleted again.
 - **Removing**: `IDiagramUIModel.removeDiagramElement()` leaves the shape on the diagram;
-  `removeDiagramElement` now calls `IBaseDiagramElement.deleteViewOnly()` (model kept).
+  `removeDiagramElement` now calls `IBaseDiagramElement.deleteViewOnly()` (model kept). Exception:
+  lifelines, lifeline links and messages exist on their diagram only, and `deleteViewOnly()` on
+  them opens VP's modal "has no referenced view. Delete from the repository?" dialog, which blocks
+  the EDT call forever; they are removed with `deleteModel()` (the classifier stays).
 - **Aggregation kind**: `IAssociationEnd.getAggregationKind()` returns "composite"/"shared" although
   it is set with `AGGREGATION_KIND_COMPOSITED`/`_AGGREGATION` ("Composited"/"Aggregation");
   `aggregationOf()` accepts both (element list, `removeRelationship`).
