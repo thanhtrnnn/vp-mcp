@@ -15,10 +15,6 @@ import com.vp.plugin.model.IPackage;
 import com.vp.plugin.model.IRealization;
 import com.vp.plugin.model.IUsage;
 import java.awt.Rectangle;
-import java.util.ArrayDeque;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Class and object diagrams: inheritance and realization decide the layers (the general class or
@@ -27,9 +23,6 @@ import java.util.Map;
  * ends of an association, its name beside the longest leg.
  */
 public final class ClassLayoutProfile extends LayoutProfile {
-
-  /** Layer of every shape by id: hierarchy depth first, then distance from the hierarchy. */
-  private final Map<String, Integer> levels = new HashMap<>();
 
   @Override
   public ElkLayout.Options options(IDiagramUIModel diagram) {
@@ -53,11 +46,9 @@ public final class ClassLayoutProfile extends LayoutProfile {
       IAssociation assoc = (IAssociation) model;
       IAssociationEnd from = (IAssociationEnd) assoc.getFromEnd();
       IAssociationEnd to = (IAssociationEnd) assoc.getToEnd();
-      boolean whole = isWhole(from) || isWhole(to);
-      // a plain association has no direction of its own: it never makes the diagram deeper than
-      // the hierarchy needs; a whole stays above its part, a dependency above what it uses
-      spec.reverse = !whole && againstLevels(c);
-      spec.priority = whole ? 4 : 2;
+      // the class the association is drawn from stands above the one it goes to (a JSP above
+      // its DAO above its entity), a whole above its part
+      spec.priority = isWhole(from) || isWhole(to) ? 4 : 2;
       addMultiplicity(spec, "multFrom", from, ElkLayout.Slot.TAIL);
       addMultiplicity(spec, "multTo", to, ElkLayout.Slot.HEAD);
       addName(spec, c, assoc.getName());
@@ -68,93 +59,6 @@ public final class ClassLayoutProfile extends LayoutProfile {
       return spec;
     }
     return spec;
-  }
-
-  /**
-   * Whether the weak connector points from a deeper to a shallower shape: such a connector is
-   * layered the other way round, so associations never make the diagram deeper than the hierarchy
-   * and the distance from it require.
-   */
-  private boolean againstLevels(IConnectorUIModel c) {
-    if (c.getFromShape() == null || c.getToShape() == null) {
-      return false;
-    }
-    Integer from = levels.get(c.getFromShape().getId());
-    Integer to = levels.get(c.getToShape().getId());
-    return from != null && to != null && from > to;
-  }
-
-  /**
-   * Levels: the depth of a class in the generalization and realization forest (the general class at
-   * 0), every other class one more than its nearest neighbour that has a level.
-   */
-  private void computeLevels(IDiagramUIModel diagram) {
-    levels.clear();
-    Map<String, List<String>> children = new HashMap<>();
-    Map<String, List<String>> neighbours = new HashMap<>();
-    Map<String, Integer> parentCount = new HashMap<>();
-    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      neighbours.put(s.getId(), new java.util.ArrayList<>());
-    }
-    for (IConnectorUIModel c : diagram.toConnectorUIModelArray()) {
-      if (c.getFromShape() == null || c.getToShape() == null) {
-        continue;
-      }
-      String from = c.getFromShape().getId();
-      String to = c.getToShape().getId();
-      neighbours.computeIfAbsent(from, k -> new java.util.ArrayList<>()).add(to);
-      neighbours.computeIfAbsent(to, k -> new java.util.ArrayList<>()).add(from);
-      IModelElement model = c.getModelElement();
-      if (model instanceof IGeneralization || model instanceof IRealization) {
-        children.computeIfAbsent(from, k -> new java.util.ArrayList<>()).add(to);
-        parentCount.merge(to, 1, Integer::sum);
-        parentCount.putIfAbsent(from, 0);
-      }
-    }
-    // longest path from the roots of the hierarchy
-    ArrayDeque<String> queue = new ArrayDeque<>();
-    Map<String, Integer> remaining = new HashMap<>(parentCount);
-    for (Map.Entry<String, Integer> e : parentCount.entrySet()) {
-      if (e.getValue() == 0) {
-        levels.put(e.getKey(), 0);
-        queue.add(e.getKey());
-      }
-    }
-    while (!queue.isEmpty()) {
-      String id = queue.poll();
-      for (String child : children.getOrDefault(id, java.util.Collections.emptyList())) {
-        levels.merge(child, levels.get(id) + 1, Math::max);
-        if (remaining.merge(child, -1, Integer::sum) == 0) {
-          queue.add(child);
-        }
-      }
-    }
-    // everything else hangs off the hierarchy by the shortest connection; a diagram without
-    // any hierarchy starts from its best connected class
-    if (levels.isEmpty()) {
-      String hub = null;
-      for (Map.Entry<String, List<String>> e : neighbours.entrySet()) {
-        if (hub == null || e.getValue().size() > neighbours.get(hub).size()) {
-          hub = e.getKey();
-        }
-      }
-      if (hub != null) {
-        levels.put(hub, 0);
-      }
-    }
-    ArrayDeque<String> frontier = new ArrayDeque<>();
-    levels.entrySet().stream()
-        .sorted(Map.Entry.comparingByValue())
-        .forEach(e -> frontier.add(e.getKey()));
-    while (!frontier.isEmpty()) {
-      String id = frontier.poll();
-      for (String next : neighbours.getOrDefault(id, java.util.Collections.emptyList())) {
-        if (!levels.containsKey(next)) {
-          levels.put(next, levels.get(id) + 1);
-          frontier.add(next);
-        }
-      }
-    }
   }
 
   private static boolean isWhole(IAssociationEnd end) {
@@ -204,7 +108,6 @@ public final class ClassLayoutProfile extends LayoutProfile {
 
   @Override
   public void beforeLayout(IDiagramUIModel diagram) {
-    computeLevels(diagram);
     for (IConnectorUIModel c : diagram.toConnectorUIModelArray()) {
       if (c instanceof IAssociationUIModel) {
         ((IAssociationUIModel) c).setShowFromRoleName(false);
