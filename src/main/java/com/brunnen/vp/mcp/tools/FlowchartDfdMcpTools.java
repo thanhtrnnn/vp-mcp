@@ -1,12 +1,14 @@
 package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
+import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdNotation;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.DfdRole;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.FlowchartKind;
 import com.brunnen.vp.mcp.util.FlowchartDfdUtils.Grid;
 import com.vp.plugin.DiagramManager;
+import com.vp.plugin.diagram.ICaptionUIModel;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
@@ -62,15 +64,25 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
   /** Horizontal gap between a decision and a branch placed beside it. */
   private static final int BRANCH_GAP = 80;
 
-  /** Flowchart auto-placement: one column top to bottom, wrapping after seven shapes. */
-  private static final Grid FLOWCHART_GRID = new Grid(200, 60, 280, 110, 7);
+  /**
+   * Flowchart auto-placement: one column top to bottom (no wrap), each shape {@link #FLOWCHART_GAP}
+   * below the actual bottom of the shape above it, so a branch label fits between.
+   */
+  private static final int FLOWCHART_CENTER_X = 200;
+
+  private static final int FLOWCHART_TOP = 40;
+
+  private static final int FLOWCHART_GAP = 50;
 
   /** DFD auto-placement: external entities left, processes center, data stores right. */
-  private static final Grid DFD_ENTITY_GRID = new Grid(130, 90, 280, 150, Integer.MAX_VALUE);
+  private static final Grid DFD_ENTITY_GRID = new Grid(130, 90, 280, 220, Integer.MAX_VALUE);
 
-  private static final Grid DFD_PROCESS_GRID = new Grid(450, 90, 280, 150, Integer.MAX_VALUE);
+  private static final Grid DFD_PROCESS_GRID = new Grid(450, 90, 280, 220, Integer.MAX_VALUE);
 
-  private static final Grid DFD_STORE_GRID = new Grid(770, 90, 280, 150, Integer.MAX_VALUE);
+  private static final Grid DFD_STORE_GRID = new Grid(770, 90, 280, 220, Integer.MAX_VALUE);
+
+  /** Ids of auto-placed shapes a decision branch moved beside the decision. */
+  private final java.util.Set<String> movedAside = new java.util.HashSet<>();
 
   /** Diagram types the flowchart tools accept. */
   private static final String[] FLOWCHART_TYPES = {IDiagramTypeConstants.DIAGRAM_TYPE_FLOWCHART};
@@ -96,8 +108,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             }
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_FLOWCHART);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_FLOWCHART, diagramName);
             diagram.setAutoFitShapesSize(true);
             useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
@@ -116,14 +127,14 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
               + "database, manualInput, connector (on-page circle). shapeName is the text shown "
               + "AND the handle used by addFlowchartFlow, so it must be unique on the diagram. "
               + "The shape is fitted to its text; x/y (>0) set its top-left corner, otherwise it "
-              + "is auto-placed in a top-to-bottom column")
+              + "is auto-placed in one top-to-bottom column, 50 px below the shape above")
   public String addFlowchartShape(String diagramName, String shapeName, String kind, int x, int y) {
     try {
       return runOnEdt(
           () -> {
             IDiagramUIModel diagram = findDiagramOfType(diagramName, FLOWCHART_TYPES);
             if (diagram == null) {
-              return "Flowchart not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!FlowchartDfdUtils.isValidName(shapeName)) {
               return "Shape name must not be empty";
@@ -141,7 +152,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
             }
 
             IModelElement model = createFlowchartModel(parsed);
-            IDiagramElement de = placeNewShape(diagram, model, name, x, y, FLOWCHART_GRID);
+            IDiagramElement de = placeNewShape(diagram, model, name, x, y, null);
             return "Added "
                 + parsed.label()
                 + " '"
@@ -169,7 +180,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDiagramOfType(diagramName, FLOWCHART_TYPES);
             if (diagram == null) {
-              return "Flowchart not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             IShapeUIModel from = findShape(diagram, trimmed(fromShape));
             if (from == null) {
@@ -185,15 +196,29 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
             String caption = FlowchartDfdUtils.normalizeLabel(label);
             IFlowchartFlowline flow = factory().createFlowchartFlowline();
-            flow.setFrom(from.getModelElement());
-            flow.setTo(to.getModelElement());
-            if (caption != null) {
-              flow.setName(caption);
+            IDiagramElement connector = null;
+            String moved;
+            try {
+              flow.setFrom(from.getModelElement());
+              flow.setTo(to.getModelElement());
+              if (caption != null) {
+                flow.setName(caption);
+              }
+              moved = placeBranch(diagram, from, to);
+              if (moved == null) {
+                moved = rejoin(diagram, from, to);
+              }
+              connector = connectCentered(diagram, flow, from, to);
+            } finally {
+              if (connector == null) {
+                flow.delete(); // no orphan flow model when VP refuses the connection
+              }
             }
-            String moved = placeBranch(diagram, from, to);
-            if (connectCentered(diagram, flow, from, to) == null) {
-              flow.delete();
+            if (connector == null) {
               return "Error adding flowchart flow: Visual Paradigm did not create the connector";
+            }
+            if (caption != null && connector instanceof IConnectorUIModel) {
+              placeLabelBeside(diagram, (IConnectorUIModel) connector);
             }
 
             String hint =
@@ -207,7 +232,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
                 + "'"
                 + FlowchartDfdUtils.labelSuffix(caption)
                 + hint
-                + (moved != null ? "; moved '" + toShape + "' beside the decision" + moved : "");
+                + (moved != null ? "; moved '" + toShape + "'" + moved : "");
           });
     } catch (Exception e) {
       return "Error adding flowchart flow: " + e.getMessage();
@@ -238,11 +263,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
                   + "'. Use standard, ganeSarson, yourdonDeMarco or yourdonCoad";
             }
             DiagramManager dm = getDiagramManager();
-            IDiagramUIModel diagram = dm.createDiagram(diagramTypeConstant(parsed));
-            if (diagram == null) {
-              return "Visual Paradigm could not create a " + parsed.label() + " data flow diagram";
-            }
-            diagram.setName(diagramName);
+            IDiagramUIModel diagram = newDiagram(diagramTypeConstant(parsed), diagramName);
             diagram.setAutoFitShapesSize(true);
             useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
@@ -304,7 +325,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDiagramOfType(diagramName, DFD_TYPES);
             if (diagram == null) {
-              return "Data flow diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             DfdNotation notation = FlowchartDfdUtils.notationOfDiagramType(diagram.getType());
             IShapeUIModel from = findDfdShape(diagram, trimmed(fromElement));
@@ -326,14 +347,24 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
             String caption = FlowchartDfdUtils.normalizeLabel(label);
             IRelationship flow = createDfdDataFlow(notation);
-            flow.setFrom(from.getModelElement());
-            flow.setTo(to.getModelElement());
-            if (caption != null) {
-              flow.setName(caption);
+            IDiagramElement connector = null;
+            try {
+              flow.setFrom(from.getModelElement());
+              flow.setTo(to.getModelElement());
+              if (caption != null) {
+                flow.setName(caption);
+              }
+              connector = connectCentered(diagram, flow, from, to);
+            } finally {
+              if (connector == null) {
+                flow.delete();
+              }
             }
-            if (connectCentered(diagram, flow, from, to) == null) {
-              flow.delete();
+            if (connector == null) {
               return "Error adding data flow: Visual Paradigm did not create the connector";
+            }
+            if (caption != null && connector instanceof IConnectorUIModel) {
+              placeLabelAlong(diagram, (IConnectorUIModel) connector);
             }
             return "Added data flow '"
                 + fromElement
@@ -356,7 +387,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
           () -> {
             IDiagramUIModel diagram = findDiagramOfType(diagramName, DFD_TYPES);
             if (diagram == null) {
-              return "Data flow diagram not found: " + diagramName;
+              return diagramNotFound(diagramName);
             }
             if (!FlowchartDfdUtils.isValidName(elementName)) {
               return capitalize(role.label()) + " name must not be empty";
@@ -408,7 +439,8 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
 
   /**
    * Create the diagram shape for a fresh model element: render its caption, fit it to the text,
-   * give it the house fill and put it at x/y or the first free grid cell.
+   * give it the house fill and put it at x/y, the first free grid cell, or (grid null) below the
+   * lowest shape of the flowchart column.
    */
   private IDiagramElement placeNewShape(
       IDiagramUIModel diagram, IModelElement model, String name, int x, int y, Grid grid) {
@@ -435,7 +467,15 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
         || model instanceof com.vp.plugin.model.IFlowchartData) {
       width += 16;
     }
-    Point autoCenter = FlowchartDfdUtils.freeCellCenter(grid, occupied);
+    Point autoCenter;
+    if (grid == null) {
+      int top =
+          FlowchartDfdUtils.columnTop(
+              occupied, FLOWCHART_CENTER_X, width, FLOWCHART_TOP, FLOWCHART_GAP);
+      autoCenter = new Point(FLOWCHART_CENTER_X, top + height / 2);
+    } else {
+      autoCenter = FlowchartDfdUtils.freeCellCenter(grid, occupied);
+    }
     Point topLeft = FlowchartDfdUtils.placeShape(x, y, autoCenter, width, height);
     de.setBounds(topLeft.x, topLeft.y, width, height);
     if (x <= 0 && y <= 0) {
@@ -790,13 +830,181 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
         }
       }
       if (free) {
+        int oldY = to.getY();
+        int freed = to.getHeight() + FLOWCHART_GAP;
         to.setBounds(c[0], c[1], to.getWidth(), to.getHeight());
         to.resetCaption();
         recenterConnectorsOf(to);
-        return geometry(to);
+        movedAside.add(to.getId());
+        closeColumnGap(diagram, oldY, freed);
+        return " beside the decision" + geometry(to);
       }
     }
     return null;
+  }
+
+  /**
+   * After a branch target left the column, move the auto-placed column shapes below its old spot
+   * up, so no empty row is left in the flow.
+   */
+  private void closeColumnGap(IDiagramUIModel diagram, int fromY, int dy) {
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (autoPlaced.contains(shape.getId())
+          && !movedAside.contains(shape.getId())
+          && shape.getY() > fromY
+          && Math.abs(shape.getX() + shape.getWidth() / 2 - FLOWCHART_CENTER_X) <= 2) {
+        shape.setBounds(shape.getX(), shape.getY() - dy, shape.getWidth(), shape.getHeight());
+        shape.resetCaption();
+        recenterConnectorsOf(shape);
+      }
+    }
+  }
+
+  /**
+   * A shape moved beside a decision that gets a second incoming flow is a merge point: it goes back
+   * into the column, below the lowest of its predecessors.
+   *
+   * @return the new geometry as text, or null when the target stays where it is
+   */
+  private String rejoin(IDiagramUIModel diagram, IShapeUIModel from, IShapeUIModel to) {
+    if (!movedAside.contains(to.getId()) || !hasIncoming(to)) {
+      return null;
+    }
+    int bottom = from.getY() + from.getHeight();
+    IConnectorUIModel[] incoming = to.toToConnectorArray();
+    if (incoming != null) {
+      for (IConnectorUIModel c : incoming) {
+        IShapeUIModel source = c.getFromShape();
+        if (source != null) {
+          bottom = Math.max(bottom, source.getY() + source.getHeight());
+        }
+      }
+    }
+    int y = bottom + FLOWCHART_GAP;
+    // the column shapes from there on make room for it
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (!sameShape(shape, to)
+          && autoPlaced.contains(shape.getId())
+          && shape.getY() >= y - FLOWCHART_GAP / 2
+          && Math.abs(shape.getX() + shape.getWidth() / 2 - FLOWCHART_CENTER_X) <= 2) {
+        shape.setBounds(
+            shape.getX(),
+            shape.getY() + to.getHeight() + FLOWCHART_GAP,
+            shape.getWidth(),
+            shape.getHeight());
+        shape.resetCaption();
+        recenterConnectorsOf(shape);
+      }
+    }
+    to.setBounds(FLOWCHART_CENTER_X - to.getWidth() / 2, y, to.getWidth(), to.getHeight());
+    to.resetCaption();
+    recenterConnectorsOf(to);
+    movedAside.remove(to.getId());
+    // the side branch that reached it from a decision comes back down around the column
+    IConnectorUIModel[] arriving = to.toToConnectorArray();
+    if (arriving != null) {
+      for (IConnectorUIModel c : arriving) {
+        IShapeUIModel source = c.getFromShape();
+        if (source != null && source.getModelElement() instanceof IFlowchartDecision) {
+          routeAroundColumn(diagram, c, source, to);
+          if (c.getCaptionUIModel() != null
+              && c.getModelElement() != null
+              && FlowchartDfdUtils.normalizeLabel(c.getModelElement().getName()) != null) {
+            placeLabelBeside(diagram, c);
+          }
+        }
+      }
+    }
+    return " back into the column below its branches" + geometry(to);
+  }
+
+  /**
+   * Route a decision's side branch to a shape below it in the column as an orthogonal elbow: out of
+   * the decision's right vertex, down right of every column shape in between, and into the target's
+   * right side.
+   */
+  private void routeAroundColumn(
+      IDiagramUIModel diagram, IConnectorUIModel flow, IShapeUIModel decision, IShapeUIModel to) {
+    int decisionY = decision.getY() + decision.getHeight() / 2;
+    int targetY = to.getY() + to.getHeight() / 2;
+    int right = Math.max(decision.getX() + decision.getWidth(), to.getX() + to.getWidth());
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      if (shape.getY() + shape.getHeight() > decisionY && shape.getY() < targetY) {
+        right = Math.max(right, shape.getX() + shape.getWidth());
+      }
+    }
+    int laneX = right + BRANCH_GAP / 2;
+    flow.clearPoints();
+    flow.addPoint(new Point(decision.getX() + decision.getWidth(), decisionY));
+    flow.addPoint(new Point(laneX, decisionY));
+    flow.addPoint(new Point(laneX, targetY));
+    flow.addPoint(new Point(to.getX() + to.getWidth(), targetY));
+    flow.setUseFromShapeCenter(false);
+    flow.setUseToShapeCenter(false);
+    flow.setRequestRebuild(false);
+  }
+
+  /**
+   * Put a flow's label beside its first segment near the source (a decision's Yes/No), clear of
+   * shapes and other labels, instead of on the line where it can sit on the next box.
+   */
+  private void placeLabelBeside(IDiagramUIModel diagram, IConnectorUIModel flow) {
+    ICaptionUIModel caption = flow.getCaptionUIModel();
+    Point[] points = flow.getPoints();
+    if (caption == null || caption.getWidth() <= 0 || points == null || points.length < 2) {
+      return;
+    }
+    List<int[]> candidates =
+        com.brunnen.vp.mcp.util.ActivityDiagramUtils.guardCandidates(
+            points[0].x,
+            points[0].y,
+            points[1].x,
+            points[1].y,
+            caption.getWidth(),
+            caption.getHeight());
+    int[] spot =
+        com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
+            candidates, caption.getWidth(), caption.getHeight(), labelObstacles(diagram, flow));
+    caption.setBounds(spot[0], spot[1], caption.getWidth(), caption.getHeight());
+  }
+
+  /**
+   * Put a data flow's label on its line where it touches no shape and no other label: the middle
+   * first, then further towards either end, then beside the line.
+   */
+  private void placeLabelAlong(IDiagramUIModel diagram, IConnectorUIModel flow) {
+    ICaptionUIModel caption = flow.getCaptionUIModel();
+    Point[] points = flow.getPoints();
+    if (caption == null || caption.getWidth() <= 0 || points == null || points.length < 2) {
+      return;
+    }
+    int[][] pts = new int[points.length][];
+    for (int i = 0; i < points.length; i++) {
+      pts[i] = new int[] {points[i].x, points[i].y};
+    }
+    List<int[]> candidates =
+        DiagramUtils.labelSpotsAlong(pts, caption.getWidth(), caption.getHeight());
+    int[] spot =
+        com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
+            candidates, caption.getWidth(), caption.getHeight(), labelObstacles(diagram, flow));
+    caption.setBounds(spot[0], spot[1], caption.getWidth(), caption.getHeight());
+  }
+
+  /** Every shape and every other connector label on the diagram. */
+  private List<int[]> labelObstacles(IDiagramUIModel diagram, IConnectorUIModel own) {
+    List<int[]> obstacles = new ArrayList<>();
+    for (IShapeUIModel shape : shapesOf(diagram)) {
+      obstacles.add(new int[] {shape.getX(), shape.getY(), shape.getWidth(), shape.getHeight()});
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel && !de.getId().equals(own.getId())) {
+        ICaptionUIModel cap = ((IConnectorUIModel) de).getCaptionUIModel();
+        if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+          obstacles.add(new int[] {cap.getX(), cap.getY(), cap.getWidth(), cap.getHeight()});
+        }
+      }
+    }
+    return obstacles;
   }
 
   private static boolean hasIncoming(IShapeUIModel shape) {

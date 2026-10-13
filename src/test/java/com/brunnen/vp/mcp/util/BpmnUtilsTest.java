@@ -124,6 +124,7 @@ public class BpmnUtilsTest {
     assertNull("Blank label becomes null", BpmnUtils.normalizeLabel(" "));
     assertNull("Null label stays null", BpmnUtils.normalizeLabel(null));
     assertEquals(" [No]", BpmnUtils.labelSuffix("No"));
+    assertEquals(" [còn phòng]", BpmnUtils.labelSuffix("[còn phòng]"));
     assertEquals("", BpmnUtils.labelSuffix(null));
   }
 
@@ -366,8 +367,9 @@ public class BpmnUtilsTest {
         Arrays.asList(new Point(210, 125), new Point(260, 125)),
         BpmnUtils.route(a, false, b, false, false));
     assertEquals(
-        "Backwards: left border to right border",
-        Arrays.asList(new Point(260, 125), new Point(210, 125)),
+        "Backwards (a loop back): over the top of both shapes",
+        Arrays.asList(
+            new Point(315, 100), new Point(315, 75), new Point(155, 75), new Point(155, 100)),
         BpmnUtils.route(b, false, a, false, false));
   }
 
@@ -401,10 +403,14 @@ public class BpmnUtilsTest {
     Rectangle gateway = new Rectangle(100, 100, 40, 40); // center (120,120)
     Rectangle task = new Rectangle(200, 260, 110, 50); // center (255,285), lower lane
     assertEquals(
-        "Sequence flows leave sideways",
-        Arrays.asList(
-            new Point(140, 120), new Point(170, 120), new Point(170, 285), new Point(200, 285)),
+        "A gateway branch to a lower row leaves through the bottom vertex",
+        Arrays.asList(new Point(120, 140), new Point(120, 285), new Point(200, 285)),
         BpmnUtils.route(gateway, true, task, false, false));
+    assertEquals(
+        "A join gateway on a lower row is entered through its top vertex",
+        Arrays.asList(new Point(310, 285), new Point(370, 285), new Point(370, 320)),
+        BpmnUtils.route(
+            new Rectangle(200, 260, 110, 50), false, new Rectangle(350, 320, 40, 40), true, false));
     assertEquals(
         "Message flows leave through top/bottom",
         Arrays.asList(
@@ -447,5 +453,26 @@ public class BpmnUtilsTest {
         "Two boxes: middle of the overlap",
         Integer.valueOf(130),
         BpmnUtils.sharedLine(100, 50, false, 110, 60, false));
+  }
+
+  @Test
+  public void testMessageRouteUsesThePoolGapAndAFreeColumn() {
+    Rectangle source = new Rectangle(100, 100, 110, 50); // upper pool, bottom 150
+    Rectangle target = new Rectangle(400, 420, 110, 50); // lower lane of the lower pool
+    java.util.List<Rectangle> obstacles = new java.util.ArrayList<>();
+    obstacles.add(new Rectangle(420, 300, 80, 40)); // a node right above the target
+    java.util.List<Point> route = BpmnUtils.messageRoute(source, target, 200, obstacles);
+    assertEquals("leaves the source bottom", new Point(155, 150), route.get(0));
+    assertEquals("runs along the gap", 200, route.get(1).y);
+    for (int i = 0; i + 1 < route.size(); i++) {
+      Point p = route.get(i);
+      Point q = route.get(i + 1);
+      org.junit.Assert.assertFalse(
+          "leg " + i + " clear of the node",
+          DiagramUtils.segmentHitsRect(p.x, p.y, q.x, q.y, new int[] {420, 300, 80, 40}, 2));
+    }
+    Point last = route.get(route.size() - 1);
+    org.junit.Assert.assertTrue(
+        "ends on the target's border", last.x == 400 || last.x == 510 || last.y == 420);
   }
 }

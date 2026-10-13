@@ -344,7 +344,11 @@ public final class FlowchartDfdUtils {
    * @return the suffix, or an empty string when there is no label
    */
   public static String labelSuffix(String label) {
-    return label == null ? "" : " [" + label + "]";
+    if (label == null) {
+      return "";
+    }
+    // a label written as a guard keeps its own brackets
+    return label.startsWith("[") && label.endsWith("]") ? " " + label : " [" + label + "]";
   }
 
   /** A grid of equally sized cells filled column by column, top to bottom. */
@@ -427,6 +431,31 @@ public final class FlowchartDfdUtils {
       }
     }
     return grid.cellCenter(MAX_CELLS_SCANNED);
+  }
+
+  /**
+   * Top of the next shape of a single top-to-bottom column: {@code gap} below the lowest shape that
+   * overlaps the column horizontally, or {@code top} when the column is empty.
+   *
+   * @param occupied the shapes on the diagram
+   * @param centerX the column's center line
+   * @param width width of the new shape
+   * @param top top of the column
+   * @param gap free space between two shapes of the column
+   * @return the y of the new shape's top edge
+   */
+  public static int columnTop(List<Rectangle> occupied, int centerX, int width, int top, int gap) {
+    int left = centerX - width / 2;
+    int right = left + width;
+    int y = top;
+    if (occupied != null) {
+      for (Rectangle r : occupied) {
+        if (r != null && r.x < right && left < r.x + r.width) {
+          y = Math.max(y, r.y + r.height + gap);
+        }
+      }
+    }
+    return y;
   }
 
   /**

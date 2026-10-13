@@ -255,4 +255,13 @@ public class FlowchartDfdUtilsTest {
     assertEquals("1", FlowchartDfdUtils.storeIdNumber("1"));
     assertEquals("DB", FlowchartDfdUtils.storeIdNumber("DB"));
   }
+
+  @Test
+  public void columnTopStacksBelowTheLowestShapeOfTheColumn() {
+    java.util.List<java.awt.Rectangle> occupied = new java.util.ArrayList<>();
+    org.junit.Assert.assertEquals(40, FlowchartDfdUtils.columnTop(occupied, 200, 100, 40, 50));
+    occupied.add(new java.awt.Rectangle(140, 40, 120, 120)); // a tall diamond
+    occupied.add(new java.awt.Rectangle(600, 40, 100, 400)); // beside the column: ignored
+    org.junit.Assert.assertEquals(210, FlowchartDfdUtils.columnTop(occupied, 200, 100, 40, 50));
+  }
 }

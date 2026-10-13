@@ -390,7 +390,11 @@ public final class BpmnUtils {
    * @return " [label]" or ""
    */
   public static String labelSuffix(String label) {
-    return label == null ? "" : " [" + label + "]";
+    if (label == null) {
+      return "";
+    }
+    // a condition written as a guard keeps its own brackets
+    return label.startsWith("[") && label.endsWith("]") ? " " + label : " [" + label + "]";
   }
 
   // --- Connection rules ---
@@ -765,20 +769,130 @@ public final class BpmnUtils {
         : horizontalRoute(from, fromRound, to, toRound);
   }
 
+  /**
+   * Horizontal route from a to b. Forward (b right of a): straight on a shared line; to another row
+   * a gateway/event source leaves through its bottom/top vertex first and a round target is entered
+   * through its top/bottom vertex, so branches and joins do not share one side vertex; boxes get a
+   * Z elbow. Backward (b left of a, a loop back): over the top of both when b is on a's row or
+   * above, else down from a's bottom and into b's right side, never back along the forward flows.
+   */
   private static List<Point> horizontalRoute(
       Rectangle a, boolean firstRound, Rectangle b, boolean secondRound) {
     boolean firstLeft = a.x + a.width <= b.x;
-    int x1 = firstLeft ? a.x + a.width : a.x;
-    int x2 = firstLeft ? b.x : b.x + b.width;
+    int acx = a.x + a.width / 2;
+    int bcx = b.x + b.width / 2;
+    int ay = a.y + a.height / 2;
+    int by = b.y + b.height / 2;
+    boolean below = b.y >= a.y + a.height;
+    boolean above = b.y + b.height <= a.y;
+    if (!firstLeft) {
+      if (below) {
+        return Arrays.asList(
+            new Point(acx, a.y + a.height), new Point(acx, by), new Point(b.x + b.width, by));
+      }
+      int top = Math.min(a.y, b.y) - LOOP_BACK_CLEARANCE;
+      return Arrays.asList(
+          new Point(acx, a.y), new Point(acx, top), new Point(bcx, top), new Point(bcx, b.y));
+    }
+    int x1 = a.x + a.width;
+    int x2 = b.x;
     Integer y = sharedLine(a.y, a.height, firstRound, b.y, b.height, secondRound);
     if (y != null) {
       return Arrays.asList(new Point(x1, y), new Point(x2, y));
     }
-    int ay = a.y + a.height / 2;
-    int by = b.y + b.height / 2;
+    if (firstRound && (below || above)) {
+      return Arrays.asList(
+          new Point(acx, below ? a.y + a.height : a.y), new Point(acx, by), new Point(x2, by));
+    }
+    if (secondRound && (below || above)) {
+      return Arrays.asList(
+          new Point(x1, ay), new Point(bcx, ay), new Point(bcx, below ? b.y : b.y + b.height));
+    }
     int mx = (x1 + x2) / 2;
     return Arrays.asList(
         new Point(x1, ay), new Point(mx, ay), new Point(mx, by), new Point(x2, by));
+  }
+
+  /** How far a loop-back flow runs above the higher of its two shapes. */
+  public static final int LOOP_BACK_CLEARANCE = 25;
+
+  /**
+   * Route of a message flow between two pools stacked vertically: out of the source's facing
+   * border, along the gap between the pools at {@code gapY}, and into the target's facing border. A
+   * vertical leg that would cross a flow node is moved to a free column beside its end shape, which
+   * is then left / entered through its side.
+   *
+   * @param from the source bounds
+   * @param to the target bounds
+   * @param gapY y of the horizontal leg, in the gap between the two pools
+   * @param obstacles flow nodes the legs must not cross (not the two ends)
+   * @return the connector points
+   */
+  public static List<Point> messageRoute(
+      Rectangle from, Rectangle to, int gapY, List<Rectangle> obstacles) {
+    boolean down = from.y + from.height / 2 < to.y + to.height / 2;
+    List<Point> start = endLeg(from, gapY, down, obstacles, false);
+    List<Point> end = endLeg(to, gapY, !down, obstacles, true);
+    List<Point> points = new ArrayList<>(start);
+    points.addAll(end);
+    return points;
+  }
+
+  /**
+   * The leg between a shape and the gap line: straight up/down from its center when clear, else
+   * from its side to the nearest clear column. Points run shape -> gap (reversed for an end).
+   */
+  private static List<Point> endLeg(
+      Rectangle shape, int gapY, boolean gapBelow, List<Rectangle> obstacles, boolean reverse) {
+    int cx = shape.x + shape.width / 2;
+    int cy = shape.y + shape.height / 2;
+    int edgeY = gapBelow ? shape.y + shape.height : shape.y;
+    List<Point> leg;
+    if (!blocked(cx, edgeY, cx, gapY, obstacles)) {
+      leg = new ArrayList<>(Arrays.asList(new Point(cx, edgeY), new Point(cx, gapY)));
+    } else {
+      leg = null;
+      for (int k = 0; k < 8 && leg == null; k++) {
+        for (int side = 0; side < 2 && leg == null; side++) {
+          boolean right = side == 0;
+          int x =
+              right
+                  ? shape.x + shape.width + COLUMN_STEP * (k + 1)
+                  : shape.x - COLUMN_STEP * (k + 1);
+          int sideX = right ? shape.x + shape.width : shape.x;
+          if (x > 0
+              && !blocked(sideX, cy, x, cy, obstacles)
+              && !blocked(x, cy, x, gapY, obstacles)) {
+            leg =
+                new ArrayList<>(
+                    Arrays.asList(new Point(sideX, cy), new Point(x, cy), new Point(x, gapY)));
+          }
+        }
+      }
+      if (leg == null) {
+        leg = new ArrayList<>(Arrays.asList(new Point(cx, edgeY), new Point(cx, gapY)));
+      }
+    }
+    if (reverse) {
+      java.util.Collections.reverse(leg);
+    }
+    return leg;
+  }
+
+  /** Distance between the columns tried for a blocked message flow leg. */
+  private static final int COLUMN_STEP = 30;
+
+  private static boolean blocked(int x1, int y1, int x2, int y2, List<Rectangle> obstacles) {
+    if (obstacles == null) {
+      return false;
+    }
+    for (Rectangle r : obstacles) {
+      if (DiagramUtils.segmentHitsRect(
+          x1, y1, x2, y2, new int[] {r.x, r.y, r.width, r.height}, 6)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<Point> verticalRoute(

@@ -27,15 +27,13 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     try {
       return runOnEdt(
           () -> {
-            requireProject();
             DiagramManager dm = getDiagramManager();
             IDiagramUIModel diagram =
-                dm.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_ER_DIAGRAM);
-            diagram.setName(diagramName);
+                newDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_ER_DIAGRAM, diagramName);
             diagram.setAutoFitShapesSize(true);
             useCenterConnectionPoints(diagram);
             dm.openDiagram(diagram);
-            return "Created ER diagram: " + diagramName;
+            return "Created ER diagram: " + diagram.getName();
           });
     } catch (Exception e) {
       return "Error creating ER diagram: " + e.getMessage();
@@ -112,12 +110,20 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (table == null) {
               return "Table not on diagram: " + tableName;
             }
+            if (columnName == null || columnName.trim().isEmpty()) {
+              return "Column name must not be empty";
+            }
             if (findColumnByName(table, columnName) != null) {
               return "Column '" + columnName + "' already exists in table '" + tableName + "'";
             }
 
             IDBColumn col = getModelElementFactory().createDBColumn();
-            col.setName(columnName);
+            try {
+              col.setName(columnName.trim());
+            } catch (RuntimeException e) {
+              col.delete(); // no orphan column when VP refuses the name
+              throw e;
+            }
             String typeNote = "";
             if (columnType != null && !columnType.trim().isEmpty()) {
               String[] parsed = ErdUtils.parseColumnType(columnType, length, scale);
@@ -200,6 +206,28 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
               }
             }
 
+            if (childCol != null
+                && childCol.toForeignKeyConstraintArray() != null
+                && childCol.toForeignKeyConstraintArray().length > 0) {
+              return "Column '"
+                  + childCol.getName()
+                  + "' of '"
+                  + fromTable
+                  + "' already is a foreign key";
+            }
+            if (childCol == null && findForeignKey(diagram, parent, child) != null) {
+              return "A foreign key from '"
+                  + fromTable
+                  + "' to '"
+                  + toTable
+                  + "' already exists; name the column (fromColumn) for a second one";
+            }
+            if (isSet(relationshipName)) {
+              // a named relationship prints its name mid-line: the tables need room for it
+              makeRoomBetween(
+                  parentShape, childShape, relationshipName.trim().length() * 8 + 40, 50);
+            }
+
             // VP's foreign key runs from the referenced (parent) table to the child and adds an
             // FK column to the child that references the parent's primary key.
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
@@ -267,6 +295,15 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (!ErdUtils.TO_MULTIPLICITIES.contains(toMult)) {
               return "toMultiplicity must be one of " + ErdUtils.TO_MULTIPLICITIES;
             }
+            String kind = type == null ? "" : type.trim();
+            if (!kind.isEmpty()
+                && !"identifying".equalsIgnoreCase(kind)
+                && !"nonIdentifying".equalsIgnoreCase(kind)
+                && !"non-identifying".equalsIgnoreCase(kind)) {
+              return "Unknown relationship type '"
+                  + type
+                  + "': use identifying, nonIdentifying or \"\" (non-identifying)";
+            }
 
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
             fk.setFrom(source);
@@ -286,7 +323,13 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             }
             refitTable(target);
 
-            return "Added " + type + " relationship from '" + fromTable + "' to '" + toTable + "'";
+            return "Added "
+                + (fk.isIdentifying() ? "identifying" : "non-identifying")
+                + " relationship from '"
+                + fromTable
+                + "' to '"
+                + toTable
+                + "'";
           });
     } catch (Exception e) {
       return "Error adding relationship: " + e.getMessage();
@@ -348,6 +391,23 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
 
   private IDiagramUIModel findErd(String diagramName) {
     return findDiagram(diagramName, IERDiagramUIModel.class, "entity relationship");
+  }
+
+  /** A foreign key drawn on the diagram from {@code parent} to {@code child}, or null. */
+  private IDBForeignKey findForeignKey(IDiagramUIModel diagram, IDBTable parent, IDBTable child) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      IModelElement m = de.getModelElement();
+      if (m instanceof IDBForeignKey) {
+        IDBForeignKey fk = (IDBForeignKey) m;
+        if (fk.getFrom() != null
+            && fk.getTo() != null
+            && fk.getFrom().getId().equals(parent.getId())
+            && fk.getTo().getId().equals(child.getId())) {
+          return fk;
+        }
+      }
+    }
+    return null;
   }
 
   /** The table shown on the diagram with that name, or null. */
@@ -484,7 +544,10 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                   IDBForeignKey fk = (IDBForeignKey) model;
                   String from = fk.getFrom() != null ? fk.getFrom().getName() : "?";
                   String to = fk.getTo() != null ? fk.getTo().getName() : "?";
-                  String fkName = fk.getName() != null ? fk.getName() : from + "_" + to;
+                  String fkName =
+                      fk.getName() != null && !fk.getName().trim().isEmpty()
+                          ? fk.getName()
+                          : "fk_" + from + "_" + to;
                   fks.add(fkName + ": " + from + " -> " + to);
                 }
               }
