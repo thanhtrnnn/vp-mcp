@@ -214,7 +214,9 @@ public class CommunicationDiagramUtilsTest {
 
   @Test
   public void testSelfLoopPoints() {
-    int[][] loop = CommunicationDiagramUtils.selfLoopPoints(100, 50, 80, 40);
+    int[][] loop =
+        CommunicationDiagramUtils.selfLoopPoints(
+            100, 50, 80, 40, CommunicationDiagramUtils.SIDE_TOP);
     int top = 50 - CommunicationDiagramUtils.SELF_LOOP_HEIGHT;
     int half = CommunicationDiagramUtils.SELF_LOOP_HALF_WIDTH;
     assertEquals("Four points", 4, loop.length);
@@ -222,5 +224,33 @@ public class CommunicationDiagramUtilsTest {
     assertArrayEquals("Up", new int[] {140 - half, top}, loop[1]);
     assertArrayEquals("Across", new int[] {140 + half, top}, loop[2]);
     assertArrayEquals("Back to the top edge", new int[] {140 + half, 50}, loop[3]);
+  }
+
+  @Test
+  public void selfLoopGoesOnAFreeSide() {
+    int[] box = {100, 100, 80, 40};
+    java.util.List<int[]> others = new java.util.ArrayList<>();
+    assertEquals(
+        "nothing attached: below, like the book's entity",
+        CommunicationDiagramUtils.SIDE_BOTTOM,
+        CommunicationDiagramUtils.selfLoopSide(box, others));
+    others.add(new int[] {140, 300}); // a link straight down
+    assertEquals(
+        CommunicationDiagramUtils.SIDE_TOP, CommunicationDiagramUtils.selfLoopSide(box, others));
+    others.add(new int[] {140, 0}); // and one straight up
+    assertEquals(
+        CommunicationDiagramUtils.SIDE_RIGHT, CommunicationDiagramUtils.selfLoopSide(box, others));
+  }
+
+  @Test
+  public void selfMessageSitsOutsideTheLoop() {
+    int[][] loop =
+        CommunicationDiagramUtils.selfLoopPoints(
+            100, 100, 80, 40, CommunicationDiagramUtils.SIDE_BOTTOM);
+    int[] slot =
+        CommunicationDiagramUtils.selfMessageSlot(
+            loop, CommunicationDiagramUtils.SIDE_BOTTOM, 0, 60, 14);
+    assertTrue("arrow below the loop", slot[1] > 140 + CommunicationDiagramUtils.SELF_LOOP_HEIGHT);
+    assertTrue("caption below the arrow", slot[3] > slot[1]);
   }
 }

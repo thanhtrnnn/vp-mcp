@@ -244,25 +244,122 @@ public final class CommunicationDiagramUtils {
     return new double[] {dy / len, -dx / len};
   }
 
+  /** Sides of a shape a self link loop can go on. */
+  public static final int SIDE_TOP = 0;
+
+  public static final int SIDE_BOTTOM = 1;
+
+  public static final int SIDE_RIGHT = 2;
+
+  public static final int SIDE_LEFT = 3;
+
   /**
-   * Route of a self link: a rectangular loop on top of the shape, leaving and re-entering its top
-   * edge, so it stays clear of the links that leave the shape sideways.
+   * Route of a self link: a rectangular loop on one side of the shape, leaving and re-entering that
+   * edge, so it stays clear of the links attached to the other sides.
    *
    * @param x shape x
    * @param y shape y
    * @param width shape width
    * @param height shape height
+   * @param side one of the {@code SIDE_*} constants
    * @return four {x, y} points: out, corner, corner, back
    */
-  public static int[][] selfLoopPoints(int x, int y, int width, int height) {
+  public static int[][] selfLoopPoints(int x, int y, int width, int height, int side) {
     int cx = x + width / 2;
-    int top = y - SELF_LOOP_HEIGHT;
-    return new int[][] {
-      {cx - SELF_LOOP_HALF_WIDTH, y},
-      {cx - SELF_LOOP_HALF_WIDTH, top},
-      {cx + SELF_LOOP_HALF_WIDTH, top},
-      {cx + SELF_LOOP_HALF_WIDTH, y}
-    };
+    int cy = y + height / 2;
+    int half = SELF_LOOP_HALF_WIDTH;
+    switch (side) {
+      case SIDE_BOTTOM:
+        {
+          int bottom = y + height;
+          int far = bottom + SELF_LOOP_HEIGHT;
+          return new int[][] {
+            {cx - half, bottom}, {cx - half, far}, {cx + half, far}, {cx + half, bottom}
+          };
+        }
+      case SIDE_RIGHT:
+        {
+          int right = x + width;
+          int far = right + SELF_LOOP_HEIGHT;
+          int h = Math.min(half, height / 3);
+          return new int[][] {{right, cy - h}, {far, cy - h}, {far, cy + h}, {right, cy + h}};
+        }
+      case SIDE_LEFT:
+        {
+          int far = x - SELF_LOOP_HEIGHT;
+          int h = Math.min(half, height / 3);
+          return new int[][] {{x, cy - h}, {far, cy - h}, {far, cy + h}, {x, cy + h}};
+        }
+      default:
+        {
+          int far = y - SELF_LOOP_HEIGHT;
+          return new int[][] {{cx - half, y}, {cx - half, far}, {cx + half, far}, {cx + half, y}};
+        }
+    }
+  }
+
+  /**
+   * The side of a shape a self link loop goes on: the first of bottom (where the book draws an
+   * entity's method call), top, right, left with no other link attached there.
+   *
+   * @param shape the shape {x, y, w, h}
+   * @param others centers {x, y} of the shapes the other links of this shape lead to
+   * @return one of the {@code SIDE_*} constants
+   */
+  public static int selfLoopSide(int[] shape, java.util.List<int[]> others) {
+    boolean[] used = new boolean[4];
+    double cx = shape[0] + shape[2] / 2.0;
+    double cy = shape[1] + shape[3] / 2.0;
+    for (int[] o : others) {
+      double dx = o[0] - cx;
+      double dy = o[1] - cy;
+      // which edge the straight line to the other shape leaves through
+      if (Math.abs(dy) * shape[2] >= Math.abs(dx) * shape[3]) {
+        used[dy < 0 ? SIDE_TOP : SIDE_BOTTOM] = true;
+      } else {
+        used[dx > 0 ? SIDE_RIGHT : SIDE_LEFT] = true;
+      }
+    }
+    for (int side : new int[] {SIDE_BOTTOM, SIDE_TOP, SIDE_RIGHT, SIDE_LEFT}) {
+      if (!used[side]) {
+        return side;
+      }
+    }
+    return SIDE_BOTTOM;
+  }
+
+  /**
+   * Where the {@code slot}-th message of a self link goes: outside the loop's far edge, stacked
+   * away from it, the caption beside the arrow (below / above / right / left of it).
+   *
+   * @param loop the loop points from {@link #selfLoopPoints}
+   * @param side the loop's side
+   * @param slot index of the message on the loop
+   * @param captionWidth caption width
+   * @param captionHeight caption height
+   * @return {arrow center x, arrow center y, caption x, caption y}
+   */
+  public static int[] selfMessageSlot(
+      int[][] loop, int side, int slot, int captionWidth, int captionHeight) {
+    int mx = (loop[1][0] + loop[2][0]) / 2;
+    int my = (loop[1][1] + loop[2][1]) / 2;
+    int d = ARROW_OFFSET + slot * STACK_STEP;
+    switch (side) {
+      case SIDE_BOTTOM:
+        return new int[] {
+          mx, my + d, mx - captionWidth / 2, my + d + CAPTION_OFFSET - captionHeight / 2
+        };
+      case SIDE_RIGHT:
+        return new int[] {mx + d, my, mx + d + ARROW_HALF + 4, my - captionHeight / 2};
+      case SIDE_LEFT:
+        return new int[] {
+          mx - d, my, mx - d - ARROW_HALF - 4 - captionWidth, my - captionHeight / 2
+        };
+      default:
+        return new int[] {
+          mx, my - d, mx - captionWidth / 2, my - d - CAPTION_OFFSET - captionHeight / 2
+        };
+    }
   }
 
   /** Size of the (invisible) box of a message arrow; VP draws the arrow at its center. */
