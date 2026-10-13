@@ -3,6 +3,8 @@ package com.brunnen.vp.mcp.tools;
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramLayoutEngine;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
+import com.brunnen.vp.mcp.util.VpGraphLayout;
 import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IBaseDiagramElement;
@@ -56,6 +58,89 @@ public abstract class AbstractDiagramMcpTools {
 
   protected AbstractDiagramMcpTools() {
     FAMILIES.put(getClass(), this); // the newest instance is the one the server registers
+  }
+
+  /**
+   * Diagrams created by the tools in this session. Their layout belongs to the shared layered
+   * layout: every shape the tools add is placed by it. A diagram opened from a file is not managed:
+   * its shapes stay where they are and only the connectors are routed.
+   */
+  private static final java.util.Set<String> MANAGED =
+      java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+  /**
+   * Shapes placed explicitly (x/y given, setElementBounds): the layered layout never moves them.
+   */
+  private static final java.util.Map<String, java.util.Set<String>> PINNED =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  /**
+   * Hook: how a family's diagram takes part in the shared layout (which shapes are nodes, how
+   * connectors point, what labels they carry). The default returns null: the diagram is not this
+   * family's.
+   *
+   * @param diagram the diagram
+   * @return the profile, or null
+   */
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    return null;
+  }
+
+  /**
+   * The profile of the family that owns the diagram.
+   *
+   * @param diagram the diagram
+   * @return the profile, or null when no family has one (the diagram is not laid out by the shared
+   *     layout)
+   */
+  protected static LayoutProfile profileOf(IDiagramUIModel diagram) {
+    for (AbstractDiagramMcpTools family : families()) {
+      LayoutProfile profile = family.layoutProfile(diagram);
+      if (profile != null) {
+        return profile;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Remember that a shape was placed explicitly: the layered layout leaves it where it is (the
+   * connectors are routed around it instead).
+   *
+   * @param shape the shape
+   */
+  protected static void pin(IDiagramElement shape) {
+    if (shape.getDiagramUIModel() != null) {
+      PINNED
+          .computeIfAbsent(
+              shape.getDiagramUIModel().getId(),
+              k -> java.util.concurrent.ConcurrentHashMap.newKeySet())
+          .add(shape.getId());
+    }
+  }
+
+  /**
+   * Bring the diagram into a laid-out state after something was added or changed. A managed diagram
+   * without explicitly placed shapes gets the full layered, orthogonal layout (shapes, connectors
+   * and labels); otherwise the shapes stay and every connector is routed around them. Does nothing
+   * for a diagram type without a layout profile.
+   *
+   * @param diagram the diagram
+   */
+  protected void relayout(IDiagramUIModel diagram) {
+    LayoutProfile profile = profileOf(diagram);
+    if (profile == null) {
+      return;
+    }
+    activate(diagram);
+    java.util.Set<String> pinned = PINNED.get(diagram.getId());
+    if (profile.placesShapes()
+        && MANAGED.contains(diagram.getId())
+        && (pinned == null || pinned.isEmpty())) {
+      VpGraphLayout.layout(diagram, profile);
+    } else {
+      VpGraphLayout.route(diagram, profile);
+    }
   }
 
   /**
@@ -624,6 +709,7 @@ public abstract class AbstractDiagramMcpTools {
       throw new IllegalStateException(
           "Visual Paradigm named the diagram '" + given + "' instead of '" + trimmed + "'");
     }
+    MANAGED.add(diagram.getId());
     return diagram;
   }
 
@@ -711,33 +797,14 @@ public abstract class AbstractDiagramMcpTools {
    */
   protected IDiagramElement connectCentered(
       IDiagramUIModel diagram, IModelElement model, IDiagramElement from, IDiagramElement to) {
-    activate(diagram);
-    useCenterConnectionPoints(diagram);
-    if (duplicateConnector(from, to, model) != null) {
-      // the model was never placed anywhere: no orphan is left behind
-      String label = connectorLabel(model);
-      // name the ends in the direction the arrow is drawn (VP stores a generalization, extend or
-      // realization the other way round)
-      boolean reversed = isStoredReversed(model);
-      model.delete();
-      throw new IllegalStateException(
-          label
-              + " from '"
-              + shapeName(reversed ? to : from)
-              + "' to '"
-              + shapeName(reversed ? from : to)
-              + "' already exists on diagram '"
-              + diagram.getName()
-              + "'");
+    if (profileOf(diagram) != null) {
+      IDiagramElement connector = connectShapes(diagram, model, from, to);
+      if (connector != null) {
+        relayout(diagram);
+      }
+      return connector;
     }
-    IDiagramElement connector;
-    try {
-      connector =
-          getDiagramManager()
-              .createConnector(diagram, model, from, to, new Point[] {center(from), center(to)});
-    } catch (RuntimeException e) {
-      return null; // VP rejects connector types it does not allow between these shapes
-    }
+    IDiagramElement connector = createChecked(diagram, model, from, to);
     if (connector instanceof IConnectorUIModel) {
       IConnectorUIModel created = (IConnectorUIModel) connector;
       centerConnector(created);
@@ -766,6 +833,87 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return connector;
+  }
+
+  /**
+   * Create a connector between two shapes without routing it: the tool calls {@link
+   * #relayout(IDiagramUIModel)} once everything it adds is in place (the shared layout then routes
+   * every connector orthogonally and puts its labels beside it). Refuses a second connector of the
+   * same kind, stereotypes and name between the same two shapes.
+   *
+   * @param diagram the diagram
+   * @param model the relationship model
+   * @param from the source shape
+   * @param to the target shape
+   * @return the connector, or null when VP did not create one
+   */
+  protected IDiagramElement connectShapes(
+      IDiagramUIModel diagram, IModelElement model, IDiagramElement from, IDiagramElement to) {
+    IDiagramElement connector = createChecked(diagram, model, from, to);
+    if (connector != null) {
+      connector.resetCaption(); // fresh connectors render blank until the caption is reset
+    }
+    return connector;
+  }
+
+  /** Duplicate check and creation of a connector between the centers of two shapes. */
+  private IDiagramElement createChecked(
+      IDiagramUIModel diagram, IModelElement model, IDiagramElement from, IDiagramElement to) {
+    activate(diagram);
+    useCenterConnectionPoints(diagram);
+    if (duplicateConnector(from, to, model) != null) {
+      // the model was never placed anywhere: no orphan is left behind
+      String label = connectorLabel(model);
+      // name the ends in the direction the arrow is drawn (VP stores a generalization, extend or
+      // realization the other way round)
+      boolean reversed = isStoredReversed(model);
+      model.delete();
+      throw new IllegalStateException(
+          label
+              + " from '"
+              + shapeName(reversed ? to : from)
+              + "' to '"
+              + shapeName(reversed ? from : to)
+              + "' already exists on diagram '"
+              + diagram.getName()
+              + "'");
+    }
+    try {
+      return getDiagramManager()
+          .createConnector(diagram, model, from, to, new Point[] {center(from), center(to)});
+    } catch (RuntimeException e) {
+      return null; // VP rejects connector types it does not allow between these shapes
+    }
+  }
+
+  /**
+   * Put a shape that was just created at its place. An explicit x/y pins it there. Otherwise a
+   * diagram the shared layout owns places it itself on the next {@link #relayout}; any other
+   * diagram gets the first free spot (row by row from the top left).
+   *
+   * @param diagram the diagram
+   * @param de the new shape
+   * @param x requested left edge, {@code > 0} to pin
+   * @param y requested top edge, {@code > 0} to pin
+   */
+  protected void placeNew(IDiagramUIModel diagram, IDiagramElement de, int x, int y) {
+    if (x > 0 || y > 0) {
+      de.setBounds(Math.max(x, 0), Math.max(y, 0), de.getWidth(), de.getHeight());
+      pin(de);
+      return;
+    }
+    java.util.Set<String> pinned = PINNED.get(diagram.getId());
+    LayoutProfile profile = profileOf(diagram);
+    boolean free =
+        profile != null
+            && profile.placesShapes()
+            && MANAGED.contains(diagram.getId())
+            && (pinned == null || pinned.isEmpty());
+    if (free) {
+      return; // the layered layout finds the place
+    }
+    int[] spot = freeSpot(diagram, de, 40, 40, 1100, 60);
+    de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
   }
 
   /** Relationships whose keyword label (<<Include>>, <<use>>...) is put beside a bent line. */
@@ -2467,6 +2615,18 @@ public abstract class AbstractDiagramMcpTools {
                 return done;
               }
             }
+            LayoutProfile profile = profileOf(diagram);
+            if (profile != null) {
+              activate(diagram);
+              PINNED.remove(diagram.getId());
+              MANAGED.add(diagram.getId());
+              VpGraphLayout.Summary summary = VpGraphLayout.layout(diagram, profile);
+              return "Auto-layout (layered, orthogonal) applied to diagram: "
+                  + diagramName
+                  + " ("
+                  + summary
+                  + ")";
+            }
             layoutDiagram(diagram);
             return "Auto-layout applied to diagram: " + diagramName;
           });
@@ -2793,7 +2953,11 @@ public abstract class AbstractDiagramMcpTools {
                 }
                 shape.resetCaption();
                 fitShape(shape);
-                recenterConnectorsOf(shape);
+                if (profileOf(shape.getDiagramUIModel()) != null) {
+                  relayout(shape.getDiagramUIModel()); // the box may be wider: lay out again
+                } else {
+                  recenterConnectorsOf(shape);
+                }
               }
             }
             return "Renamed '" + old + "' to '" + wanted + "' on diagram '" + diagramName + "'";

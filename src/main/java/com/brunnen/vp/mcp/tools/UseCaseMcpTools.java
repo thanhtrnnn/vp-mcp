@@ -2,9 +2,10 @@ package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
+import com.brunnen.vp.mcp.util.UseCaseLayoutProfile;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IBaseDiagramElement;
-import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -27,6 +28,11 @@ import javax.swing.SwingUtilities;
 
 /** MCP tools for Visual Paradigm Use Case diagram operations. */
 public class UseCaseMcpTools extends AbstractDiagramMcpTools {
+
+  @Override
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    return diagram instanceof IUseCaseDiagramUIModel ? new UseCaseLayoutProfile() : null;
+  }
 
   @Tool(
       name = "createUseCaseDiagram",
@@ -85,8 +91,9 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
             IDiagramElement de = addToDiagram(diagram, actor, name);
             fitShape(de);
-            placeInColumn(diagram, de, ACTOR_COLUMN_X, ACTOR_GAP, x, y);
             de.resetCaption(); // the name is a detached label laid out at the final bounds
+            placeNew(diagram, de, x, y);
+            relayout(diagram);
 
             return "Added actor '"
                 + name
@@ -138,7 +145,8 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             }
             de.resetCaption();
             fitShape(de);
-            placeInColumn(diagram, de, USE_CASE_COLUMN_X, USE_CASE_GAP, x, y);
+            placeNew(diagram, de, x, y);
+            relayout(diagram);
 
             return "Added use case '"
                 + name
@@ -237,6 +245,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
                 extend.setTo(source);
                 connector = connectCentered(diagram, extend, toElement, fromElement);
                 hideExtensionPoints(toElement);
+                relayout(diagram); // the base use case lost its compartment: it is smaller
                 break;
               case "Generalization":
                 // VP stores a generalization as from = general (parent), to = specific (child)
@@ -329,7 +338,6 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       ((IUseCaseUIModel) useCase).setShowExtensionPoint(false);
       useCase.resetCaption();
       fitShape(useCase);
-      recenterConnectorsOf(useCase);
     }
   }
 
@@ -355,30 +363,6 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding system boundary: " + e.getMessage();
     }
-  }
-
-  @Override
-  protected String layoutOwnDiagram(IDiagramUIModel diagram) {
-    if (!(diagram instanceof IUseCaseDiagramUIModel)) {
-      return null;
-    }
-    IShapeUIModel box = null;
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (de.getModelElement() instanceof ISystem && de instanceof IShapeUIModel) {
-        box = (IShapeUIModel) de;
-      }
-    }
-    if (box == null) {
-      return null; // no boundary: the plain layout applies
-    }
-    // the layout arranges use cases and actors, not the box around them: it is fitted again
-    // around the use cases where they ended up (the boundary was added first or last, either way)
-    String name = box.getModelElement().getName();
-    layoutDiagram(diagram);
-    return "Auto-layout applied to diagram: "
-        + diagram.getName()
-        + "; "
-        + wrapInBoundary((IUseCaseDiagramUIModel) diagram, diagram.getName(), name);
   }
 
   /**
@@ -411,34 +395,6 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     if (useCases.isEmpty()) {
       return "No use cases found on diagram '" + diagramName + "' to wrap";
     }
-    // the detours and labels of lines between use cases stay inside the boundary
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (!(de instanceof IConnectorUIModel)) {
-        continue;
-      }
-      IConnectorUIModel c = (IConnectorUIModel) de;
-      if (c.getFromShape() == null
-          || c.getToShape() == null
-          || !(c.getFromShape().getModelElement() instanceof IUseCase)
-          || !(c.getToShape().getModelElement() instanceof IUseCase)) {
-        continue;
-      }
-      java.awt.Point[] points = c.getPoints();
-      for (int i = 0; points != null && i < points.length; i++) {
-        minX = Math.min(minX, points[i].x);
-        minY = Math.min(minY, points[i].y);
-        maxX = Math.max(maxX, points[i].x);
-        maxY = Math.max(maxY, points[i].y);
-      }
-      com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
-      if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
-        minX = Math.min(minX, cap.getX());
-        minY = Math.min(minY, cap.getY());
-        maxX = Math.max(maxX, cap.getX() + cap.getWidth());
-        maxY = Math.max(maxY, cap.getY() + cap.getHeight());
-      }
-    }
-
     String boundaryName = systemName == null ? "" : systemName.trim();
     if (boundaryName.isEmpty()) {
       return "System name must not be empty";
@@ -499,14 +455,12 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
         for (IDiagramElement uc : getDiagramElementsList(diagram)) {
           if (uc.getModelElement() instanceof IUseCase) {
             uc.setLocation(uc.getX() + shift, uc.getY());
-            recenterConnectorsOf(uc);
           }
         }
         nx = 0;
       }
       de.setLocation(nx, de.getY());
       de.resetCaption(); // an actor's name is a detached label
-      recenterConnectorsOf(de);
       moved.add(de.getModelElement().getName());
     }
 
@@ -520,14 +474,26 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       shape.setBounds(boxX, boxY, boxW, boxH);
       shape.sendToBack();
       resetCaption(shape);
+      // the use cases are children of the boundary on the diagram too, not only in the model
+      for (IDiagramElement de : getDiagramElementsList(diagram)) {
+        if (de.getModelElement() instanceof IUseCase && de instanceof IShapeUIModel) {
+          IDiagramElement parent = ((IShapeUIModel) de).getParent();
+          if (parent == null || !shape.getId().equals(parent.getId())) {
+            shape.addChild((IShapeUIModel) de);
+          }
+        }
+      }
+      // the layout sizes the boundary around the use cases it owns (a pinned diagram keeps the box
+      // where it is) and routes the connectors again
+      relayout(diagram);
       if (existingBox != null) {
         // Renaming a shown element makes VP fit its shape to the new name once our call
         // returns (the diagram auto-fits); the box is a container, so its bounds are
         // applied again after that.
-        final int bx = boxX;
-        final int by = boxY;
-        final int bw = boxW;
-        final int bh = boxH;
+        final int bx = shape.getX();
+        final int by = shape.getY();
+        final int bw = shape.getWidth();
+        final int bh = shape.getHeight();
         SwingUtilities.invokeLater(() -> shape.setBounds(bx, by, bw, bh));
       }
     }
@@ -543,35 +509,6 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
         + (moved.isEmpty()
             ? ""
             : "; moved actor(s) out of the boundary: " + String.join(", ", moved));
-  }
-
-  /** Left edge of the auto-placed actor column and the use case column. */
-  private static final int ACTOR_COLUMN_X = 50;
-
-  private static final int USE_CASE_COLUMN_X = 300;
-
-  /** Free space below an actor figure (its name is drawn under it) and between use cases. */
-  private static final int ACTOR_GAP = 50;
-
-  /** Space between use cases: room for the <<Include>>/<<Extend>> label of a line between them. */
-  private static final int USE_CASE_GAP = 60;
-
-  /** Top of the auto-placed columns. */
-  private static final int COLUMN_TOP = 50;
-
-  /**
-   * Explicit x/y when given, otherwise the first free spot of a single column starting at {@code
-   * columnX}: below the shapes already in it, {@code gap} apart.
-   */
-  private void placeInColumn(
-      IUseCaseDiagramUIModel diagram, IDiagramElement de, int columnX, int gap, int x, int y) {
-    if (x > 0 || y > 0) {
-      de.setBounds(Math.max(x, 0), Math.max(y, 0), de.getWidth(), de.getHeight());
-      return;
-    }
-    // a row narrower than any second shape: every shape gets a row of its own
-    int[] spot = freeSpot(diagram, de, columnX, COLUMN_TOP, columnX + de.getWidth(), gap);
-    de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
   }
 
   private static String connected(

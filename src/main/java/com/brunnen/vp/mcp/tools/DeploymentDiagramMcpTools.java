@@ -4,7 +4,10 @@ import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DeploymentDiagramUtils;
 import com.brunnen.vp.mcp.util.DeploymentDiagramUtils.NodeKind;
 import com.brunnen.vp.mcp.util.DeploymentDiagramUtils.PathLabel;
+import com.brunnen.vp.mcp.util.DeploymentLayoutProfile;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
+import com.brunnen.vp.mcp.util.TextMetrics;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDeploymentDiagramUIModel;
@@ -42,6 +45,11 @@ import java.util.Set;
  */
 public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
 
+  @Override
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    return diagram instanceof IDeploymentDiagramUIModel ? new DeploymentLayoutProfile() : null;
+  }
+
   /** Width and height asked for with addDeploymentNode, by shape id: nodes never get smaller. */
   private final java.util.Map<String, int[]> minimumSize = new java.util.HashMap<>();
 
@@ -75,11 +83,11 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
   /** Inner padding of a container node. */
   private static final int PAD = 16;
 
-  /** Extra right padding: the node's 3D side face takes part of the box. */
-  private static final int PAD_RIGHT = 28;
+  /** Right padding of a container node (nodes are flat rectangles, no side face). */
+  private static final int PAD_RIGHT = PAD;
 
-  /** Space under a container node's top edge kept free for its 3D top, keyword and name. */
-  private static final int HEADER = 56;
+  /** Space under a container node's top edge kept free for its keyword and name. */
+  private static final int HEADER = 46;
 
   /** Minimum row width used to lay out children inside a still-narrow container. */
   private static final int MIN_CONTAINER_ROW = 460;
@@ -209,56 +217,6 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return false;
-  }
-
-  /**
-   * Put the label of a path or dependency beside its line where it touches no node border, no
-   * artifact or component and no other label: a label on a container's border or across a nested
-   * node's name is read as part of it.
-   */
-  private void placeLabelClear(IDiagramUIModel diagram, IDiagramElement connector) {
-    if (!(connector instanceof IConnectorUIModel)) {
-      return;
-    }
-    IConnectorUIModel c = (IConnectorUIModel) connector;
-    com.vp.plugin.diagram.ICaptionUIModel cap = c.getCaptionUIModel();
-    java.awt.Point[] points = c.getPoints();
-    if (cap == null || cap.getWidth() <= 0 || points == null || points.length < 2) {
-      return;
-    }
-    int w = cap.getWidth();
-    int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
-    int[][] pts = new int[points.length][];
-    for (int i = 0; i < points.length; i++) {
-      pts[i] = new int[] {points[i].x, points[i].y};
-    }
-    List<int[]> obstacles = new ArrayList<>();
-    for (IShapeUIModel s : allShapes(diagram)) {
-      int[] r = boundsOf(s);
-      if (s.getModelElement() instanceof INode) {
-        // a node: its border bands and its title band
-        obstacles.add(new int[] {r[0] - 4, r[1] - 4, r[2] + 8, 8});
-        obstacles.add(new int[] {r[0] - 4, r[1] + r[3] - 4, r[2] + 8, 8});
-        obstacles.add(new int[] {r[0] - 4, r[1] - 4, 8, r[3] + 8});
-        obstacles.add(new int[] {r[0] + r[2] - 4, r[1] - 4, 8, r[3] + 8});
-        obstacles.add(new int[] {r[0], r[1], r[2], HEADER});
-      } else {
-        obstacles.add(r);
-      }
-    }
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (de instanceof IConnectorUIModel && !de.getId().equals(c.getId())) {
-        com.vp.plugin.diagram.ICaptionUIModel other = ((IConnectorUIModel) de).getCaptionUIModel();
-        if (other != null && other.isVisible() && other.getWidth() > 0) {
-          obstacles.add(
-              new int[] {other.getX(), other.getY(), other.getWidth(), other.getHeight()});
-        }
-      }
-    }
-    int[] spot =
-        com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
-            DiagramUtils.labelSpotsBeside(pts, w, h), w, h, obstacles);
-    cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, h);
   }
 
   /** The node called {@code name} owned by the node on {@code parent} (project root if null). */
@@ -483,7 +441,6 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + toNode
                   + "'";
             }
-            placeLabelClear(diagram, connector);
 
             String text = labelText(parsed);
             return "Added communication path '"
@@ -636,7 +593,6 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + toElement
                   + "'";
             }
-            placeLabelClear(diagram, drawn);
             String text = labelText(parsed);
             return "Added dependency '"
                 + from.getModelElement().getName()
@@ -713,8 +669,17 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     // Fresh shapes render blank until the caption is reset; fit afterwards so the size follows the
     // rendered name and keyword.
     shape.resetCaption();
+    boolean flat = model instanceof INode;
+    if (flat) {
+      flatten(shape);
+    }
     if (width <= 0 || height <= 0) {
-      fitShape(shape);
+      if (flat) {
+        int[] title = titleSize(shape);
+        shape.setBounds(startX, startY, title[0], title[1]);
+      } else {
+        fitShape(shape);
+      }
     }
     int w = DeploymentDiagramUtils.resolveSize(width, shape.getWidth(), defaultWidth);
     int h = DeploymentDiagramUtils.resolveSize(height, shape.getHeight(), defaultHeight);
@@ -735,6 +700,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     shape.setBounds(targetX, targetY, w, h);
     keepSize(shape);
+    syncCaption(shape);
     if (parent != null) {
       shape.bringToFront(); // a container drawn later must not hide its child
     }
@@ -742,8 +708,8 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     boolean pushed = false;
     if (parent != null) {
       pushed = growContainers(diagram, shape, parent);
-      // Grown or pushed shapes moved their centers: keep every line on the shape centers.
-      recenterConnectors(diagram);
+      // Grown or pushed shapes moved: route every line again.
+      relayout(diagram);
       // Visual Paradigm fits a node around its new child once this call is over: a size asked for
       // is put back then
       for (IShapeUIModel up = parent; up != null; up = parentShapeOf(up)) {
@@ -751,7 +717,23 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
         afterVpSettles(() -> restoreMinimum(diagram, container));
       }
     }
+    settle(diagram);
     return new Placement(shape, parent != null, refused, pushed);
+  }
+
+  /**
+   * Visual Paradigm fits a container node around its children once the tool call is over (which may
+   * change its size): afterwards every title is made as wide as its node again and every line is
+   * routed to the final borders.
+   */
+  private void settle(IDiagramUIModel diagram) {
+    afterVpSettles(
+        () -> {
+          for (IShapeUIModel s : allShapes(diagram)) {
+            syncCaption(s);
+          }
+          relayout(diagram);
+        });
   }
 
   /**
@@ -801,16 +783,17 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
     // a node takes its nested nodes, artifacts and components along; a frame it left grows
     IShapeUIModel shape = (IShapeUIModel) de;
     String note = applyBounds(shape, x, y, width, height);
+    syncCaption(shape);
+    for (IShapeUIModel inner : childrenOf(shape)) {
+      syncCaption(inner);
+    }
     IShapeUIModel parent = parentShapeOf(shape);
     if (parent != null) {
       growContainers(diagram, shape, parent);
     }
-    recenterTree(shape);
-    // the labels stay where the old lines were: reset them and put them beside the new routes
-    for (IConnectorUIModel c : connectorsOfTree(shape)) {
-      c.resetCaption();
-      placeLabelClear(diagram, c);
-    }
+    // the lines and their labels are routed again around the shapes where they stand now
+    relayout(diagram);
+    settle(diagram);
     return boundsResult(name, shape) + note;
   }
 
@@ -827,10 +810,11 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
         Math.max(node.getWidth(), minimum[0]),
         Math.max(node.getHeight(), minimum[1]));
     keepSize(node);
+    syncCaption(node);
     if (parent != null) {
       growContainers(diagram, node, parent);
     }
-    recenterConnectors(diagram);
+    relayout(diagram);
   }
 
   /**
@@ -853,15 +837,14 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       }
       // a size asked for is a minimum: Visual Paradigm shrinks a node around its children
       int[] minimum = minimumSize.get(container.getId());
+      int titleWidth = titleSize(container)[0];
       int[] wanted =
-          minimum == null
-              ? before
-              : new int[] {
-                before[0],
-                before[1],
-                Math.max(before[2], minimum[0]),
-                Math.max(before[3], minimum[1])
-              };
+          new int[] {
+            before[0],
+            before[1],
+            Math.max(Math.max(before[2], titleWidth), minimum == null ? 0 : minimum[0]),
+            Math.max(before[3], minimum == null ? 0 : minimum[1])
+          };
       int[] after =
           DeploymentDiagramUtils.encloseChildren(wanted, boundsList(children), PAD_RIGHT, PAD);
       if (Arrays.equals(before, after)) {
@@ -869,6 +852,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       }
       container.setBounds(after[0], after[1], after[2], after[3]);
       keepSize(container);
+      syncCaption(container);
       IShapeUIModel outer = parentShapeOf(container);
       List<IShapeUIModel> siblings =
           content(without(outer != null ? childrenOf(outer) : topLevelShapes(diagram), container));
@@ -925,21 +909,69 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
       if (free) {
         artifact.setBounds(spot[0], spot[1], w, h);
         artifact.resetCaption();
-        recenterConnectorsOf(artifact);
         return " (moved the artifact to " + spot[0] + "," + spot[1] + " next to its node)";
       }
     }
     return "";
   }
 
-  // --- Connectors ---
+  // --- Flat nodes ---
 
-  private void recenterConnectors(IDiagramUIModel diagram) {
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (de instanceof IConnectorUIModel) {
-        centerConnector((IConnectorUIModel) de);
-      }
+  /**
+   * Draw a node as a flat rectangle, never as Visual Paradigm's 3-D box: the primitive rectangle
+   * shows the keyword (<<device>>, <<executionEnvironment>>) from the model's stereotype and the
+   * name as the shape's text.
+   */
+  private static void flatten(IShapeUIModel shape) {
+    shape.setPresentationOption(IShapeUIModel.PRESENTATION_OPTION_PRIMITIVE);
+    shape.setPrimitiveShapeType(IShapeUIModel.PRIMITIVE_SHAPE_TYPE_RECTANGLE);
+    shape.setCustomText(shape.getModelElement().getName());
+    shape.resetCaption();
+  }
+
+  /** The lines of a flat node's title: its keyword (when stereotyped) and its name. */
+  private static List<String> titleLines(IShapeUIModel shape) {
+    List<String> lines = new ArrayList<>();
+    IModelElement model = shape.getModelElement();
+    com.vp.plugin.model.IStereotype[] stereotypes =
+        model == null ? null : model.toStereotypeModelArray();
+    for (com.vp.plugin.model.IStereotype st :
+        stereotypes == null ? new com.vp.plugin.model.IStereotype[0] : stereotypes) {
+      lines.add(DeploymentDiagramUtils.keyword(st.getName()));
     }
+    lines.add(model == null ? "" : model.getName());
+    return lines;
+  }
+
+  /** Smallest {width, height} of a flat node that shows its whole title. */
+  private static int[] titleSize(IShapeUIModel shape) {
+    if (!(shape.getModelElement() instanceof INode)) {
+      return new int[] {0, 0};
+    }
+    int width = 0;
+    List<String> lines = titleLines(shape);
+    for (String line : lines) {
+      width = Math.max(width, TextMetrics.width(line, true));
+    }
+    return new int[] {width + 28, lines.size() * 16 + 18};
+  }
+
+  /**
+   * Make the title of a flat node as wide as the node (VP wraps it at the width of the caption box,
+   * which stays at the size it had when the shape was created) and put it at the top of a container
+   * or the middle of a leaf.
+   */
+  private static void syncCaption(IShapeUIModel shape) {
+    if (!(shape.getModelElement() instanceof INode)) {
+      return;
+    }
+    com.vp.plugin.diagram.ICaptionUIModel caption = shape.getCaptionUIModel();
+    if (caption == null) {
+      return;
+    }
+    int height = Math.max(caption.getHeight(), titleLines(shape).size() * 15);
+    int top = childrenOf(shape).isEmpty() ? Math.max((shape.getHeight() - height) / 2, 4) : 8;
+    caption.setBounds(0, top, shape.getWidth(), height);
   }
 
   // --- Lookup ---

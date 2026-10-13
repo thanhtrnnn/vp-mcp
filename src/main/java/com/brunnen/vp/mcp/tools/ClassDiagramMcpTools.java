@@ -2,7 +2,10 @@ package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.ClassDiagramUtils;
+import com.brunnen.vp.mcp.util.ClassLayoutProfile;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
+import com.brunnen.vp.mcp.util.VpGraphLayout;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -17,7 +20,6 @@ import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
-import com.vp.plugin.diagram.connector.IAssociationUIModel;
 import com.vp.plugin.diagram.connector.IHasRoleConnectorUIModel;
 import com.vp.plugin.diagram.format.IShapeUIModelFillColor;
 import com.vp.plugin.diagram.shape.IClassUIModel;
@@ -48,20 +50,10 @@ import java.util.Set;
 /** MCP tools for Visual Paradigm Class diagram operations. */
 public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
 
-  /** Auto-placed classes wrap to a new row past this x (about three classes, report-shaped). */
-  private static final int AUTO_ROW_RIGHT = 950;
-
-  /** Free space between classes, room for association names and multiplicities. */
-  private static final int CLASS_GAP = 80;
-
-  /**
-   * Room reserved for an auto-placed class: members are usually added after the class, so its box
-   * is still the size of its name when the next class is placed. Reserving a realistic box keeps
-   * about three classes in a row once the members grow the boxes.
-   */
-  private static final int CLASS_SLOT_W = 220;
-
-  private static final int CLASS_SLOT_H = 140;
+  @Override
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    return diagram instanceof IClassDiagramUIModel ? new ClassLayoutProfile() : null;
+  }
 
   @Tool(name = "createClassDiagram", description = "Create a new class diagram in Visual Paradigm")
   public String createClassDiagram(String diagramName) {
@@ -173,13 +165,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               ((IClassUIModel) classDe).setDisplayAsRobustnessAnalysisIcon(false);
             }
             fitShape(classDe);
-            if (x > 0 || y > 0) {
-              classDe.setBounds(x, y, classDe.getWidth(), classDe.getHeight());
-            } else {
-              // keep the layer row of the zone (forms / DAOs / entities) but never overlap
-              int[] spot = classSlot(diagram, classDe, 50, classDe.getY());
-              classDe.setBounds(spot[0], spot[1], classDe.getWidth(), classDe.getHeight());
-            }
+            placeNew(diagram, classDe, x, y);
 
             // Set package fill color if provided
             if (packageName != null
@@ -219,6 +205,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               connectCentered(diagram, real, ifaceDe, classDe);
             }
 
+            relayout(diagram);
             StringBuilder result = new StringBuilder();
             result
                 .append("Added class '")
@@ -566,9 +553,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               toEnd.setMultiplicity(toMultiplicity.trim());
             }
-            makeRoomForLabels(fromElement, toElement, assoc);
             connectCentered(diagram, assoc, fromElement, toElement);
-            layoutAssociationLabels(diagram, false);
 
             return "Added association from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -670,9 +655,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               ((IAssociationEnd) assoc.getToEnd()).setMultiplicity(toMultiplicity.trim());
             }
-            makeRoomForLabels(fromElement, toElement, assoc);
             connectCentered(diagram, assoc, fromElement, toElement);
-            layoutAssociationLabels(diagram, false);
 
             return "Added aggregation from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -725,9 +708,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               ((IAssociationEnd) assoc.getToEnd()).setMultiplicity(toMultiplicity.trim());
             }
-            makeRoomForLabels(fromElement, toElement, assoc);
             connectCentered(diagram, assoc, fromElement, toElement);
-            layoutAssociationLabels(diagram, false);
 
             return "Added composition from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -831,10 +812,8 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             iface.addStereotype("Interface");
             IDiagramElement ifaceDe = addToDiagram(diagram, iface, interfaceName.trim());
             fitShape(ifaceDe);
-            // the first free slot of the class rows, like a class (the layer zone of the name
-            // would put it 1000 px away from the classes that implement it)
-            int[] spot = classSlot(diagram, ifaceDe, 50, ifaceDe.getY());
-            ifaceDe.setBounds(spot[0], spot[1], ifaceDe.getWidth(), ifaceDe.getHeight());
+            placeNew(diagram, ifaceDe, 0, 0);
+            relayout(diagram);
 
             return "Added interface '" + interfaceName + "' to diagram '" + diagramName + "'";
           });
@@ -1362,13 +1341,15 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               // An actor's name is a detached label that stays behind when the figure moves.
               de.resetCaption();
             }
+            if (profileOf(diagram) != null) {
+              // explicitly placed: the layered layout leaves it here, connectors go around it
+              pin(de);
+              relayout(diagram);
+              return boundsResult(elementName, de) + note;
+            }
             // VP does not reroute connectors when bounds change through the API
             recenterTree(de);
-            if (diagram instanceof IClassDiagramUIModel) {
-              layoutAssociationLabels(diagram, false);
-            } else {
-              resetCaptionsOfTree(de);
-            }
+            resetCaptionsOfTree(de);
             return boundsResult(elementName, de) + note;
           });
     } catch (Exception e) {
@@ -1911,8 +1892,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "rerouteConnectors",
       description =
-          "Re-anchor every connector of a diagram to the centers of its shapes (straight"
-              + " center-to-center lines); run after moving shapes")
+          "Route every connector of a diagram again around the shapes where they stand: every"
+              + " line is horizontal or vertical (right-angle elbows), clear of the other shapes,"
+              + " ends spread over the sides, labels beside the lines. Run after moving shapes;"
+              + " autoLayoutDiagram also moves the shapes")
   public String rerouteConnectors(String diagramName) {
     try {
       return runOnEdt(
@@ -1928,15 +1911,18 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 return "Rerouted " + done + " connector(s) on '" + diagramName + "'";
               }
             }
+            LayoutProfile profile = profileOf(diagram);
+            if (profile != null) {
+              activate(diagram);
+              VpGraphLayout.Summary summary = VpGraphLayout.route(diagram, profile);
+              return "Rerouted " + summary.connectors + " connector(s) on '" + diagramName + "'";
+            }
             int count = 0;
             for (IDiagramElement de : getDiagramElementsList(diagram)) {
               if (de instanceof IConnectorUIModel) {
                 centerConnector((IConnectorUIModel) de);
                 count++;
               }
-            }
-            if (diagram instanceof IClassDiagramUIModel) {
-              layoutAssociationLabels(diagram, false);
             }
             return "Rerouted " + count + " connector(s) on '" + diagramName + "'";
           });
@@ -1948,10 +1934,10 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "layoutConnectorLabels",
       description =
-          "Place association labels on a diagram: multiplicities next to each end, the"
-              + " association name at the middle, role names hidden. coordinateMode: 'absolute'"
-              + " (diagram coordinates) or 'relative' (to the connector bounds)")
-  public String layoutConnectorLabels(String diagramName, String coordinateMode) {
+          "Put the labels of a diagram's connectors (multiplicities at the ends, names beside the"
+              + " longest leg) clear of shapes, lines and each other. The connectors are routed"
+              + " again around the shapes, which stay where they are")
+  public String layoutConnectorLabels(String diagramName) {
     try {
       return runOnEdt(
           () -> {
@@ -1959,9 +1945,13 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
-            int count =
-                layoutAssociationLabels(diagram, "relative".equalsIgnoreCase(coordinateMode));
-            return "Laid out labels of " + count + " association(s) on '" + diagramName + "'";
+            LayoutProfile profile = profileOf(diagram);
+            if (profile == null) {
+              return "Diagram '" + diagramName + "' has no connector labels to lay out";
+            }
+            activate(diagram);
+            VpGraphLayout.Summary summary = VpGraphLayout.route(diagram, profile);
+            return "Laid out " + summary.labels + " label(s) on '" + diagramName + "'";
           });
     } catch (Exception e) {
       return "Error laying out labels: " + e.getMessage();
@@ -1969,338 +1959,22 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
-   * Place association labels: multiplicities next to each end, the association name at the middle,
-   * role names hidden. Ends leaving a shape in a fan are staggered.
-   *
-   * @param diagram the diagram
-   * @param relative true for coordinates relative to the connector bounds
-   * @return number of associations laid out
-   */
-  private int layoutAssociationLabels(IDiagramUIModel diagram, boolean relative) {
-    List<IAssociationUIModel> conns = new ArrayList<>();
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (de instanceof IAssociationUIModel
-          && ((IAssociationUIModel) de).getFromShape() != null
-          && ((IAssociationUIModel) de).getToShape() != null) {
-        conns.add((IAssociationUIModel) de);
-      }
-    }
-    // Rank each connector end among the ends leaving the same shape in a similar
-    // direction (a "fan"), so their labels can be staggered instead of stacked.
-    java.util.Map<IAssociationUIModel, int[]> fromRank = new java.util.HashMap<>();
-    java.util.Map<IAssociationUIModel, int[]> toRank = new java.util.HashMap<>();
-    for (IAssociationUIModel c : conns) {
-      fromRank.put(c, fanRank(conns, c, c.getFromShape()));
-      toRank.put(c, fanRank(conns, c, c.getToShape()));
-    }
-    int count = 0;
-    for (IAssociationUIModel conn : conns) {
-      IShapeUIModel from = conn.getFromShape();
-      IShapeUIModel to = conn.getToShape();
-      double fx = from.getX() + from.getWidth() / 2.0;
-      double fy = from.getY() + from.getHeight() / 2.0;
-      double tx = to.getX() + to.getWidth() / 2.0;
-      double ty = to.getY() + to.getHeight() / 2.0;
-      if (Math.hypot(tx - fx, ty - fy) < 1) {
-        continue;
-      }
-      // The labels follow the drawn route: a connector routed around a shape bends, and its ends
-      // leave the boxes along the first and last leg, not along the straight line between them.
-      List<double[]> route = routeOf(conn, fx, fy, tx, ty);
-      double[] first = route.get(0);
-      double[] second = route.get(1);
-      double[] last = route.get(route.size() - 1);
-      double[] beforeLast = route.get(route.size() - 2);
-      double len1 = Math.hypot(second[0] - first[0], second[1] - first[1]);
-      double lenN = Math.hypot(beforeLast[0] - last[0], beforeLast[1] - last[1]);
-      double dx = (second[0] - first[0]) / Math.max(len1, 1);
-      double dy = (second[1] - first[1]) / Math.max(len1, 1);
-      double ex = (beforeLast[0] - last[0]) / Math.max(lenN, 1);
-      double ey = (beforeLast[1] - last[1]) / Math.max(lenN, 1);
-      double nx = -dy;
-      double ny = dx;
-      double exitFrom = borderDistance(from, dx, dy);
-      double exitTo = borderDistance(to, ex, ey);
-      int ox = relative ? conn.getX() : 0;
-      int oy = relative ? conn.getY() : 0;
-      IAssociation assoc =
-          conn.getModelElement() instanceof IAssociation
-              ? (IAssociation) conn.getModelElement()
-              : null;
-      String multA =
-          assoc == null ? null : ((IAssociationEnd) assoc.getFromEnd()).getMultiplicity();
-      String multB = assoc == null ? null : ((IAssociationEnd) assoc.getToEnd()).getMultiplicity();
-      double alongA = exitFrom + 16 + 22 * fromRank.get(conn)[0];
-      double alongB = exitTo + 16 + 22 * toRank.get(conn)[0];
-      conn.setMultiplicityARectangle(
-          labelRect(multA, fx + dx * alongA + nx * 12, fy + dy * alongA + ny * 12, ox, oy));
-      conn.setMultiplicityBRectangle(
-          labelRect(multB, tx + ex * alongB + ey * 12, ty + ey * alongB - ex * 12, ox, oy));
-      conn.setShowFromRoleName(false);
-      conn.setShowToRoleName(false);
-      ICaptionUIModel cap = conn.getCaptionUIModel();
-      String name = assoc == null ? null : assoc.getName();
-      if (cap != null && name != null && !name.isEmpty()) {
-        // the name sits on the longest visible leg (the whole line when it is straight)
-        double[] leg = nameLeg(route, from, to);
-        double sx = leg[0];
-        double sy = leg[1];
-        double legDx = leg[2];
-        double legDy = leg[3];
-        double span = leg[4];
-        double legNx = -legDy;
-        double legNy = legDx;
-        double t = 0.5;
-        if (route.size() == 2) {
-          int[] fan =
-              fromRank.get(conn)[1] >= toRank.get(conn)[1] ? fromRank.get(conn) : toRank.get(conn);
-          boolean fromSide = fan == fromRank.get(conn);
-          t = fan[1] > 1 ? 0.3 + 0.1 * (fan[2] % 5) : 0.5;
-          if (!fromSide) {
-            t = 1 - t;
-          }
-        }
-        int w = Math.max(cap.getWidth(), textWidth(name));
-        int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
-        // keep the name off this association's multiplicities and off every class box: try the
-        // usual spot, then the other side of the line, then further along it
-        List<int[]> avoid = new ArrayList<>();
-        avoid.add(rectOf(conn.getMultiplicityARectangle(), multA, ox, oy));
-        avoid.add(rectOf(conn.getMultiplicityBRectangle(), multB, ox, oy));
-        for (IShapeUIModel shape : diagram.toShapeUIModelArray()) {
-          if (shape.getModelElement() instanceof IClass) {
-            avoid.add(rect(shape));
-          }
-        }
-        double clearance = h / 2.0 + 8;
-        double[][] tries = {
-          {t, -1}, {t, 1}, {0.35, -1}, {0.65, -1}, {0.35, 1}, {0.65, 1}, {0.5, -2}, {0.5, 2}
-        };
-        int[] chosen = null;
-        for (double[] option : tries) {
-          double side = option[1];
-          double mx = sx + legDx * span * option[0] + legNx * clearance * side;
-          double my = sy + legDy * span * option[0] + legNy * clearance * side;
-          int[] r = {(int) Math.round(mx - w / 2.0), (int) Math.round(my - h / 2.0), w, h};
-          if (chosen == null) {
-            chosen = r;
-          }
-          if (!overlapsAny(r, avoid)) {
-            chosen = r;
-            break;
-          }
-        }
-        cap.setVisible(true);
-        cap.setBounds(chosen[0] - ox, chosen[1] - oy, w, h);
-      }
-      count++;
-    }
-    return count;
-  }
-
-  /**
-   * Top-left corner for an auto-placed class: the first spot from (x0, y0), row by row, where a
-   * {@link #CLASS_SLOT_W} x {@link #CLASS_SLOT_H} slot (or the class's own size when larger) keeps
-   * {@link #CLASS_GAP} from the slots of the other top-level shapes.
-   */
-  private static int[] classSlot(IDiagramUIModel diagram, IDiagramElement self, int x0, int y0) {
-    List<int[]> occupied = new ArrayList<>();
-    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      if (s.getId().equals(self.getId()) || s.getParent() != null || s.getWidth() <= 0) {
-        continue;
-      }
-      int[] r = rect(s);
-      if (s.getModelElement() instanceof IClass) {
-        r[2] = Math.max(r[2], CLASS_SLOT_W);
-        r[3] = Math.max(r[3], CLASS_SLOT_H);
-      }
-      occupied.add(r);
-    }
-    return DiagramUtils.firstFreeSpot(
-        occupied,
-        x0,
-        y0,
-        Math.max(self.getWidth(), CLASS_SLOT_W),
-        Math.max(self.getHeight(), CLASS_SLOT_H),
-        AUTO_ROW_RIGHT,
-        CLASS_GAP);
-  }
-
-  /**
-   * The drawn route of an association as center points: the two shape centers with the connector's
-   * bend points between them (at least two points).
-   */
-  private static List<double[]> routeOf(
-      IAssociationUIModel conn, double fx, double fy, double tx, double ty) {
-    List<double[]> route = new ArrayList<>();
-    route.add(new double[] {fx, fy});
-    Point[] points = conn.getPoints();
-    if (points != null && points.length > 2) {
-      for (int i = 1; i < points.length - 1; i++) {
-        route.add(new double[] {points[i].x, points[i].y});
-      }
-    }
-    route.add(new double[] {tx, ty});
-    return route;
-  }
-
-  /**
-   * {startX, startY, unitDx, unitDy, length} of the leg a connector's name goes on: the longest
-   * visible one, i.e. between the points where the line leaves the first box and enters the last.
-   */
-  private static double[] nameLeg(List<double[]> route, IShapeUIModel from, IShapeUIModel to) {
-    double[] best = null;
-    for (int i = 0; i + 1 < route.size(); i++) {
-      double[] a = route.get(i);
-      double[] b = route.get(i + 1);
-      double len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      if (len < 1) {
-        continue;
-      }
-      double ux = (b[0] - a[0]) / len;
-      double uy = (b[1] - a[1]) / len;
-      double startCut = i == 0 ? borderDistance(from, ux, uy) : 0;
-      double endCut = i + 2 == route.size() ? borderDistance(to, -ux, -uy) : 0;
-      double visible = len - startCut - endCut;
-      if (best == null || visible > best[4]) {
-        best = new double[] {a[0] + ux * startCut, a[1] + uy * startCut, ux, uy, visible};
-      }
-    }
-    return best != null ? best : new double[] {route.get(0)[0], route.get(0)[1], 1, 0, 0};
-  }
-
-  /**
-   * Refit every view of a class after its content changed, push the shapes it now overlaps out of
-   * the way and re-anchor the connectors and labels around it.
+   * Refit every view of a class after its content changed and lay the diagram out again (the boxes
+   * grew, so the places and routes change).
    */
   private void refitClass(IClass cls) {
     IDiagramElement[] views = cls.getDiagramElements();
     if (views == null) {
       return;
     }
+    java.util.Set<String> laidOut = new java.util.HashSet<>();
     for (IDiagramElement view : views) {
       fitShape(view);
-      if (view instanceof IShapeUIModel) {
-        pushApart((IShapeUIModel) view, CLASS_GAP);
-        recenterConnectorsOf(view);
-        layoutAssociationLabels(view.getDiagramUIModel(), false);
+      IDiagramUIModel diagram = view.getDiagramUIModel();
+      if (diagram != null && laidOut.add(diagram.getId())) {
+        relayout(diagram);
       }
     }
-  }
-
-  /** A multiplicity label's rectangle in diagram coordinates, or an empty one when unset. */
-  private static int[] rectOf(java.awt.Rectangle r, String text, int ox, int oy) {
-    if (r == null || text == null || text.isEmpty() || "Unspecified".equalsIgnoreCase(text)) {
-      return new int[] {0, 0, 0, 0};
-    }
-    return new int[] {r.x + ox, r.y + oy, r.width, r.height};
-  }
-
-  private static boolean overlapsAny(int[] r, List<int[]> others) {
-    for (int[] o : others) {
-      if (o[2] > 0
-          && o[0] < r[0] + r[2] + 2
-          && r[0] < o[0] + o[2] + 2
-          && o[1] < r[1] + r[3] + 2
-          && r[1] < o[1] + o[3] + 2) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Before an association with a name or multiplicities is drawn between two classes side by side
-   * (or one above the other), widen the gap between them to fit its labels: the right (lower) class
-   * moves away, with the classes beyond it.
-   */
-  private void makeRoomForLabels(IDiagramElement a, IDiagramElement b, IAssociation assoc) {
-    if (!(a instanceof IShapeUIModel)
-        || !(b instanceof IShapeUIModel)
-        || a.getId().equals(b.getId())) {
-      return;
-    }
-    String name = assoc.getName();
-    String multA = ((IAssociationEnd) assoc.getFromEnd()).getMultiplicity();
-    String multB = ((IAssociationEnd) assoc.getToEnd()).getMultiplicity();
-    int nameWidth = name == null || name.isEmpty() ? 0 : textWidth(name);
-    int multWidth = labelWidth(multA) + labelWidth(multB);
-    if (nameWidth == 0 && multWidth == 0) {
-      return;
-    }
-    int labels =
-        (labelWidth(multA) > 0 ? 1 : 0) + (labelWidth(multB) > 0 ? 1 : 0) + (nameWidth > 0 ? 1 : 0);
-    makeRoomBetween(a, b, Math.max(nameWidth, multWidth) + 40, 30 + 18 * labels);
-  }
-
-  private static int labelWidth(String multiplicity) {
-    return multiplicity == null
-            || multiplicity.isEmpty()
-            || "Unspecified".equalsIgnoreCase(multiplicity)
-        ? 0
-        : textWidth(multiplicity);
-  }
-
-  /** Distance from a shape's center to its border along the unit direction (dx, dy). */
-  private static double borderDistance(IShapeUIModel shape, double dx, double dy) {
-    double hw = shape.getWidth() / 2.0;
-    double hh = shape.getHeight() / 2.0;
-    double tx = Math.abs(dx) < 1e-9 ? Double.MAX_VALUE : hw / Math.abs(dx);
-    double ty = Math.abs(dy) < 1e-9 ? Double.MAX_VALUE : hh / Math.abs(dy);
-    return Math.min(tx, ty);
-  }
-
-  private static java.awt.Rectangle labelRect(String text, double cx, double cy, int ox, int oy) {
-    int w = textWidth(text);
-    int h = 14;
-    return new java.awt.Rectangle(
-        (int) Math.round(cx - w / 2.0) - ox, (int) Math.round(cy - h / 2.0) - oy, w, h);
-  }
-
-  private static int textWidth(String text) {
-    return (text == null ? 0 : text.length()) * 8 + 16;
-  }
-
-  /**
-   * {level, size, slot} of the connector end at {@code shape}. All association ends at the shape
-   * are ordered by angle; level counts up (0, 1, 2) through runs of ends closer than 20 degrees so
-   * their multiplicities are staggered along the lines, size is the number of ends at the shape and
-   * slot the end's index in that order.
-   */
-  private static int[] fanRank(
-      List<IAssociationUIModel> conns, IAssociationUIModel self, IShapeUIModel shape) {
-    List<IAssociationUIModel> ends = new ArrayList<>();
-    for (IAssociationUIModel c : conns) {
-      if (sameShape(c.getFromShape(), shape) || sameShape(c.getToShape(), shape)) {
-        ends.add(c);
-      }
-    }
-    ends.sort((a, b) -> Double.compare(endAngle(a, shape), endAngle(b, shape)));
-    int level = 0;
-    for (int i = 0; i < ends.size(); i++) {
-      if (i > 0) {
-        double gap = endAngle(ends.get(i), shape) - endAngle(ends.get(i - 1), shape);
-        level = gap < Math.toRadians(20) ? (level + 1) % 3 : 0;
-      }
-      if (ends.get(i) == self) {
-        return new int[] {level, ends.size(), i};
-      }
-    }
-    return new int[] {0, 1, 0};
-  }
-
-  /** Shape wrappers are not canonical objects, so compare them by id. */
-  private static boolean sameShape(IShapeUIModel a, IShapeUIModel b) {
-    return a != null && b != null && a.getId().equals(b.getId());
-  }
-
-  private static double endAngle(IAssociationUIModel c, IShapeUIModel shape) {
-    IShapeUIModel other = sameShape(c.getFromShape(), shape) ? c.getToShape() : c.getFromShape();
-    double sx = shape.getX() + shape.getWidth() / 2.0;
-    double sy = shape.getY() + shape.getHeight() / 2.0;
-    double ox = other.getX() + other.getWidth() / 2.0;
-    double oy = other.getY() + other.getHeight() / 2.0;
-    return Math.atan2(oy - sy, ox - sx);
   }
 
   private static void putRect(ObjectNode node, String key, java.awt.Rectangle rect) {

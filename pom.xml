@@ -100,6 +100,15 @@
             <systemPath>${vp.lib.dir}/openapi.jar</systemPath>
         </dependency>
 
+        <!-- Eclipse Layout Kernel (ELK 0.8.1, bundled in VP's lib02.jar): provided by VP at runtime -->
+        <dependency>
+            <groupId>com.vp</groupId>
+            <artifactId>lib02</artifactId>
+            <version>${vp.version}</version>
+            <scope>system</scope>
+            <systemPath>${vp.lib.dir}/lib02.jar</systemPath>
+        </dependency>
+
         <!-- Jackson for JSON parsing (Java 11 compatible) -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

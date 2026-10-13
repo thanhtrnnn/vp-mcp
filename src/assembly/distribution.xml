@@ -28,6 +28,7 @@
             <scope>runtime</scope>
             <excludes>
                 <exclude>com.vp:openapi</exclude>
+                <exclude>com.vp:lib02</exclude>
             </excludes>
         </dependencySet>
     </dependencySets>
