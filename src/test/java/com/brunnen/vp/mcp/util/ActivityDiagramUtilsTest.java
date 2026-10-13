@@ -79,9 +79,14 @@ public class ActivityDiagramUtilsTest {
     assertTrue(
         "Decision shows its question",
         ActivityDiagramUtils.showsLabel(ActivityDiagramUtils.KIND_DECISION));
-    assertFalse(
-        "Initial node is unlabelled",
+    assertTrue(
+        "Initial node shows its name (Bat dau)",
         ActivityDiagramUtils.showsLabel(ActivityDiagramUtils.KIND_INITIAL));
+    assertTrue(
+        "Final node shows its name (Ket thuc)",
+        ActivityDiagramUtils.showsLabel(ActivityDiagramUtils.KIND_FINAL));
+    assertFalse(
+        "Merge is unlabelled", ActivityDiagramUtils.showsLabel(ActivityDiagramUtils.KIND_MERGE));
     assertFalse(
         "Fork bar is unlabelled", ActivityDiagramUtils.showsLabel(ActivityDiagramUtils.KIND_FORK));
   }
@@ -270,28 +275,45 @@ public class ActivityDiagramUtilsTest {
   }
 
   @Test
-  public void testRelocateInLane() {
-    // centered child (center 220 in lane 100..340) follows the lane center (260) when it widens
-    assertEquals(
-        "Centered child stays centered",
-        260 - 40,
-        ActivityDiagramUtils.relocateInLane(180, 80, 100, 240, 100, 320));
-    // off-center child moves with the lane
-    assertEquals(
-        "Off-center child moves with the lane",
-        130 + 50,
-        ActivityDiagramUtils.relocateInLane(130, 60, 100, 240, 150, 240));
-    // off-center child keeps its offset from the center when the lane widens
-    assertEquals(
-        "Off-center child keeps its offset from the lane center",
-        260 - 60 - 30,
-        ActivityDiagramUtils.relocateInLane(130, 60, 100, 240, 100, 320));
-    // off-center child that would leave the shrunk area is clamped back in
+  public void testRelocateRow() {
+    // a centered node follows the lane center (260) when the lane widens from 240 to 320
+    assertArrayEquals(
+        new int[] {260 - 40},
+        ActivityDiagramUtils.relocateRow(new int[] {180}, new int[] {80}, 100, 240, 100, 320));
+    // a row moves as a whole with the lane
+    assertArrayEquals(
+        new int[] {180, 260},
+        ActivityDiagramUtils.relocateRow(
+            new int[] {130, 210}, new int[] {60, 60}, 100, 240, 150, 240));
+    // a producer (centered) and its object node beside it, sticking out of the lane: the lane
+    // grew to fit them; both keep their 40 px gap and end up inside the lane
+    int[] xs =
+        ActivityDiagramUtils.relocateRow(
+            new int[] {340, 501}, new int[] {121, 108}, 340, 240, 340, 309);
+    assertEquals("gap kept", 501 - 340, xs[1] - xs[0]);
     int pad = ActivityDiagramUtils.LANE_PADDING;
-    assertEquals(
-        "Child is clamped into the lane",
-        200 + 200 - pad - 60,
-        ActivityDiagramUtils.relocateInLane(270, 60, 100, 240, 200, 200));
+    assertTrue("inside on the left", xs[0] >= 340 + pad);
+    assertTrue("inside on the right", xs[1] + 108 <= 340 + 309 - pad);
+  }
+
+  @Test
+  public void testRowsOf() {
+    assertArrayEquals(
+        new int[] {0, 0, 1},
+        ActivityDiagramUtils.rowsOf(new int[] {100, 110, 200}, new int[] {40, 40, 40}));
+  }
+
+  @Test
+  public void testFirstClearSpotAndGuardCandidates() {
+    java.util.List<int[]> candidates =
+        ActivityDiagramUtils.guardCandidates(100, 100, 100, 300, 60, 14);
+    // downward flow: the first candidate is right of the line, the 4th left of it
+    assertTrue(candidates.get(0)[0] > 100);
+    assertTrue(candidates.get(3)[0] + 60 < 100);
+    java.util.List<int[]> obstacles = new java.util.ArrayList<>();
+    obstacles.add(new int[] {100, 100, 200, 200}); // everything right of the line is taken
+    int[] spot = ActivityDiagramUtils.firstClearSpot(candidates, 60, 14, obstacles);
+    assertTrue("falls back to the left side", spot[0] + 60 < 100);
   }
 
   @Test
@@ -308,5 +330,42 @@ public class ActivityDiagramUtilsTest {
     assertEquals("Right of all lanes", -1, ActivityDiagramUtils.laneIndexAt(820, xs, widths));
     assertEquals("Left of all lanes", -1, ActivityDiagramUtils.laneIndexAt(10, xs, widths));
     assertEquals("No lanes", -1, ActivityDiagramUtils.laneIndexAt(10, new int[0], new int[0]));
+  }
+
+  @Test
+  public void testBarPortStaysInsetFromTheEnds() {
+    int[] bar = {580, 852, 120, 10};
+    // a branch far left of the bar leaves the bottom side 12 px in from the left end
+    assertArrayEquals(new int[] {592, 862}, ActivityDiagramUtils.barPort(bar, 400, 900));
+    // a branch right under the bar leaves straight down
+    assertArrayEquals(new int[] {640, 862}, ActivityDiagramUtils.barPort(bar, 640, 950));
+    // a source above the bar enters the top side, inset from the right end
+    assertArrayEquals(new int[] {688, 852}, ActivityDiagramUtils.barPort(bar, 900, 700));
+    // a vertical bar uses its left/right side
+    assertArrayEquals(
+        new int[] {110, 112}, ActivityDiagramUtils.barPort(new int[] {100, 100, 10, 120}, 300, 0));
+  }
+
+  @Test
+  public void testOnCanvasDropsSpotsLeftOrAboveTheCanvas() {
+    java.util.List<int[]> spots = new java.util.ArrayList<>();
+    spots.add(new int[] {-20, 50});
+    spots.add(new int[] {30, 2});
+    spots.add(new int[] {30, 50});
+    java.util.List<int[]> kept = ActivityDiagramUtils.onCanvas(spots);
+    assertEquals(1, kept.size());
+    assertArrayEquals(new int[] {30, 50}, kept.get(0));
+    java.util.List<int[]> none = new java.util.ArrayList<>();
+    none.add(new int[] {-5, -5});
+    assertEquals(
+        "all kept when none is on the canvas", 1, ActivityDiagramUtils.onCanvas(none).size());
+  }
+
+  @Test
+  public void testFrameBordersCoverTitleAndEdges() {
+    java.util.List<int[]> boxes = ActivityDiagramUtils.frameBorders(100, 50, 200, 150, 24);
+    assertEquals(4, boxes.size());
+    assertArrayEquals(new int[] {100, 50, 200, 24}, boxes.get(0));
+    assertArrayEquals(new int[] {100, 199, 200, 2}, boxes.get(1));
   }
 }

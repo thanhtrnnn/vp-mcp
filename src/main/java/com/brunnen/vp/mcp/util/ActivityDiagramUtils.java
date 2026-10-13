@@ -76,9 +76,6 @@ public final class ActivityDiagramUtils {
 
   private static final int BAR_HEIGHT = 10;
 
-  /** Children whose center is this close to the lane center count as centered. */
-  private static final int CENTER_TOLERANCE = 2;
-
   /** Horizontal gap between sibling branches placed side by side. */
   public static final int BRANCH_GAP = 40;
 
@@ -153,15 +150,18 @@ public final class ActivityDiagramUtils {
   }
 
   /**
-   * Whether the node's name is drawn on the diagram. Only a decision carries a label (its question,
-   * under the diamond); the other control nodes are unlabelled in UML and their name only serves as
-   * the handle for flows.
+   * Whether the node's name is drawn on the diagram: a decision's question, and the "Bat dau" /
+   * "Ket thuc" of initial and final nodes, as in the course book. Merge, fork and join nodes are
+   * unlabelled in UML; their name only serves as the handle for flows.
    *
    * @param kind a {@code KIND_*} constant
    * @return true when the caption should stay visible
    */
   public static boolean showsLabel(String kind) {
-    return KIND_DECISION.equals(kind);
+    return KIND_DECISION.equals(kind)
+        || KIND_INITIAL.equals(kind)
+        || KIND_FINAL.equals(kind)
+        || KIND_FLOW_FINAL.equals(kind);
   }
 
   /**
@@ -346,27 +346,244 @@ public final class ActivityDiagramUtils {
   }
 
   /**
-   * New x of a lane child after its lane moved or was resized. Children that were centered stay
-   * centered; the others move with the lane and are clamped back inside it.
+   * New x of the nodes of one row of a lane after the lane moved or was resized. The row moves as a
+   * whole with the lane center (a centered node stays centered, side-by-side nodes keep their
+   * distances, so a producer and its object node never slide over each other); a row that would
+   * then stick out of the lane is shifted back inside, and one wider than the lane is centered.
    *
-   * @param childX the child's left x before the change
-   * @param childWidth the child width
+   * @param xs left x of each node of the row before the change
+   * @param widths width of each node
    * @param oldLaneX the lane's left x before the change
    * @param oldLaneWidth the lane width before the change
    * @param newLaneX the lane's new left x
    * @param newLaneWidth the new lane width
-   * @return the child's new left x
+   * @return the new left x of each node
    */
-  public static int relocateInLane(
-      int childX, int childWidth, int oldLaneX, int oldLaneWidth, int newLaneX, int newLaneWidth) {
-    int offset = (childX + childWidth / 2) - (oldLaneX + oldLaneWidth / 2);
-    if (Math.abs(offset) <= CENTER_TOLERANCE) {
-      return centeredX(newLaneX + newLaneWidth / 2, childWidth);
+  public static int[] relocateRow(
+      int[] xs, int[] widths, int oldLaneX, int oldLaneWidth, int newLaneX, int newLaneWidth) {
+    int delta = (newLaneX + newLaneWidth / 2) - (oldLaneX + oldLaneWidth / 2);
+    int left = Integer.MAX_VALUE;
+    int right = Integer.MIN_VALUE;
+    for (int i = 0; i < xs.length; i++) {
+      left = Math.min(left, xs[i] + delta);
+      right = Math.max(right, xs[i] + widths[i] + delta);
     }
-    // keep the offset from the lane center, so a row of branches centered in the lane stays
-    // centered (and together) when the lane widens
-    int newCenter = newLaneX + newLaneWidth / 2;
-    return clampIntoLane(newCenter + offset - childWidth / 2, childWidth, newLaneX, newLaneWidth);
+    int min = newLaneX + LANE_PADDING;
+    int max = newLaneX + newLaneWidth - LANE_PADDING;
+    int shift = 0;
+    if (right - left > max - min) {
+      shift = (newLaneX + newLaneWidth / 2) - (left + right) / 2;
+    } else if (left < min) {
+      shift = min - left;
+    } else if (right > max) {
+      shift = max - right;
+    }
+    int[] result = new int[xs.length];
+    for (int i = 0; i < xs.length; i++) {
+      result[i] = xs[i] + delta + shift;
+    }
+    return result;
+  }
+
+  /**
+   * Group shapes into rows: shapes whose vertical extents overlap share a row.
+   *
+   * @param ys top of each shape
+   * @param heights height of each shape
+   * @return the row index of each shape
+   */
+  public static int[] rowsOf(int[] ys, int[] heights) {
+    int n = ys.length;
+    int[] row = new int[n];
+    java.util.Arrays.fill(row, -1);
+    int next = 0;
+    for (int i = 0; i < n; i++) {
+      if (row[i] >= 0) {
+        continue;
+      }
+      row[i] = next;
+      // flood: everything overlapping a member of this row joins it
+      boolean grew = true;
+      while (grew) {
+        grew = false;
+        for (int j = 0; j < n; j++) {
+          if (row[j] >= 0) {
+            continue;
+          }
+          for (int k = 0; k < n; k++) {
+            if (row[k] == next && ys[j] < ys[k] + heights[k] && ys[k] < ys[j] + heights[j]) {
+              row[j] = next;
+              grew = true;
+              break;
+            }
+          }
+        }
+      }
+      next++;
+    }
+    return row;
+  }
+
+  /**
+   * Top-left corner of a w x h label for the first candidate spot that touches none of the
+   * obstacles (other labels, shapes, flow segments as thin boxes); the first candidate when all of
+   * them collide.
+   *
+   * @param candidates candidate top-left corners, best first
+   * @param w label width
+   * @param h label height
+   * @param obstacles rectangles {x, y, w, h} to keep clear of
+   * @return the chosen corner {x, y}
+   */
+  public static int[] firstClearSpot(
+      java.util.List<int[]> candidates, int w, int h, java.util.List<int[]> obstacles) {
+    int[] best = candidates.get(0);
+    int bestHits = Integer.MAX_VALUE;
+    for (int[] c : candidates) {
+      int hits = hits(c, w, h, obstacles);
+      if (hits == 0) {
+        return c;
+      }
+      if (hits < bestHits) {
+        bestHits = hits;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Whether a w x h label at {@code spot} keeps 2 px from every obstacle.
+   *
+   * @param spot top-left corner {x, y}
+   * @param w label width
+   * @param h label height
+   * @param obstacles boxes {x, y, w, h}
+   * @return true when the label touches no obstacle
+   */
+  public static boolean isClear(int[] spot, int w, int h, java.util.List<int[]> obstacles) {
+    return hits(spot, w, h, obstacles) == 0;
+  }
+
+  private static int hits(int[] c, int w, int h, java.util.List<int[]> obstacles) {
+    int hits = 0;
+    for (int[] o : obstacles) {
+      if (o[0] < c[0] + w + 2
+          && c[0] < o[0] + o[2] + 2
+          && o[1] < c[1] + h + 2
+          && c[1] < o[1] + o[3] + 2) {
+        hits++;
+      }
+    }
+    return hits;
+  }
+
+  /**
+   * Candidate spots for a flow's [guard] along the flow's first segment, best first: beside the
+   * line at 25%, 45% and 65% of the segment (capped near the source), on the right of the direction
+   * of travel first, then on the left.
+   *
+   * @param sx segment start x (source end)
+   * @param sy segment start y
+   * @param ex segment end x
+   * @param ey segment end y
+   * @param w label width
+   * @param h label height
+   * @return candidate top-left corners
+   */
+  public static java.util.List<int[]> guardCandidates(
+      int sx, int sy, int ex, int ey, int w, int h) {
+    java.util.List<int[]> result = new java.util.ArrayList<>();
+    double len = Math.max(1, Math.hypot(ex - sx, ey - sy));
+    double ux = (ex - sx) / len;
+    double uy = (ey - sy) / len;
+    double[] fractions = {0.25, 0.45, 0.65};
+    for (int side = 0; side < 2; side++) {
+      for (double f : fractions) {
+        double along = Math.min(len * f, 30 + 60 * f);
+        double ax = sx + ux * along;
+        double ay = sy + uy * along;
+        // "right" of a downward flow is +x; of a rightward flow it is +y (below)
+        boolean right = side == 0;
+        int x;
+        int y;
+        if (Math.abs(uy) >= Math.abs(ux)) {
+          x = (int) Math.round(right == (uy > 0) ? ax + 6 : ax - w - 6);
+          y = (int) Math.round(ay - h / 2.0);
+        } else {
+          x = (int) Math.round(ax - w / 2.0);
+          y = (int) Math.round(right == (ux < 0) ? ay - h - 4 : ay + 4);
+        }
+        result.add(new int[] {x, y});
+      }
+    }
+    return result;
+  }
+
+  /** Minimum distance between a flow's end on a fork/join bar and either end of the bar. */
+  public static final int BAR_INSET = 12;
+
+  /**
+   * Where a flow towards (tx, ty) leaves or enters a fork/join bar: on the long side facing the
+   * point, at the coordinate along the bar nearest the point but at least {@link #BAR_INSET} in
+   * from either end.
+   *
+   * @param bar bar bounds {x, y, w, h}
+   * @param tx x of the other end
+   * @param ty y of the other end
+   * @return the port {x, y} on the bar's border
+   */
+  public static int[] barPort(int[] bar, int tx, int ty) {
+    boolean horizontal = bar[2] >= bar[3];
+    if (horizontal) {
+      int inset = Math.min(BAR_INSET, bar[2] / 2);
+      int x = Math.max(bar[0] + inset, Math.min(tx, bar[0] + bar[2] - inset));
+      int y = ty >= bar[1] + bar[3] / 2 ? bar[1] + bar[3] : bar[1];
+      return new int[] {x, y};
+    }
+    int inset = Math.min(BAR_INSET, bar[3] / 2);
+    int y = Math.max(bar[1] + inset, Math.min(ty, bar[1] + bar[3] - inset));
+    int x = tx >= bar[0] + bar[2] / 2 ? bar[0] + bar[2] : bar[0];
+    return new int[] {x, y};
+  }
+
+  /** Smallest coordinate a label may have: the export crops at 0, VP drops negative positions. */
+  private static final int MIN_LABEL_COORD = 5;
+
+  /**
+   * The candidate spots that lie on the canvas (left and top edge at least 5), or all of them when
+   * none does.
+   *
+   * @param candidates top-left corners
+   * @return the candidates on the canvas
+   */
+  public static java.util.List<int[]> onCanvas(java.util.List<int[]> candidates) {
+    java.util.List<int[]> result = new java.util.ArrayList<>();
+    for (int[] c : candidates) {
+      if (c[0] >= MIN_LABEL_COORD && c[1] >= MIN_LABEL_COORD) {
+        result.add(c);
+      }
+    }
+    return result.isEmpty() ? candidates : result;
+  }
+
+  /**
+   * A frame's four borders as thin boxes, plus its title band, so labels keep off them.
+   *
+   * @param x frame left
+   * @param y frame top
+   * @param w frame width
+   * @param h frame height
+   * @param titleHeight height of the title band at the top
+   * @return boxes {x, y, w, h}
+   */
+  public static java.util.List<int[]> frameBorders(int x, int y, int w, int h, int titleHeight) {
+    java.util.List<int[]> boxes = new java.util.ArrayList<>();
+    boxes.add(new int[] {x, y, w, Math.max(2, titleHeight)});
+    boxes.add(new int[] {x, y + h - 1, w, 2});
+    boxes.add(new int[] {x - 1, y, 2, h});
+    boxes.add(new int[] {x + w - 1, y, 2, h});
+    return boxes;
   }
 
   /**
