@@ -1164,15 +1164,48 @@ public final class BpmnUtils {
    */
   public static List<Point> messageRoute(
       Rectangle from, Rectangle to, int gapY, List<Rectangle> obstacles, int index, int lineSlot) {
+    return messageRoute(from, to, gapY, obstacles, index, lineSlot, index, index);
+  }
+
+  /**
+   * {@link #messageRoute(Rectangle, Rectangle, int, List, int, int)} with the vertical legs at the
+   * two ends offset by how many message flows already meet each end shape (a pool that receives
+   * several messages gets them at different points of its border, not on one).
+   *
+   * @param from the source bounds
+   * @param to the target bounds
+   * @param gapY y of the middle line of the gap between the pools
+   * @param obstacles flow nodes the legs must not cross (not the two ends)
+   * @param index how many message flows already join these two shapes
+   * @param lineSlot the line of the gap
+   * @param fromAttached how many message flows already meet the source
+   * @param toAttached how many message flows already meet the target
+   * @return the connector points
+   */
+  public static List<Point> messageRoute(
+      Rectangle from,
+      Rectangle to,
+      int gapY,
+      List<Rectangle> obstacles,
+      int index,
+      int lineSlot,
+      int fromAttached,
+      int toAttached) {
     boolean down = from.y + from.height / 2 < to.y + to.height / 2;
-    int shift = index == 0 ? 0 : (index % 2 == 1 ? 1 : -1) * ((index + 1) / 2) * MESSAGE_STEP;
     // each further flow runs on its own line in the gap, its label above its own line
     int lineY = gapY + gapLineOffset(lineSlot);
-    List<Point> start = endLeg(from, lineY, down, obstacles, false, shift);
-    List<Point> end = endLeg(to, lineY, !down, obstacles, true, shift);
+    List<Point> start =
+        endLeg(from, lineY, down, obstacles, false, legShift(Math.max(index, fromAttached)));
+    List<Point> end =
+        endLeg(to, lineY, !down, obstacles, true, legShift(Math.max(index, toAttached)));
     List<Point> points = new ArrayList<>(start);
     points.addAll(end);
     return points;
+  }
+
+  /** Offset of the {@code n}-th vertical leg meeting a shape: 0, +14, -14, +28, ... */
+  private static int legShift(int n) {
+    return n == 0 ? 0 : (n % 2 == 1 ? 1 : -1) * ((n + 1) / 2) * MESSAGE_STEP;
   }
 
   /**

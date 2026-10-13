@@ -1418,7 +1418,12 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     if (model instanceof IBPMessageFlow) {
       route =
           messageRouteFor(
-              diagram, from, to, pairIndex(diagram, from, to, null), gapLegs(diagram, null));
+              diagram,
+              from,
+              to,
+              pairIndex(diagram, from, to, null),
+              gapLegs(diagram, null),
+              messageAttachments(diagram));
     } else if (model instanceof IBPSequenceFlow) {
       route = sequenceRoute(diagram, from, to, usedExits(diagram, from, null)).points();
     } else {
@@ -1510,7 +1515,8 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
       IShapeUIModel from,
       IShapeUIModel to,
       int index,
-      List<int[]> legs) {
+      List<int[]> legs,
+      java.util.Map<String, Integer> attached) {
     IShapeUIModel fromPool = poolOf(diagram, from);
     IShapeUIModel toPool = poolOf(diagram, to);
     if (fromPool == null || toPool == null || sameShape(fromPool, toPool)) {
@@ -1557,7 +1563,18 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     slot = Math.min(slot, GAP_LINES - 1);
-    List<Point> route = BpmnUtils.messageRoute(rect(from), rect(to), gapY, obstacles, index, slot);
+    List<Point> route =
+        BpmnUtils.messageRoute(
+            rect(from),
+            rect(to),
+            gapY,
+            obstacles,
+            index,
+            slot,
+            attached.getOrDefault(from.getId(), 0),
+            attached.getOrDefault(to.getId(), 0));
+    attached.merge(from.getId(), 1, Integer::sum);
+    attached.merge(to.getId(), 1, Integer::sum);
     int[] leg = horizontalLeg(route);
     if (leg != null) {
       legs.add(leg);
@@ -1582,6 +1599,24 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return best;
+  }
+
+  /** How many message flows meet each shape of the diagram, by shape id. */
+  private java.util.Map<String, Integer> messageAttachments(
+      IBusinessProcessDiagramUIModel diagram) {
+    java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel && de.getModelElement() instanceof IBPMessageFlow) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        if (c.getFromShape() != null) {
+          counts.merge(c.getFromShape().getId(), 1, Integer::sum);
+        }
+        if (c.getToShape() != null) {
+          counts.merge(c.getToShape().getId(), 1, Integer::sum);
+        }
+      }
+    }
+    return counts;
   }
 
   /** The horizontal legs of the message flows on the diagram, except the connector {@code skip}. */
@@ -1787,6 +1822,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     java.util.Map<String, Set<Integer>> exits = new java.util.HashMap<>();
     java.util.Map<String, Integer> pairs = new java.util.HashMap<>();
     List<int[]> legs = new ArrayList<>(); // gap lines taken by the message flows routed so far
+    java.util.Map<String, Integer> attached = new java.util.HashMap<>(); // flows at each shape
     for (IDiagramElement de : getDiagramElementsList(diagram)) {
       if (!(de instanceof IConnectorUIModel)) {
         continue;
@@ -1811,7 +1847,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
                 ? from.getId() + "|" + to.getId()
                 : to.getId() + "|" + from.getId();
         int index = pairs.merge(key, 1, Integer::sum) - 1;
-        route = messageRouteFor(diagram, from, to, index, legs);
+        route = messageRouteFor(diagram, from, to, index, legs, attached);
         if (route == null) {
           route = routeBetween(from, to, true);
         }

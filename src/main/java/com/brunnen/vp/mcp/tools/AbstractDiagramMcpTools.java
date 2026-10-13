@@ -2195,24 +2195,9 @@ public abstract class AbstractDiagramMcpTools {
               target = (IShapeUIModel) found;
             }
             // lines of about 30 characters (the size before Visual Paradigm measures the text)
-            String[] words = text.trim().split("\\s+");
-            List<String> lines = new ArrayList<>();
-            StringBuilder line = new StringBuilder();
-            for (String word : words) {
-              if (line.length() > 0 && line.length() + word.length() + 1 > 30) {
-                lines.add(line.toString());
-                line.setLength(0);
-              }
-              line.append(line.length() > 0 ? " " : "").append(word);
-            }
-            lines.add(line.toString());
-            int widest = 0;
-            for (String l : lines) {
-              widest = Math.max(widest, l.length());
-            }
-            // generous: a Vietnamese line needs about 7.5 px per character in the note font
-            int width = Math.max(100, (int) Math.round(widest * 7.6) + 28);
-            int height = Math.max(40, lines.size() * 17 + 20);
+            List<String> lines = wrapNote(text, NOTE_COLUMNS);
+            int width = noteWidth(lines);
+            int height = noteHeight(lines);
 
             com.vp.plugin.model.INOTE note = getModelElementFactory().createNOTE();
             // hard line breaks: the box does not depend on how Visual Paradigm wraps the text
@@ -2229,7 +2214,18 @@ public abstract class AbstractDiagramMcpTools {
             int py = y;
             if (x <= 0 && y <= 0) {
               if (target != null) {
-                int[] spot = noteSpot(diagram, shape, target, width, height);
+                int[] spot = noteSpot(diagram, shape, target, width, height, true);
+                if (spot == null) {
+                  // no room in the lane of the target: narrower lines (a taller, slimmer box)
+                  lines = wrapNote(text, NOTE_NARROW_COLUMNS);
+                  width = noteWidth(lines);
+                  height = noteHeight(lines);
+                  note.setDescription(String.join("\n", lines));
+                  spot = noteSpot(diagram, shape, target, width, height, true);
+                }
+                if (spot == null) {
+                  spot = noteSpot(diagram, shape, target, width, height, false);
+                }
                 px = spot[0];
                 py = spot[1];
               } else {
@@ -2278,6 +2274,38 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
+  /** Characters per line of a note, and of the narrow variant used when a lane has no room. */
+  private static final int NOTE_COLUMNS = 30;
+
+  private static final int NOTE_NARROW_COLUMNS = 16;
+
+  private static List<String> wrapNote(String text, int columns) {
+    List<String> lines = new ArrayList<>();
+    StringBuilder line = new StringBuilder();
+    for (String word : text.trim().split("\\s+")) {
+      if (line.length() > 0 && line.length() + word.length() + 1 > columns) {
+        lines.add(line.toString());
+        line.setLength(0);
+      }
+      line.append(line.length() > 0 ? " " : "").append(word);
+    }
+    lines.add(line.toString());
+    return lines;
+  }
+
+  /** Generous: a Vietnamese line needs about 7.5 px per character in the note font. */
+  private static int noteWidth(List<String> lines) {
+    int widest = 0;
+    for (String l : lines) {
+      widest = Math.max(widest, l.length());
+    }
+    return Math.max(100, (int) Math.round(widest * 7.6) + 28);
+  }
+
+  private static int noteHeight(List<String> lines) {
+    return Math.max(40, lines.size() * 17 + 20);
+  }
+
   /**
    * Top-left corner for a note of {@code w x h} beside {@code target}: the first of the spots right
    * of, left of, below and above it (near ones first) that overlaps no shape, no connector and no
@@ -2285,7 +2313,12 @@ public abstract class AbstractDiagramMcpTools {
    * everything when nothing is free.
    */
   private static int[] noteSpot(
-      IDiagramUIModel diagram, IShapeUIModel note, IShapeUIModel target, int w, int h) {
+      IDiagramUIModel diagram,
+      IShapeUIModel note,
+      IShapeUIModel target,
+      int w,
+      int h,
+      boolean inLane) {
     List<int[]> boxes = new ArrayList<>();
     List<int[]> lines = new ArrayList<>();
     for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
@@ -2329,7 +2362,10 @@ public abstract class AbstractDiagramMcpTools {
     int ty = target.getY();
     int tw = target.getWidth();
     int th = target.getHeight();
-    for (int pass = lane == null ? 1 : 0; pass < 2; pass++) {
+    // a node in a lane: its note stays inside the lane (null when there is no room for it)
+    for (int pass = lane == null || !inLane ? 1 : 0;
+        pass < (lane != null && inLane ? 1 : 2);
+        pass++) {
       for (int gap : new int[] {40, 70, 110, 160}) {
         int[][] candidates = {
           {tx + tw + gap, ty - 10},
@@ -2344,6 +2380,11 @@ public abstract class AbstractDiagramMcpTools {
           {tx - gap - w, ty + th - h},
         };
         for (int[] c : candidates) {
+          if (pass == 0) {
+            // in a lane the box slides along the lane to fit it (a spot below a shape near the
+            // lane's right edge is still the spot below it)
+            c = new int[] {Math.max(lane[0] + 4, Math.min(c[0], lane[0] + lane[2] - w - 4)), c[1]};
+          }
           int[] box = {c[0], c[1], w, h};
           if (c[0] < 5
               || c[1] < 5
@@ -2354,6 +2395,9 @@ public abstract class AbstractDiagramMcpTools {
           return c;
         }
       }
+    }
+    if (lane != null && inLane) {
+      return null;
     }
     int right = tx + tw;
     for (int[] r : boxes) {
@@ -2405,9 +2449,10 @@ public abstract class AbstractDiagramMcpTools {
               + "UC: actors left, use cases right (an existing system boundary is fitted around"
               + " the laid-out use cases). Class: boundary/DAO/entity layers. ERD: compact organic."
               + " Communication: actor row, boundaries, entities. Component, package, object:"
-              + " Visual Paradigm's orthogonal layout. State: top-to-bottom flow. Activity,"
-              + " sequence, flowchart, DFD, BPMN and deployment diagrams are laid out as you add"
-              + " elements: nothing is moved (use setElementBounds and rerouteConnectors)")
+              + " Visual Paradigm's orthogonal layout. State: top-to-bottom flow. DFD: entities"
+              + " left, processes in the middle, data stores right. Activity, sequence,"
+              + " flowchart, BPMN and deployment diagrams are laid out as you add elements:"
+              + " nothing is moved (use setElementBounds and rerouteConnectors)")
   public String autoLayoutDiagram(String diagramName) {
     try {
       return runOnEdt(

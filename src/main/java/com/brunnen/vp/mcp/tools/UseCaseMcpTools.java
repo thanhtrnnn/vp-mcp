@@ -337,9 +337,9 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       name = "addSystemBoundary",
       description =
           "Wrap all use cases of a use case diagram in a labeled system boundary rectangle "
-              + "(the module box). Call AFTER autoLayoutDiagram so the box encloses the laid-out "
-              + "use cases; actors the box would cover are moved outside it. A diagram has one "
-              + "boundary: calling it again renames and re-sizes the existing box.")
+              + "(the module box); actors the box would cover are moved outside it. A diagram has "
+              + "one boundary: calling it again renames and re-sizes the existing box, and "
+              + "autoLayoutDiagram afterwards fits it around the laid-out use cases again.")
   public String addSystemBoundary(String diagramName, String systemName) {
     try {
       return runOnEdt(

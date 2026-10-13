@@ -553,4 +553,36 @@ public class BpmnUtilsTest {
             new Point(925, 143), new Point(925, 172), new Point(145, 172), new Point(145, 202)),
         BpmnUtils.route(end, false, start, false, false));
   }
+
+  @Test
+  public void gapLinesAlternateAroundTheMiddleOfTheGap() {
+    assertEquals(0, BpmnUtils.gapLineOffset(0));
+    assertEquals(BpmnUtils.MESSAGE_LINE_STEP, BpmnUtils.gapLineOffset(1));
+    assertEquals(-BpmnUtils.MESSAGE_LINE_STEP, BpmnUtils.gapLineOffset(2));
+    assertEquals(2 * BpmnUtils.MESSAGE_LINE_STEP, BpmnUtils.gapLineOffset(3));
+  }
+
+  @Test
+  public void messageFlowsToOnePoolMeetItAtDifferentPoints() {
+    Rectangle a = new Rectangle(100, 100, 90, 45);
+    Rectangle c = new Rectangle(500, 100, 90, 45);
+    Rectangle pool = new Rectangle(40, 300, 900, 40);
+    List<Point> first =
+        BpmnUtils.messageRoute(a, pool, 220, new java.util.ArrayList<>(), 0, 0, 0, 0);
+    List<Point> second =
+        BpmnUtils.messageRoute(c, pool, 220, new java.util.ArrayList<>(), 0, 1, 0, 1);
+    Point endOfFirst = first.get(first.size() - 1);
+    Point endOfSecond = second.get(second.size() - 1);
+    assertEquals("the pool is entered from above", 300, endOfFirst.y);
+    assertNotEquals("the second flow meets the pool at its own point", endOfFirst.x, endOfSecond.x);
+  }
+
+  @Test
+  public void messageFlowsOnTheSameGapLineDoNotShareWhenTheyOverlap() {
+    Rectangle a = new Rectangle(100, 100, 90, 45);
+    Rectangle b = new Rectangle(400, 300, 90, 45);
+    List<Point> upper = BpmnUtils.messageRoute(a, b, 220, new java.util.ArrayList<>(), 0, 0);
+    List<Point> lower = BpmnUtils.messageRoute(a, b, 220, new java.util.ArrayList<>(), 1, 1);
+    assertNotEquals(upper.get(1).y, lower.get(1).y);
+  }
 }

@@ -107,6 +107,17 @@ and the VP quirks behind it:
   what it does per family and does not touch diagrams that are laid out while elements are added.
 - **ERD**: `generateDdl` / report write UNIQUE; `addForeignKey` creates a missing `fromColumn`.
 
+Remaining limitations (round 4): a component keeps the 40 px VP gives it, so more than four ports
+on one component hang below its border (VP fits the box again after every call); a connector
+between two ports of sibling components in one frame goes around the components above the frame
+(label above the frame) instead of through the gap below them; connectors leaving one class box
+edge anchor near each other (a multiplicity can touch the next connector, e.g. composition + a
+second association at one corner); a note beside a shape in a crowded diagram with no free spot
+goes right of everything (long anchor line); more than three message flows whose horizontal legs
+overlap share a gap line (the 90 px pool gap holds three); a BPMN flow in a very dense lane can
+still cross a name; component auto-placement stays greedy (`autoLayoutDiagram` is the cleaner
+layout for a crowded diagram).
+
 ### Round-3 audit fixes (server version 1.32.3.x)
 
 Graded against the course notation brief and verified live in VP 18.1 on F3_* diagrams (exported
