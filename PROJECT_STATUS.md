@@ -132,11 +132,17 @@ Verified live in VP 18.1 on F1_* diagrams (exported PNGs). What changed and the 
 - **BPMN**: no diagram auto-fit (it shrank pools/lanes as soon as a connector was drawn). An
   auto-placed node moves right of the source of its first sequence flow (same row; a gateway's
   further branches one row down; cross-lane targets keep their lane at the source's next column).
+  All pools are kept at the width of the widest one.
+- **Communication**: `addCommunicationLifeline` with an empty `lifelineName` and a
+  `classifierName` draws an anonymous object (": Classifier"); the classifier name is its handle.
+- **Deployment**: a free artifact that was auto-placed moves under (or beside) the node of its
+  `<<deploy>>` arrow.
 
-Remaining limitations: sequence diagrams still show VP's small per-message activation ticks; a
-communication lifeline needs a name (no anonymous ":Class"); free deployment artifacts are not
-moved next to their node; no assembly/delegation connectors on component diagrams; BPMN event
-labels can touch container borders; detours on long diagonals may run near the diagram edge.
+Remaining limitations: sequence diagrams still show VP's small per-message activation ticks (left
+alone: the message anchoring depends on them); no assembly/delegation connectors on component
+diagrams; BPMN event labels can touch container borders; detours on long diagonals may run near
+the diagram edge; labels of two nearly parallel connectors (not joining the same pair) can still
+overlap.
 
 ### More diagram families (server version 1.32.0-diagrams.4)
 

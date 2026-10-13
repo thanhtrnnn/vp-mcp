@@ -1173,7 +1173,16 @@ public abstract class AbstractDiagramMcpTools {
       return null;
     }
     String name = element.getName();
-    return name != null && !name.isEmpty() ? name : "(" + element.getModelType() + ")";
+    if (name != null && !name.isEmpty()) {
+      return name;
+    }
+    if (element instanceof IInteractionLifeLine) {
+      Object classifier = ((IInteractionLifeLine) element).getBaseClassifier();
+      if (classifier instanceof IModelElement) {
+        return ":" + ((IModelElement) classifier).getName(); // anonymous object
+      }
+    }
+    return "(" + element.getModelType() + ")";
   }
 
   // --- Type Name Helper ---

@@ -42,6 +42,9 @@ import java.util.Set;
  */
 public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
 
+  /** Free artifacts placed automatically; a deploy arrow moves them next to their node. */
+  private final java.util.Set<String> freeAutoPlaced = new java.util.HashSet<>();
+
   /** Default size of a node box before fit-size. */
   private static final int NODE_WIDTH = 140;
 
@@ -219,6 +222,9 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             Placement placed =
                 placeShape(diagram, artifact, hostShape, x, y, 0, 0, LEAF_WIDTH, LEAF_HEIGHT);
+            if (hostShape == null && x <= 0 && y <= 0) {
+              freeAutoPlaced.add(placed.shape.getId());
+            }
 
             return "Added artifact '"
                 + name
@@ -376,6 +382,7 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                   + " to draw a <<deploy>> arrow instead";
             }
 
+            String movedNote = moveNextToNode(diagram, artifactShape, nodeShape);
             IModelElement artifact = artifactShape.getModelElement();
             IModelElement node = nodeShape.getModelElement();
             // UML Deployment, drawn as the dashed arrow artifact -> node. VP draws relationship
@@ -418,7 +425,8 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
                 + artifact.getName()
                 + "' -> '"
                 + node.getName()
-                + "'";
+                + "'"
+                + movedNote;
           });
     } catch (Exception e) {
       return "Error adding deploy dependency: " + e.getMessage();
@@ -599,6 +607,51 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
         d.setBounds(before[i][0] + dx, before[i][1] + dy, before[i][2], before[i][3]);
       }
     }
+  }
+
+  /**
+   * Move a free artifact that was auto-placed (at the end of the top row) under the node it is
+   * deployed on, or right of it when that spot is taken, so the {@code <<deploy>>} arrow is short.
+   *
+   * @return a note for the result, empty when the artifact stays where it is
+   */
+  private String moveNextToNode(
+      IDiagramUIModel diagram, IShapeUIModel artifact, IShapeUIModel node) {
+    if (!freeAutoPlaced.remove(artifact.getId())) {
+      return "";
+    }
+    IShapeUIModel host = node;
+    while (host.getParent() instanceof IShapeUIModel) {
+      host = (IShapeUIModel) host.getParent(); // the top-level node the target sits in
+    }
+    int w = artifact.getWidth();
+    int h = artifact.getHeight();
+    int[][] spots = {
+      {host.getX() + (host.getWidth() - w) / 2, host.getY() + host.getHeight() + 50},
+      {host.getX() + host.getWidth() + 50, host.getY()}
+    };
+    for (int[] spot : spots) {
+      boolean free = true;
+      for (IShapeUIModel other : diagram.toShapeUIModelArray()) {
+        if (other.getId().equals(artifact.getId()) || other.getParent() != null) {
+          continue;
+        }
+        if (other.getX() < spot[0] + w + 20
+            && spot[0] < other.getX() + other.getWidth() + 20
+            && other.getY() < spot[1] + h + 20
+            && spot[1] < other.getY() + other.getHeight() + 20) {
+          free = false;
+          break;
+        }
+      }
+      if (free) {
+        artifact.setBounds(spot[0], spot[1], w, h);
+        artifact.resetCaption();
+        recenterConnectorsOf(artifact);
+        return " (moved the artifact to " + spot[0] + "," + spot[1] + " next to its node)";
+      }
+    }
+    return "";
   }
 
   // --- Connectors ---

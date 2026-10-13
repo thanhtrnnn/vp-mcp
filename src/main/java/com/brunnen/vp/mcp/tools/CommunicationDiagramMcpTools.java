@@ -84,7 +84,9 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addCommunicationLifeline",
       description =
           "Add a participant to a communication diagram. lifelineName is the label and the handle "
-              + "used by addCommunicationLink/addCommunicationMessage. classifierName types an "
+              + "used by addCommunicationLink/addCommunicationMessage; leave it \"\" with a "
+              + "classifierName for an anonymous ':Classifier' object (the classifier name is then "
+              + "the handle). classifierName types an "
               + "object box as 'name : Classifier' (an existing class of that name is reused; "
               + "pass \"\" to show just the name). isActor=true draws a stick-figure actor "
               + "instead (classifierName then links an existing use-case actor of that name, if "
@@ -105,24 +107,28 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
               return diagramNotFound(diagramName);
             }
             String name = CommunicationDiagramUtils.clean(lifelineName);
-            if (name == null) {
-              return "Lifeline name must not be empty";
-            }
-            if (findParticipantShape(diagram, name, false) != null) {
-              return "Lifeline '" + name + "' is already on diagram '" + diagram.getName() + "'";
-            }
             String classifier = CommunicationDiagramUtils.clean(classifierName);
+            // An anonymous object ":Classifier" has no name; its classifier is the handle.
+            boolean anonymous = name == null && classifier != null && !isActor;
+            if (name == null && !anonymous) {
+              return "Lifeline name must not be empty (give only classifierName for an anonymous"
+                  + " ':Classifier' object)";
+            }
+            String handle = anonymous ? classifier : name;
+            if (findParticipantShape(diagram, handle, anonymous) != null) {
+              return "Lifeline '" + handle + "' is already on diagram '" + diagram.getName() + "'";
+            }
 
             int index = countParticipants(diagram);
             StringBuilder note = new StringBuilder();
             IShapeUIModel shape =
                 isActor
                     ? createActorShape(diagram, name, classifier, note)
-                    : createLifelineShape(diagram, name, classifier);
+                    : createLifelineShape(diagram, anonymous ? "" : name, classifier);
             if (shape == null) {
               return "Error adding communication lifeline: Visual Paradigm did not create the "
                   + "shape for '"
-                  + name
+                  + handle
                   + "'";
             }
 
@@ -140,7 +146,10 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
             // is reset again inside the final bounds.
             renderCaption(shape);
 
-            String label = classifier == null || isActor ? name : name + " : " + classifier;
+            String label =
+                anonymous
+                    ? ":" + classifier
+                    : classifier == null || isActor ? name : name + " : " + classifier;
             return "Added "
                 + (isActor ? "actor" : "lifeline")
                 + " '"
@@ -476,7 +485,17 @@ public class CommunicationDiagramMcpTools extends AbstractDiagramMcpTools {
 
   private static String participantName(IShapeUIModel shape) {
     IModelElement model = shape.getModelElement();
-    return model != null ? model.getName() : shape.getCustomText();
+    if (model == null) {
+      return shape.getCustomText();
+    }
+    String name = model.getName();
+    if ((name == null || name.isEmpty()) && model instanceof IInteractionLifeLine) {
+      IModelElement classifier = ((IInteractionLifeLine) model).getBaseClassifierAsModel();
+      if (classifier != null) {
+        return ":" + classifier.getName(); // anonymous object
+      }
+    }
+    return name;
   }
 
   // --- Links ---

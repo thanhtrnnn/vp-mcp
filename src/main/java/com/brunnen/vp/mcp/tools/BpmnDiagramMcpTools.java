@@ -242,7 +242,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
             boolean nested = pool.addChild(shape);
             shape.setBounds(bounds.x, bounds.y, bounds.width, bounds.height);
             shape.resetCaption();
-            if (relayoutPool(diagram, pool)) {
+            if (relayoutPools(diagram, pool)) {
               reanchorConnectors(diagram);
             }
             return "Added lane '"
@@ -635,7 +635,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
             if (container != null) {
               shape.bringToFront(); // a lane drawn later must not hide its element
               IShapeUIModel pool = poolOf(diagram, container);
-              if (pool != null && relayoutPool(diagram, pool)) {
+              if (pool != null && relayoutPools(diagram, pool)) {
                 reanchorConnectors(diagram);
               }
             }
@@ -919,6 +919,30 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
   }
 
   /**
+   * {@link #relayoutPool} for one pool, then give every pool of the diagram the width of the widest
+   * one (their lanes are stretched with them), so the participant bands line up.
+   *
+   * @return whether anything moved or changed size
+   */
+  private boolean relayoutPools(IBusinessProcessDiagramUIModel diagram, IShapeUIModel pool) {
+    boolean changed = relayoutPool(diagram, pool);
+    List<IShapeUIModel> pools = shapesWithRole(diagram, NodeRole.POOL);
+    int right = Integer.MIN_VALUE;
+    for (IShapeUIModel p : pools) {
+      right = Math.max(right, p.getX() + p.getWidth());
+    }
+    for (IShapeUIModel p : pools) {
+      if (p.getX() + p.getWidth() < right) {
+        p.setBounds(p.getX(), p.getY(), right - p.getX(), p.getHeight());
+        p.resetCaption();
+        relayoutPool(diagram, p);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /**
    * Stack the lanes of a pool, grow each lane to enclose its elements (moving the lanes below and
    * their elements down), widen all lanes to the widest content, size the pool to its lanes and
    * push the shapes below the pool down by its growth.
@@ -1122,7 +1146,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     moveShapeTree(to, x - to.getX(), y - to.getY());
     IShapeUIModel pool = poolOf(diagram, to);
     if (pool != null) {
-      relayoutPool(diagram, pool);
+      relayoutPools(diagram, pool);
     }
     reanchorConnectors(diagram);
     return geometry(to);
