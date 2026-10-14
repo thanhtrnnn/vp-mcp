@@ -7,7 +7,7 @@ the Visual Paradigm plugin, starting automatically when the plugin loads.
 
 ## Architecture
 
-- **Spring AI 1.1.0-M1**: Model Context Protocol server integration
+- **Undertow + Jackson**: Lightweight Model Context Protocol server (Java 11, no Spring)
 - **Visual Paradigm 17.2**: UML modeling platform integration
 - **Maven**: Build automation and dependency management
 - **MCP Transport**: Streamable HTTP communication with MCP clients
@@ -22,7 +22,7 @@ The plugin includes an embedded MCP server that:
 
 - **Auto-starts** when Visual Paradigm plugin is loaded
 - **Auto-stops** when Visual Paradigm plugin is unloaded
-- Runs on **port 2026** with SSE endpoint `/sse`
+- Runs on **port 2026** with the streamable HTTP endpoint `/mcp`
 - Provides **tool capabilities** for external MCP clients
 
 #### Available MCP Tools (121 total)
@@ -33,7 +33,7 @@ tools that work on any diagram: `setElementBounds` (x or y <= 0 keeps the curren
 container takes its nested shapes along, a sequence lifeline its messages),
 `rerouteConnectors`, `removeDiagramElement` (a connector is found by the text the listings print:
 `A -> B`, `A -> B [guard]`, `5: label` for a message; a text that fits several connectors removes none and
-lists them), `removeRelationship(diagramName, fromElement, toElement,
+lists them), `removeRelationship(diagramName, fromClass, toClass,
 relationshipType)` (also deletes an unnamed connector of a use case, activity, state, flowchart, DFD
 or BPMN diagram), `renameElement(diagramName, elementName, newName)`, `addNote(diagramName,
 text, attachedTo, x, y)` (a comment box at the first free spot beside the shape it is anchored to; its
@@ -226,6 +226,29 @@ Build, test and install with the `./run` command:
 
 4. **Start Visual Paradigm** - the MCP server will start automatically
 
+5. **Connect Claude Code or Codex** with the plugin in this repository: it registers the MCP
+   server and adds a `visual-paradigm` skill on how to use the tools.
+
+   Claude Code:
+
+   ```text
+   /plugin marketplace add orgatex/visual-paradigm-mcp-plugin
+   /plugin install visual-paradigm@visual-paradigm-mcp
+   ```
+
+   On Claude Code 2.1.275 or later one line does both:
+   `/plugin install visual-paradigm --marketplace orgatex/visual-paradigm-mcp-plugin`.
+
+   Codex:
+
+   ```bash
+   codex plugin marketplace add orgatex/visual-paradigm-mcp-plugin
+   codex plugin add visual-paradigm@visual-paradigm-mcp
+   ```
+
+   Update later with `/plugin marketplace update visual-paradigm-mcp` (Claude Code) or
+   `codex plugin marketplace upgrade` (Codex).
+
 On macOS, start Visual Paradigm with:
 
 ```bash
@@ -236,23 +259,35 @@ open -a "/Applications/Visual Paradigm.app"
 
 Once Visual Paradigm is running with the plugin:
 
-- **MCP Server Endpoint**: `http://localhost:2026/sse` (SSE)
+- **MCP Server Endpoint**: `http://localhost:2026/mcp` (streamable HTTP)
 - **Server Name**: `visual-paradigm-mcp-server`
-- **Available Tools**: 107 diagram operations (Use Case, Class, ERD, Sequence, State Machine,
+- **Available Tools**: 121 diagram operations (Use Case, Class, ERD, Sequence, State Machine,
   Activity, Component, Deployment, Package, Object, Communication, Flowchart, DFD, BPMN)
 
 #### Connecting with Claude or MCP Clients
 
-Configure your MCP client to connect to:
+The plugin from step 5 of the installation sets this up. Without it, add the server by hand:
+
+```bash
+claude mcp add --transport http --scope user visual-paradigm http://localhost:2026/mcp
+codex mcp add visual-paradigm --url http://localhost:2026/mcp
+```
+
+Other MCP clients connect to the streamable HTTP endpoint:
 
 ```json
 {
-  "transport": {
-    "type": "sse",
-    "url": "http://localhost:2026/sse"
+  "mcpServers": {
+    "visual-paradigm": {
+      "type": "http",
+      "url": "http://localhost:2026/mcp"
+    }
   }
 }
 ```
+
+Without an MCP client, `GET /api/tools` lists the tools and
+`POST /api/execute` with `{"toolName": "listDiagrams", "arguments": {"type": ""}}` runs one.
 
 ## Development
 

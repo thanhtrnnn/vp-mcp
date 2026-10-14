@@ -3,12 +3,22 @@
 ## Current State: Custom MCP Server (Java 11, Undertow)
 
 ### Overview
-Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server using Undertow HTTP + Jackson. The server runs on Java 11 (compatible with Visual Paradigm's JVM) and implements the MCP JSON-RPC protocol over SSE transport.
+Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server using Undertow HTTP + Jackson. The server runs on Java 11 (compatible with Visual Paradigm's JVM) and implements the MCP JSON-RPC protocol over the streamable HTTP transport.
 
 ### Architecture
 
 - **MCP Server**: Custom `McpServer.java` using Undertow embedded HTTP server
-- **Transport**: SSE (Server-Sent Events) - GET `/sse` for event stream, POST `/mcp/messages` for JSON-RPC
+- **Transport**: streamable HTTP - POST `/mcp`, one JSON-RPC message per request, the response is
+  the JSON body (notifications get 202, GET gets 405: the server never pushes). `initialize` echoes
+  the client's protocol version when it is 2025-06-18, 2025-03-26 or 2024-11-05. The legacy SSE
+  transport (`/sse` + `/mcp/messages`) is removed; Codex only speaks stdio or streamable HTTP.
+- **Plain HTTP API**: GET `/api/tools`, POST `/api/execute` (used by the Docker proxy)
+- **Claude Code / Codex plugin**: `.claude-plugin/marketplace.json` (marketplace
+  `visual-paradigm-mcp`) lists `plugin/` (plugin `visual-paradigm`): `.claude-plugin/plugin.json`,
+  `.codex-plugin/plugin.json`, `.mcp.json` (type http, `http://localhost:2026/mcp`) and the
+  English skill `skills/visual-paradigm`. Codex reads the Claude marketplace file; tested with an
+  isolated `CODEX_HOME`: marketplace add, plugin add, `codex mcp list` shows the server, and
+  `codex exec` sees all tools.
 - **Protocol**: MCP JSON-RPC 2.0 (initialize, tools/list, tools/call)
 - **Tool Discovery**: Custom `@Tool` annotation + Java reflection (replaces Spring AI)
 - **Port**: 2026 (configurable)
