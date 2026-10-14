@@ -321,7 +321,8 @@ public final class ActivityLayoutProfile extends LayoutProfile {
               TextMetrics.width("[" + guard + "]", false) + 8,
               caption == null ? 0 : caption.getWidth());
       spec.labels.add(
-          new LabelSpec("guard", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.TAIL).wrappable(guard));
+          new LabelSpec("guard", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.TAIL)
+              .wrappable("[" + guard + "]"));
     }
     return spec;
   }

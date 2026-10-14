@@ -1515,6 +1515,8 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     int w = caption.getWidth();
     int h = caption.getHeight();
+    // the caption was reset: this is the size VP gives its text, the least the box keeps
+    com.brunnen.vp.mcp.util.CaptionFit.remember(connector.getId(), new int[] {w, h});
     List<int[]> candidates =
         new ArrayList<>(
             com.brunnen.vp.mcp.util.ActivityDiagramUtils.guardCandidates(
@@ -1537,14 +1539,17 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     candidates = com.brunnen.vp.mcp.util.ActivityDiagramUtils.onCanvas(candidates);
     int[] spot =
         com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(candidates, w, h, obstacles);
+    int[] twoLines =
+        connector.getModelElement() == null
+            ? null
+            : com.brunnen.vp.mcp.util.TextMetrics.twoLines(
+                connector.getModelElement().getName(), w);
     if (!com.brunnen.vp.mcp.util.ActivityDiagramUtils.isClear(spot, w, h, obstacles)
-        && caption.getWidth() > 40
-        && connector.getModelElement() != null
-        && connector.getModelElement().getName() != null
-        && connector.getModelElement().getName().trim().contains(" ")) {
-      // the text wraps into two lines: a narrower box fits the short leg between the shapes
-      int narrow = Math.max(w / 2 + 8, 40);
-      int tall = 2 * h;
+        && twoLines != null) {
+      // the text wraps into two lines: a narrower box fits the short leg between the shapes (as
+      // wide as the longer line needs, VP ends a line that is wider than its box in "...")
+      int narrow = twoLines[0];
+      int tall = twoLines[1];
       List<int[]> wrapped =
           new ArrayList<>(
               com.brunnen.vp.mcp.util.ActivityDiagramUtils.guardCandidates(
@@ -1858,6 +1863,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     int w = caption.getWidth();
     int h = caption.getHeight() > 0 ? caption.getHeight() : 14;
+    com.brunnen.vp.mcp.util.CaptionFit.remember(connector.getId(), new int[] {w, h});
     List<int[]> candidates = new ArrayList<>();
     int[] leg = horizontalLeg(java.util.Arrays.asList(points));
     if (leg != null) {

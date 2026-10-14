@@ -39,15 +39,17 @@ or BPMN diagram), `renameElement(diagramName, elementName, newName)`, `addNote(d
 text, attachedTo, x, y)` (a comment box at the first free spot beside the shape it is anchored to; its
 dashed anchor is a horizontal or vertical line, under a lifeline in a sequence diagram) and
 `getDiagramGeometry(diagramName)` (bounds of every shape, points of every connector, caption
-bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
-and matches the exact diagram type.
+bounds and text; a caption whose box is too small for Visual Paradigm to draw all of its text, which it
+would end in "...", is marked `TRUNCATED`). `listDiagrams(type)` takes friendly names (Sequence, State, ER,
+Communication, BPMN, DFD...) and matches the exact diagram type.
 
 Every diagram type except sequence and BPMN is laid out by a layered, orthogonal layout (the Eclipse
 Layout Kernel that Visual Paradigm bundles in `lib02.jar` decides where the shapes go, an obstacle-aware
 router draws the lines): after every `add*` call the shapes, lines and labels are placed again, so every
 line is horizontal or vertical (right-angle elbows, rectangular loops), shapes never overlap, no line runs
-through a shape or on top of another line, and labels sit beside their lines. A shape placed with x/y (or
-moved with `setElementBounds`) is pinned: lines are routed around it, and in activity, state and flowchart
+through a shape or on top of another line, and labels sit beside their lines (a label keeps the size
+Visual Paradigm gives its text, one that finds no room moves further out instead of shrinking). A shape
+placed with x/y (or moved with `setElementBounds`) is pinned: lines are routed around it, and in activity, state and flowchart
 diagrams the other shapes are still laid out around it. In activity, flowchart, DFD and BPMN diagrams a
 name is the handle of the tools and must be unique, but a trailing ` #2` is only part of the handle (two
 terminators or end events can both show "End"). A tool that fails answers with a text that starts with

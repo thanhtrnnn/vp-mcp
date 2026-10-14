@@ -133,4 +133,67 @@ public class LabelPlacerTest {
             .get(0);
     assertTrue("left of the line, as the first choice: " + r[0], r[0] + r[2] <= 30);
   }
+
+  /**
+   * A label never gets a box smaller than its spec: the rectangle has the size of the label (or of
+   * the sizes it was given for a vertical leg or a wrapped text), whatever room there is. A label
+   * that finds no clear place moves further out, it does not shrink to squeeze in.
+   */
+  @Test
+  public void aLabelNeverComesOutSmallerThanItsSpec() {
+    java.util.Random random = new java.util.Random(7);
+    for (int round = 0; round < 300; round++) {
+      List<int[]> shapes = new ArrayList<>();
+      for (int i = 0; i < 4; i++) {
+        shapes.add(
+            new int[] {random.nextInt(500), random.nextInt(400), 60 + random.nextInt(120), 40});
+      }
+      Map<String, List<int[]>> routes = new LinkedHashMap<>();
+      List<LabelPlacer.Spec> specs = new ArrayList<>();
+      for (int i = 0; i < 6; i++) {
+        int x = random.nextInt(600);
+        int y = random.nextInt(450);
+        List<int[]> r =
+            random.nextBoolean()
+                ? route(x, y, x + 30 + random.nextInt(250), y)
+                : route(x, y, x, y + 30 + random.nextInt(250));
+        if (random.nextBoolean()) {
+          int[] last = r.get(1);
+          r.add(
+              random.nextBoolean()
+                  ? new int[] {last[0], last[1] + 20 + random.nextInt(200)}
+                  : new int[] {last[0] + 20 + random.nextInt(200), last[1]});
+        }
+        routes.put("c" + i, r);
+        int w = 46 + random.nextInt(90);
+        LabelPlacer.Spec spec =
+            new LabelPlacer.Spec("c" + i, 0, w, 14, LabelPlacer.Slot.values()[random.nextInt(3)]);
+        if (random.nextBoolean()) {
+          spec.verticalSize(w + 3, 16);
+        }
+        if (random.nextBoolean()) {
+          spec.wrappedTo(w / 2 + 14, 28);
+        }
+        specs.add(spec);
+      }
+      Map<String, Map<Integer, int[]>> placed = LabelPlacer.place(shapes, routes, specs);
+      for (LabelPlacer.Spec spec : specs) {
+        int[] rect = placed.get(spec.connector()).get(0);
+        boolean oneLine = rect[2] == spec.w && rect[3] == spec.h;
+        boolean vertical = rect[2] == spec.verticalW && rect[3] == spec.verticalH;
+        boolean wrapped = spec.altW > 0 && rect[2] == spec.altW && rect[3] == spec.altH;
+        assertTrue(
+            "the box of "
+                + spec.connector()
+                + " has no size it was given: "
+                + java.util.Arrays.toString(rect),
+            oneLine || vertical || wrapped);
+        if (spec.altW == 0) {
+          assertTrue(
+              "a label that may not wrap keeps its width: " + java.util.Arrays.toString(rect),
+              rect[2] >= Math.min(spec.w, spec.verticalW));
+        }
+      }
+    }
+  }
 }

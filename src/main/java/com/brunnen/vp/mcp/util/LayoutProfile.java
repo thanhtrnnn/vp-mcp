@@ -133,29 +133,19 @@ public class LayoutProfile {
 
     /**
      * Let the text wrap into two lines when the box finds no clear place beside the line (only for
-     * a text with a space in it).
+     * a text with a space in it). Visual Paradigm draws a text that is wider than its box in as
+     * many lines as the box is high, so the wrapped box is as wide as the longer half of the text
+     * plus the padding of a caption ({@link TextMetrics#twoLines}), never narrower: a caption that
+     * is too small for its text ends in "...".
      *
      * @param text the label's text
      * @return this
      */
     public LabelSpec wrappable(String text) {
-      if (text != null && text.trim().contains(" ") && h <= 2 * TextMetrics.LINE_HEIGHT) {
-        this.altW = Math.max(w / 2 + 8, 40);
-        this.altH = 2 * Math.max(h, TextMetrics.LINE_HEIGHT);
-      }
-      return this;
-    }
-
-    /**
-     * Let the box shrink by the padding of its caption (14 px) when it finds no clear place at its
-     * full width: a keyword like &lt;&lt;use&gt;&gt; fits a gap between two lines then.
-     *
-     * @return this
-     */
-    public LabelSpec tight() {
-      if (altW == 0 && w > 40) {
-        this.altW = w - 14;
-        this.altH = h;
+      int[] box = h <= TextMetrics.LINE_HEIGHT + 2 ? TextMetrics.twoLines(text, w) : null;
+      if (box != null) {
+        this.altW = box[0];
+        this.altH = box[1];
       }
       return this;
     }
@@ -244,7 +234,7 @@ public class LayoutProfile {
       h = Math.max(h, TextMetrics.LINE_HEIGHT);
     }
     if (w > 0 && h > 0) {
-      spec.labels.add(new LabelSpec("name", w, h, ElkLayout.Slot.CENTER).tight());
+      spec.labels.add(new LabelSpec("name", w, h, ElkLayout.Slot.CENTER));
     }
   }
 

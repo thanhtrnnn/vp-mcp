@@ -1,6 +1,7 @@
 package com.brunnen.vp.mcp.util;
 
 import com.vp.plugin.diagram.IBaseDiagramElement;
+import com.vp.plugin.diagram.ICaptionUIModel;
 import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
@@ -244,8 +245,30 @@ public final class VpGraphLayout {
             || !g.shapes.containsKey(to.getId())) {
           continue;
         }
+        // a caption's size is what VP gives it when it is reset: its text plus padding. The size it
+        // has now is the one an earlier layout left it with, which must never decide how large a
+        // label is (a label that was squeezed once would stay squeezed)
+        int[] kept = null; // a connector that takes no part keeps its caption where it was
+        ICaptionUIModel caption = c.getCaptionUIModel();
+        if (c instanceof IBaseDiagramElement && caption != null) {
+          kept =
+              new int[] {
+                caption.getX(),
+                caption.getY(),
+                caption.getWidth(),
+                caption.getHeight(),
+                caption.getSide(),
+                caption.isVisible() ? 1 : 0
+              };
+          CaptionFit.natural((IBaseDiagramElement) c);
+        }
         LayoutProfile.EdgeSpec spec = profile.edge(c);
         if (spec == null) {
+          if (kept != null) {
+            caption.setVisible(kept[5] == 1);
+            caption.setSide(kept[4]);
+            caption.setBounds(kept[0], kept[1], kept[2], kept[3]);
+          }
           continue;
         }
         g.connectors.put(c.getId(), c);

@@ -1,6 +1,7 @@
 package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
+import com.brunnen.vp.mcp.util.CaptionFit;
 import com.brunnen.vp.mcp.util.DiagramLayoutEngine;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.LayoutProfile;
@@ -1860,8 +1861,11 @@ public abstract class AbstractDiagramMcpTools {
               + " of that moment: the diagram is laid out again after every addition, this is the"
               + " final picture): every shape with its bounds (nested shapes indented"
               + " under their container, with the owner of a port) and every connector with its"
-              + " end shapes, its points and the bounds of its caption. For checking a layout"
-              + " without a picture: connector ends, label positions, shapes inside their frame")
+              + " end shapes, its points, the bounds of its caption and the caption's text; a"
+              + " caption whose box is too small for Visual Paradigm to draw all of its text (it"
+              + " would end in \"...\") is marked TRUNCATED, with the size it needs. For checking a"
+              + " layout without a picture: connector ends, label positions, shapes inside their"
+              + " frame")
   public String getDiagramGeometry(String diagramName) {
     try {
       return runOnEdt(
@@ -1982,6 +1986,15 @@ public abstract class AbstractDiagramMcpTools {
           .append(cap.getWidth())
           .append("x")
           .append(cap.getHeight());
+      // the text and whether the box is too small for VP to draw all of it ("<<use..."): a caption
+      // is never narrower or lower than its text needs
+      CaptionFit.Result fit = CaptionFit.check(c);
+      if (fit != null) {
+        sb.append(" text \"").append(fit.text.replace("\n", "\\n")).append("\"");
+        if (fit.truncated) {
+          sb.append(" TRUNCATED needs ").append(fit.needed[0]).append("x").append(fit.needed[1]);
+        }
+      }
     }
     if (c instanceof com.vp.plugin.diagram.connector.IAssociationUIModel
         && c.getModelElement() instanceof IAssociation) {

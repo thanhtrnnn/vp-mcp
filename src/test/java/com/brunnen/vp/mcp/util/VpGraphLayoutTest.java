@@ -180,4 +180,41 @@ public class VpGraphLayoutTest {
         "ends on the top border of the supplier", db.getY(), route.get(route.size() - 1).y);
     verify(diagram).setAutoFitShapesSize(false);
   }
+
+  /**
+   * The caption of a connector keeps the size Visual Paradigm gives its text, however small an
+   * earlier layout left it ("&lt;&lt;use..." came from a caption squeezed to 60 and then 46 px that
+   * a later layout read as its size): the layout resets the caption before it reads it.
+   */
+  @Test
+  public void aCaptionSqueezedByAnEarlierLayoutIsLaidOutAtTheSizeVpGivesIt() {
+    IShapeUIModel a = shape(model(IComponent.class, "A"), 100, 100, 130, 40);
+    IShapeUIModel b = shape(model(IComponent.class, "B"), 100, 300, 130, 40);
+    IConnectorUIModel link = connector(a, b, "<<use>>");
+    ICaptionUIModel caption = link.getCaptionUIModel();
+    int[] box = {0, 0, 46, 14}; // what a former layout left: far less than the text needs
+    when(caption.getWidth()).thenAnswer(i -> box[2]);
+    when(caption.getHeight()).thenAnswer(i -> box[3]);
+    when(caption.isVisible()).thenReturn(true);
+    org.mockito.Mockito.doAnswer(
+            i -> {
+              box[2] = 74; // VP sizes a reset caption to its text plus padding
+              box[3] = 14;
+              return null;
+            })
+        .when(link)
+        .resetCaption();
+    IDiagramUIModel diagram = diagram(new IShapeUIModel[] {a, b}, link);
+
+    VpGraphLayout.route(diagram, new ComponentLayoutProfile());
+
+    ArgumentCaptor<Integer> widths = ArgumentCaptor.forClass(Integer.class);
+    ArgumentCaptor<Integer> heights = ArgumentCaptor.forClass(Integer.class);
+    verify(caption, atLeastOnce())
+        .setBounds(anyInt(), anyInt(), widths.capture(), heights.capture());
+    int last = widths.getAllValues().size() - 1;
+    assertEquals(
+        "the label keeps the width of its text", 74, (int) widths.getAllValues().get(last));
+    assertEquals(14, (int) heights.getAllValues().get(last));
+  }
 }
