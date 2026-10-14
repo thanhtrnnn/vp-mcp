@@ -135,6 +135,7 @@ public final class ClassLayoutProfile extends LayoutProfile {
     if (shape.getModelElement() instanceof IPackage) {
       // the name sits in the folder tab and across the top of the frame
       spec.minSize = new int[] {TextMetrics.width(shape.getModelElement().getName(), true) + 60, 0};
+      spec.outline = ShapeOutline.Kind.FOLDER;
     }
     return spec;
   }

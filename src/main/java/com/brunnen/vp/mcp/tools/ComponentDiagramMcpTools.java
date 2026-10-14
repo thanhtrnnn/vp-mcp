@@ -713,10 +713,50 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     if (name == null) {
       return null;
     }
+    IShapeUIModel first = null;
+    List<String> owners = new ArrayList<>();
     for (IShapeUIModel shape : allShapes(diagram)) {
       IModelElement model = shape.getModelElement();
       if (model != null && name.equals(model.getName()) && hasKind(shape, kinds)) {
-        return shape;
+        if (first == null) {
+          first = shape;
+        }
+        if (kindOf(shape) == Kind.PORT) {
+          IDiagramElement owner = shape.getParent();
+          owners.add(
+              owner == null || owner.getModelElement() == null
+                  ? "?"
+                  : owner.getModelElement().getName());
+        }
+      }
+    }
+    if (owners.size() > 1) {
+      // two components have a port of that name: the handle is Owner.port
+      throw new IllegalStateException(
+          "'"
+              + name
+              + "' is the name of the ports of "
+              + String.join(", ", owners)
+              + ": write Owner."
+              + name);
+    }
+    if (first != null) {
+      return first;
+    }
+    // "Owner.port": the port (or any shape) named after the dot inside the shape named before it
+    for (int dot = name.indexOf('.'); dot > 0; dot = name.indexOf('.', dot + 1)) {
+      IShapeUIModel owner = findShape(diagram, name.substring(0, dot));
+      if (owner == null) {
+        continue;
+      }
+      IShapeUIModel[] children = owner.toChildArray();
+      for (IShapeUIModel child : children == null ? new IShapeUIModel[0] : children) {
+        IModelElement model = child.getModelElement();
+        if (model != null
+            && name.substring(dot + 1).equals(model.getName())
+            && hasKind(child, kinds)) {
+          return child;
+        }
       }
     }
     return null;

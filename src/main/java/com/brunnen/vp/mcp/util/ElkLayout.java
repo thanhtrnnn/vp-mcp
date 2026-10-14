@@ -88,6 +88,7 @@ public final class ElkLayout {
     int minH;
     int labelW;
     int labelH;
+    int layerGap;
     Side labelSide = Side.BELOW;
 
     /**
@@ -150,6 +151,18 @@ public final class ElkLayout {
       this.labelW = width;
       this.labelH = height;
       this.labelSide = side;
+      return this;
+    }
+
+    /**
+     * Gap between the layers inside a container (its own, not the diagram's): a container whose
+     * connectors carry short labels needs less than the one with long ones.
+     *
+     * @param gap the gap in pixels, 0 for the diagram's
+     * @return this
+     */
+    public Node layerGap(int gap) {
+      this.layerGap = gap;
       return this;
     }
 
@@ -236,6 +249,7 @@ public final class ElkLayout {
     Dir direction = Dir.DOWN;
     int nodeGap = 50;
     int layerGap = 80;
+    int baseLayerGap = 80;
     int edgeGap = 18;
     int edgeNodeGap = 22;
     int padLeft = 30;
@@ -248,6 +262,7 @@ public final class ElkLayout {
     int labelAllowance = 96;
     boolean flowOrder;
     boolean favorStraightEdges = true;
+    boolean flexibleDirection;
 
     /**
      * Flow direction.
@@ -271,8 +286,39 @@ public final class ElkLayout {
     public Options gaps(int node, int layer, int edge) {
       this.nodeGap = node;
       this.layerGap = layer;
+      this.baseLayerGap = layer;
       this.edgeGap = Math.max(edge, 15);
       return this;
+    }
+
+    /**
+     * Let the layout choose between the flow to the right and the flow downwards: the one whose
+     * drawing is nearer to a landscape page (a long chain of layers is stacked instead of laid in a
+     * strip six times wider than high).
+     *
+     * @return this
+     */
+    public Options flexibleDirection() {
+      this.flexibleDirection = true;
+      return this;
+    }
+
+    /**
+     * Whether the layout may switch the flow direction to get a rounder drawing.
+     *
+     * @return true when the direction is flexible
+     */
+    public boolean isFlexibleDirection() {
+      return flexibleDirection;
+    }
+
+    /**
+     * The gap between layers before any label made it wider.
+     *
+     * @return the gap in pixels
+     */
+    public int baseLayerGap() {
+      return baseLayerGap;
     }
 
     /**
@@ -618,6 +664,9 @@ public final class ElkLayout {
     }
     if (container) {
       configure(en, options);
+      if (n.layerGap > 0) {
+        en.setProperty(LayeredOptions.SPACING_NODE_NODE_BETWEEN_LAYERS, (double) n.layerGap);
+      }
       en.setProperty(
           CoreOptions.NODE_SIZE_CONSTRAINTS, java.util.EnumSet.of(SizeConstraint.MINIMUM_SIZE));
       en.setProperty(

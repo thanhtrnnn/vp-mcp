@@ -943,7 +943,33 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       newWidth = width > 0 ? width : head.getWidth();
     }
     int newHeight = height > 0 ? height : oldHeight;
-    head.setBounds(Math.max(x, 0), Math.max(y, 0), newWidth, newHeight);
+    // a lifeline never stands on the head of another: it moves to the nearest free place beside it
+    int left = Math.max(x, 0);
+    String note = "";
+    for (IDiagramElement other : getDiagramElementsList(sequence)) {
+      if (other instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel
+          && !other.getId().equals(head.getId())
+          && left < other.getX() + other.getWidth() + LIFELINE_GAP
+          && other.getX() < left + newWidth + LIFELINE_GAP) {
+        boolean right = left + newWidth / 2 >= other.getX() + other.getWidth() / 2;
+        int moved =
+            right
+                ? other.getX() + other.getWidth() + LIFELINE_GAP
+                : other.getX() - newWidth - LIFELINE_GAP;
+        if (moved >= 0) {
+          note =
+              " (moved from x="
+                  + left
+                  + " to x="
+                  + moved
+                  + ": the requested place overlaps the lifeline '"
+                  + other.getModelElement().getName()
+                  + "')";
+          left = moved;
+        }
+      }
+    }
+    head.setBounds(left, Math.max(y, 0), newWidth, newHeight);
     int dx = head.getX() + head.getWidth() / 2 - oldCx;
     for (IDiagramElement other : getDiagramElementsList(sequence)) {
       if (other instanceof IActivationUIModel
@@ -961,7 +987,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     // the arrows last: moving a bar or the head afterwards would put their ends back
     redrawMessages(sequence, rows, java.util.Collections.singleton(head.getId()));
-    return boundsResult(name, head);
+    routeNoteAnchors(sequence);
+    return boundsResult(name, head) + note;
   }
 
   @Override
@@ -969,6 +996,49 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     return diagram instanceof IInteractionDiagramUIModel
         ? laidOutWhileAdding(diagram, "sequence diagram")
         : null;
+  }
+
+  /** A note explaining a lifeline stands under the lifeline, on the line of its dashed part. */
+  @Override
+  protected int[] noteSpotOwn(
+      IDiagramUIModel diagram, IShapeUIModel note, IShapeUIModel target, int w, int h) {
+    if (!(diagram instanceof IInteractionDiagramUIModel)
+        || !(target instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel)) {
+      return null;
+    }
+    List<int[]> notes = new java.util.ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (!s.getId().equals(note.getId())
+          && s.getModelElement() instanceof com.vp.plugin.model.INOTE) {
+        notes.add(new int[] {s.getX(), s.getY(), s.getWidth(), s.getHeight()});
+      }
+    }
+    return com.brunnen.vp.mcp.util.NoteAnchor.spotBelow(
+        new int[] {target.getX(), target.getY(), target.getWidth(), target.getHeight()},
+        target.getX() + target.getWidth() / 2,
+        w,
+        h,
+        notes);
+  }
+
+  /** The anchor of a note ends on the dashed line of a lifeline, as a horizontal/vertical line. */
+  @Override
+  protected boolean routeAnchorOwn(
+      IDiagramUIModel diagram,
+      com.vp.plugin.diagram.IConnectorUIModel anchor,
+      IShapeUIModel note,
+      IShapeUIModel target) {
+    if (!(diagram instanceof IInteractionDiagramUIModel)) {
+      return false;
+    }
+    boolean lifeline = target instanceof com.vp.plugin.diagram.shape.IInteractionLifeLineUIModel;
+    List<int[]> route =
+        com.brunnen.vp.mcp.util.NoteAnchor.route(
+            new int[] {note.getX(), note.getY(), note.getWidth(), note.getHeight()},
+            new int[] {target.getX(), target.getY(), target.getWidth(), target.getHeight()},
+            lifeline ? target.getX() + target.getWidth() / 2 : null);
+    com.brunnen.vp.mcp.util.VpGraphLayout.route(anchor, route);
+    return true;
   }
 
   @Override
@@ -988,6 +1058,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     redrawMessages(sequence, rows, heads);
+    routeNoteAnchors(sequence);
     return rows.size();
   }
 
@@ -1100,6 +1171,24 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
           right = Math.max(right, cap.getX() + cap.getWidth() + 8);
         }
       }
+      // a fragment inside another one stands NEST_INSET inside it: the two borders do not merge
+      IShapeUIModel outer = null;
+      for (IDiagramElement other : getDiagramElementsList(diagram)) {
+        if (other instanceof IShapeUIModel
+            && other.getModelElement() instanceof ICombinedFragment
+            && !other.getId().equals(frame.getId())
+            && other.getY() <= frame.getY()
+            && other.getY() + other.getHeight() >= frame.getY() + frame.getHeight()
+            && other.getWidth() * other.getHeight() > frame.getWidth() * frame.getHeight()
+            && (outer == null
+                || other.getWidth() * other.getHeight() < outer.getWidth() * outer.getHeight())) {
+          outer = (IShapeUIModel) other;
+        }
+      }
+      if (outer != null) {
+        left = Math.max(left, outer.getX() + NEST_INSET);
+        right = Math.min(right, outer.getX() + outer.getWidth() - NEST_INSET);
+      }
       frame.setBounds(
           Math.max(left, 0), frame.getY(), right - Math.max(left, 0), frame.getHeight());
       IShapeUIModel[] operands = frame.toChildArray();
@@ -1135,6 +1224,8 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int LIFELINE_X0 = 40;
   private static final int LIFELINE_DX = 150;
   private static final int LIFELINE_W = 90;
+  // Free space kept between the heads of two lifelines.
+  private static final int LIFELINE_GAP = 20;
   private static final int LIFELINE_Y0 = 30;
   private static final int LIFELINE_HEAD_H = 40;
   // Length of the lifeline below the arrow of a destroy message.

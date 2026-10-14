@@ -36,6 +36,9 @@ public final class OrthogonalRouter {
   /** Distance from a corner a connector end keeps. */
   private static final int CORNER = 8;
 
+  /** Two collinear routes keep this far apart end to end. */
+  private static final int END_GAP = 12;
+
   private static final long BEND_COST = 30;
   private static final long CROSS_COST = 70;
   private static final long CLASH_COST = 20000;
@@ -185,9 +188,29 @@ public final class OrthogonalRouter {
    */
   public static Map<String, List<int[]>> route(
       List<Shape> shapes, List<Conn> conns, List<Drawn> drawn, int laneGap) {
+    return route(shapes, conns, drawn, laneGap, CROSS_COST);
+  }
+
+  /**
+   * Route connectors around shapes and around routes that are already drawn, with a price for every
+   * crossing of a drawn route (a higher price makes longer detours worth their length).
+   *
+   * @param shapes the shapes
+   * @param conns the connectors to route, shortest first
+   * @param drawn routes that stay as they are
+   * @param laneGap least distance between two parallel routes that overlap
+   * @param crossCost cost of one crossing, in pixels of route
+   * @return the new routes by connector id, points from the source to the target
+   */
+  public static Map<String, List<int[]>> route(
+      List<Shape> shapes, List<Conn> conns, List<Drawn> drawn, int laneGap, long crossCost) {
     Context ctx = new Context(shapes, laneGap);
+    ctx.crossCost = crossCost;
     for (Drawn d : drawn) {
       ctx.add(d.conn, d.route);
+    }
+    for (Conn c : conns) {
+      ctx.batch.add(c.src + "|" + c.tgt);
     }
     List<Conn> order = new ArrayList<>(conns);
     order.sort((a, b) -> Integer.compare(ctx.distance(a.src, a.tgt), ctx.distance(b.src, b.tgt)));
@@ -214,7 +237,11 @@ public final class OrthogonalRouter {
     final Map<String, List<String>> children = new HashMap<>();
     final List<int[]> segments = new ArrayList<>(); // {x1, y1, x2, y2}
     final List<Object[]> ports = new ArrayList<>(); // {shapeId, side, position}
+    final Map<String, List<int[]>> byPair = new HashMap<>(); // "src|tgt" -> route
+    final Set<String> batch = new HashSet<>(); // "src|tgt" of the connectors being routed
+    boolean centered; // the first of an opposite pair: ports in the middle, room for the second
     final int lane;
+    long crossCost = CROSS_COST;
     boolean sharePorts;
     boolean ignoreExtra;
 
@@ -257,6 +284,7 @@ public final class OrthogonalRouter {
     }
 
     void add(Conn c, List<int[]> route) {
+      byPair.put(c.src + "|" + c.tgt, route);
       for (int i = 0; i + 1 < route.size(); i++) {
         int[] a = route.get(i);
         int[] b = route.get(i + 1);
@@ -286,7 +314,24 @@ public final class OrthogonalRouter {
       if (isAncestor(s.id, t.id) || isAncestor(t.id, s.id)) {
         return nested(s, t);
       }
-      List<int[]> r = search(c, s, t, true, STUB - 2);
+      // the connector back from the other shape is drawn already: this one runs beside it, the
+      // same route a lane away (the two elbows nest instead of crossing)
+      List<int[]> opposite = byPair.get(t.id + "|" + s.id);
+      if (opposite != null && c.srcSide < 0 && c.tgtSide < 0) {
+        List<int[]> beside = mirror(s, t, opposite);
+        if (beside != null) {
+          return beside;
+        }
+      }
+      // the first of two opposite connectors keeps to the middle of its sides: the second runs a
+      // lane to either side of it and still has ports on its sides
+      centered = opposite == null && batch.contains(t.id + "|" + s.id);
+      List<int[]> r;
+      try {
+        r = search(c, s, t, true, STUB - 2);
+      } finally {
+        centered = false;
+      }
       if (r == null) {
         r = search(c, s, t, false, STUB - 2);
       }
@@ -312,6 +357,125 @@ public final class OrthogonalRouter {
         ignoreExtra = false;
       }
       return r != null ? r : direct(s, t);
+    }
+
+    /**
+     * The route from {@code s} to {@code t} that runs a lane beside the route {@code opposite}
+     * (drawn from {@code t} to {@code s}), on the side with the lower cost, or null when neither
+     * side is free (ends off their sides, a shape in the way).
+     */
+    List<int[]> mirror(Shape s, Shape t, List<int[]> opposite) {
+      List<int[]> base = new ArrayList<>();
+      for (int i = opposite.size() - 1; i >= 0; i--) {
+        base.add(new int[] {opposite.get(i)[0], opposite.get(i)[1]});
+      }
+      List<int[]> best = null;
+      long bestCost = Long.MAX_VALUE;
+      for (int sign : new int[] {1, -1}) {
+        List<int[]> r = offset(base, sign * Math.max(lane, PORT_GAP));
+        if (r == null || !endOnSide(r.get(0), s) || !endOnSide(r.get(r.size() - 1), t)) {
+          continue;
+        }
+        long cost = 0;
+        boolean clear = true;
+        List<int[]> hard = new ArrayList<>();
+        for (Shape x : shapes.values()) {
+          if (x == s
+              || x == t
+              || isContainer(x.id)
+              || isAncestor(x.id, s.id)
+              || isAncestor(x.id, t.id)) {
+            continue;
+          }
+          hard.add(inflate(x.rect, 2));
+          if (x.extra != null) {
+            hard.add(inflate(x.extra, 2));
+          }
+        }
+        for (int i = 0; i + 1 < r.size(); i++) {
+          int[] a = r.get(i);
+          int[] b = r.get(i + 1);
+          if (blocked(a[0], a[1], b[0], b[1], hard)) {
+            clear = false;
+            break;
+          }
+          cost += conflict(a[0], a[1], b[0], b[1]);
+        }
+        if (clear && cost < bestCost) {
+          bestCost = cost;
+          best = r;
+        }
+      }
+      // a route that clashes with something is left to the search
+      return bestCost >= CLASH_COST ? null : best;
+    }
+
+    /**
+     * The route shifted sideways by {@code delta}, every segment by the same side; null if it
+     * folds.
+     */
+    List<int[]> offset(List<int[]> route, int delta) {
+      int n = route.size();
+      if (n < 2) {
+        return null;
+      }
+      int[][] shift = new int[n - 1][];
+      for (int i = 0; i + 1 < n; i++) {
+        int[] a = route.get(i);
+        int[] b = route.get(i + 1);
+        int sx = Integer.signum(b[0] - a[0]);
+        int sy = Integer.signum(b[1] - a[1]);
+        if ((sx == 0) == (sy == 0)) {
+          return null; // a point or a slanted segment
+        }
+        shift[i] = new int[] {-sy * delta, sx * delta};
+      }
+      List<int[]> result = new ArrayList<>();
+      result.add(new int[] {route.get(0)[0] + shift[0][0], route.get(0)[1] + shift[0][1]});
+      for (int k = 1; k + 1 < n; k++) {
+        int[] before = route.get(k - 1);
+        int[] here = route.get(k);
+        boolean beforeHorizontal = before[1] == here[1];
+        int[] sb = shift[k - 1];
+        int[] sa = shift[k];
+        result.add(
+            beforeHorizontal
+                ? new int[] {here[0] + sa[0], here[1] + sb[1]}
+                : new int[] {here[0] + sb[0], here[1] + sa[1]});
+      }
+      int[] last = route.get(n - 1);
+      result.add(new int[] {last[0] + shift[n - 2][0], last[1] + shift[n - 2][1]});
+      for (int i = 0; i + 1 < n; i++) {
+        int[] a = route.get(i);
+        int[] b = route.get(i + 1);
+        int[] c = result.get(i);
+        int[] d = result.get(i + 1);
+        if (Integer.signum(b[0] - a[0]) != Integer.signum(d[0] - c[0])
+            || Integer.signum(b[1] - a[1]) != Integer.signum(d[1] - c[1])) {
+          return null; // a short segment folded over
+        }
+      }
+      return result;
+    }
+
+    /** Whether an end lies on a free port position of its shape's side (clear of the corners). */
+    boolean endOnSide(int[] p, Shape shape) {
+      int[] r = shape.rect;
+      int side = sideOf(p, r);
+      boolean horizontalSide = side == 0 || side == 2;
+      int length = horizontalSide ? r[2] : r[3];
+      int offset = horizontalSide ? p[0] - r[0] : p[1] - r[1];
+      double inner =
+          shape.outline == ShapeOutline.Kind.ELLIPSE || shape.outline == ShapeOutline.Kind.DIAMOND
+              ? 0.25
+              : 0;
+      int corner = cornerOf(shape, length);
+      int lo = (int) Math.round(length * inner) + corner;
+      int hi = length - (int) Math.round(length * inner) - corner;
+      if (shape.outline == ShapeOutline.Kind.FOLDER && !horizontalSide) {
+        lo = Math.max(lo, ShapeOutline.TAB_HEIGHT + CORNER);
+      }
+      return offset >= lo && offset <= hi && !taken(shape.id, side, horizontalSide ? p[0] : p[1]);
     }
 
     /** Last resort when nothing fits between the shapes: an L from the facing sides. */
@@ -343,15 +507,22 @@ public final class OrthogonalRouter {
     List<int[]> portsOf(Shape shape, int[] other, int onlySide, int prefer) {
       int[] r = shape.rect;
       List<int[]> result = new ArrayList<>(); // {x, y, side, cost}
-      double inner = shape.outline == ShapeOutline.Kind.RECT ? 0 : 0.25;
+      double inner =
+          shape.outline == ShapeOutline.Kind.ELLIPSE || shape.outline == ShapeOutline.Kind.DIAMOND
+              ? 0.25
+              : 0;
       for (int side = 0; side < 4; side++) {
         if (onlySide >= 0 && side != onlySide) {
           continue;
         }
         boolean horizontalSide = side == 0 || side == 2; // N, S
         int length = horizontalSide ? r[2] : r[3];
-        int lo = (int) Math.round(length * inner) + CORNER;
-        int hi = length - (int) Math.round(length * inner) - CORNER;
+        int corner = cornerOf(shape, length);
+        int lo = (int) Math.round(length * inner) + corner;
+        int hi = length - (int) Math.round(length * inner) - corner;
+        if (shape.outline == ShapeOutline.Kind.FOLDER && !horizontalSide) {
+          lo = Math.max(lo, ShapeOutline.TAB_HEIGHT + CORNER); // nothing east of the tab
+        }
         if (hi < lo) {
           lo = hi = length / 2;
         }
@@ -378,7 +549,7 @@ public final class OrthogonalRouter {
           }
         }
         for (int o : offsets) {
-          if (o < lo || o > hi) {
+          if (o < lo || o > hi || (centered && Math.abs(o - length / 2) > PORT_GAP / 2)) {
             continue;
           }
           int x;
@@ -746,7 +917,9 @@ public final class OrthogonalRouter {
             int hi = horizontal ? Math.max(x1, x2) : Math.max(y1, y2);
             int slo = horizontal ? Math.min(seg[0], seg[2]) : Math.min(seg[1], seg[3]);
             int shi = horizontal ? Math.max(seg[0], seg[2]) : Math.max(seg[1], seg[3]);
-            int overlap = Math.min(hi, shi) - Math.max(lo, slo);
+            // two lines on one line that stop a few pixels short of each other read as one line
+            int pad = off < 3 ? END_GAP : 0;
+            int overlap = Math.min(hi, shi + pad) - Math.max(lo, slo - pad);
             if (overlap > 0) {
               cost += CLASH_COST * Math.min(overlap, 50) / 50 + CLASH_COST / 10;
             }
@@ -756,13 +929,13 @@ public final class OrthogonalRouter {
               && seg[0] < Math.max(x1, x2)
               && Math.min(seg[1], seg[3]) < y1
               && y1 < Math.max(seg[1], seg[3])) {
-            cost += CROSS_COST;
+            cost += crossCost;
           }
         } else if (Math.min(y1, y2) < seg[1]
             && seg[1] < Math.max(y1, y2)
             && Math.min(seg[0], seg[2]) < x1
             && x1 < Math.max(seg[0], seg[2])) {
-          cost += CROSS_COST;
+          cost += crossCost;
         }
       }
       return cost;
@@ -897,6 +1070,17 @@ public final class OrthogonalRouter {
   }
 
   // ---- helpers
+
+  /**
+   * How far from a corner of a side a connector end keeps: the curve of a rounded shape, and an
+   * eighth of the side (at most 20) on a large box, so a line does not look attached to its corner.
+   */
+  private static int cornerOf(Shape shape, int sideLength) {
+    if (shape.outline == ShapeOutline.Kind.ROUNDED) {
+      return ShapeOutline.ROUND_CORNER;
+    }
+    return Math.max(CORNER, Math.min(20, sideLength / 8));
+  }
 
   private static int cx(int[] r) {
     return r[0] + r[2] / 2;

@@ -23,6 +23,11 @@ public final class FlowchartLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public boolean pinAware() {
+    return true;
+  }
+
+  @Override
   public boolean shiftsIntoCanvas() {
     return true;
   }
@@ -68,7 +73,18 @@ public final class FlowchartLayoutProfile extends LayoutProfile {
       int[] box = TextMetrics.caption(model.getName());
       ICaptionUIModel caption = c.getCaptionUIModel();
       int w = Math.max(box[0], caption == null ? 0 : caption.getWidth());
-      spec.labels.add(new LabelSpec("name", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.CENTER));
+      // the Yes/No of a decision stands next to the diamond it belongs to, not at the middle of a
+      // long flow that may pass another decision
+      boolean fromDecision =
+          c.getFromShape() != null
+              && c.getFromShape().getModelElement() instanceof IFlowchartDecision;
+      spec.labels.add(
+          new LabelSpec(
+                  "name",
+                  w,
+                  TextMetrics.LINE_HEIGHT,
+                  fromDecision ? ElkLayout.Slot.TAIL : ElkLayout.Slot.CENTER)
+              .wrappable(model.getName()));
     }
     return spec;
   }

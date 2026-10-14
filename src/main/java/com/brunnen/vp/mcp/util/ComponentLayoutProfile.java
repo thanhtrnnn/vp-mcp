@@ -61,6 +61,7 @@ public final class ComponentLayoutProfile extends LayoutProfile {
     } else if (model instanceof IPackage) {
       // the name sits in the folder tab and across the top of the frame
       spec.minSize = new int[] {TextMetrics.width(model.getName(), true) + 60, 0};
+      spec.outline = ShapeOutline.Kind.FOLDER;
     } else if (model instanceof IComponent) {
       int[] names = portNames(shape);
       if (names != null) {

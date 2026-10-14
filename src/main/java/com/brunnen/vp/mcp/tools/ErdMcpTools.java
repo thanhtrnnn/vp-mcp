@@ -83,6 +83,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             IDiagramElement de = addToDiagram(diagram, table, name);
             de.resetCaption();
             fitShape(de);
+            int shown = showExistingForeignKeys(diagram);
             relayout(diagram);
 
             return "Added table '"
@@ -93,7 +94,10 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                 + de.getX()
                 + ","
                 + de.getY()
-                + (reused ? " (existing table of the project)" : "");
+                + (reused ? " (existing table of the project)" : "")
+                + (shown > 0
+                    ? "; shown " + shown + " existing foreign key(s) to the tables here"
+                    : "");
           });
     } catch (Exception e) {
       return "Error adding table: " + e.getMessage();
@@ -236,6 +240,20 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             if (childCol != null
                 && childCol.toForeignKeyConstraintArray() != null
                 && childCol.toForeignKeyConstraintArray().length > 0) {
+              // the foreign key of a table shown from another diagram: its line is drawn here
+              int shown = showExistingForeignKeys(diagram);
+              if (shown > 0) {
+                relayout(diagram);
+                return "Shown the existing foreign key "
+                    + fromTable
+                    + "."
+                    + childCol.getName()
+                    + " -> "
+                    + toTable
+                    + " on diagram '"
+                    + diagramName
+                    + "'";
+              }
               return "Column '"
                   + childCol.getName()
                   + "' of '"
@@ -336,6 +354,19 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                   + "' already exists (each one adds a foreign key column to '"
                   + toTable
                   + "'); use addForeignKey with fromColumn for a second one";
+            }
+            if (!foreignKeysBetween(source, target).isEmpty()) {
+              // the pair is joined by a foreign key of another diagram: its line is drawn here
+              // instead of a second foreign key with a duplicate column
+              showExistingForeignKeys(diagram);
+              relayout(diagram);
+              return "Shown the existing relationship from '"
+                  + fromTable
+                  + "' to '"
+                  + toTable
+                  + "' on diagram '"
+                  + diagramName
+                  + "' (it is a foreign key of the project, no new column was added)";
             }
             java.util.Map<String, List<String>> columnsBefore = columnNames(diagram);
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
@@ -673,6 +704,58 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
 
   private IDiagramUIModel findErd(String diagramName) {
     return findDiagram(diagramName, IERDiagramUIModel.class, "entity relationship");
+  }
+
+  /** The foreign keys of the project from {@code parent} to {@code child}, drawn or not. */
+  private static List<IDBForeignKey> foreignKeysBetween(IDBTable parent, IDBTable child) {
+    List<IDBForeignKey> keys = new ArrayList<>();
+    com.vp.plugin.model.ISimpleRelationship[] out = parent.toFromRelationshipArray();
+    for (com.vp.plugin.model.ISimpleRelationship r :
+        out == null ? new com.vp.plugin.model.ISimpleRelationship[0] : out) {
+      if (r instanceof IDBForeignKey
+          && ((IDBForeignKey) r).getTo() != null
+          && ((IDBForeignKey) r).getTo().getId().equals(child.getId())) {
+        keys.add((IDBForeignKey) r);
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * Draw the foreign keys of the project that join two tables shown on the diagram and are not
+   * drawn on it yet (a table shown from another diagram brings its relationships along).
+   *
+   * @return the number of lines drawn
+   */
+  private int showExistingForeignKeys(IDiagramUIModel diagram) {
+    int shown = 0;
+    for (IDBTable parent : ErdUtils.getTablesInDiagram(diagram)) {
+      IDiagramElement parentShape = findDiagramElementByModel(diagram, parent);
+      for (IDiagramElement childShape : getDiagramElementsList(diagram)) {
+        IModelElement child = childShape.getModelElement();
+        if (!(child instanceof IDBTable) || parentShape == null) {
+          continue;
+        }
+        for (IDBForeignKey fk : foreignKeysBetween(parent, (IDBTable) child)) {
+          if (!drawnOn(diagram, fk)
+              && connectShapes(diagram, fk, parentShape, childShape) != null) {
+            shown++;
+          }
+        }
+      }
+    }
+    return shown;
+  }
+
+  private static boolean drawnOn(IDiagramUIModel diagram, IModelElement model) {
+    IDiagramElement[] views = model.getDiagramElements();
+    for (IDiagramElement view : views == null ? new IDiagramElement[0] : views) {
+      if (view.getDiagramUIModel() != null
+          && view.getDiagramUIModel().getId().equals(diagram.getId())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** A foreign key drawn on the diagram from {@code parent} to {@code child}, or null. */

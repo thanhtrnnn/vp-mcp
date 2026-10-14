@@ -1242,7 +1242,17 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     List<IShapeUIModel> placed = new ArrayList<>();
     for (IShapeUIModel shape : allShapes(diagram)) {
       NodeRole role = roleOf(shape);
-      if (role != null && role != NodeRole.POOL && role != NodeRole.LANE && !sameShape(shape, to)) {
+      // an element that has no flow yet stands where it was put and moves next to its source when
+      // its first flow is added: it is no obstacle (it would push every target past all of them)
+      boolean unconnected =
+          autoPlaced.contains(shape.getId())
+              && incomingFlows(shape) == 0
+              && outgoingFlows(shape) == 0;
+      if (role != null
+          && role != NodeRole.POOL
+          && role != NodeRole.LANE
+          && !sameShape(shape, to)
+          && !unconnected) {
         placed.add(shape);
       }
     }
@@ -1425,7 +1435,13 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
               gapLegs(diagram, null),
               messageAttachments(diagram));
     } else if (model instanceof IBPSequenceFlow) {
-      route = sequenceRoute(diagram, from, to, usedExits(diagram, from, null)).points();
+      BpmnUtils.FlowRoute flow =
+          sequenceRoute(
+              diagram, from, to, usedExits(diagram, from, null), flowsLeaving(diagram, from));
+      route = flow.points();
+      if (flow.exit() == labelVertex(from) && BpmnUtils.isRound(roleOf(from))) {
+        moveNameAside(from); // the flow leaves where the name hangs
+      }
     } else {
       route = routeBetween(from, to, preferVertical);
     }
@@ -1497,9 +1513,25 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     int w = caption.getWidth();
     int h = caption.getHeight();
     List<int[]> candidates =
-        com.brunnen.vp.mcp.util.ActivityDiagramUtils.onCanvas(
+        new ArrayList<>(
             com.brunnen.vp.mcp.util.ActivityDiagramUtils.guardCandidates(
                 points[0].x, points[0].y, points[1].x, points[1].y, w, h));
+    // a leg shorter than its label (a gateway close to its target): the label goes above or below
+    // the two shapes, clear of both, over the middle of the leg
+    int top = Math.min(points[0].y, points[1].y);
+    int bottom = Math.max(points[0].y, points[1].y);
+    for (IShapeUIModel end :
+        new IShapeUIModel[] {connector.getFromShape(), connector.getToShape()}) {
+      if (end != null) {
+        top = Math.min(top, end.getY());
+        bottom = Math.max(bottom, end.getY() + end.getHeight());
+      }
+    }
+    int middle = (points[0].x + points[1].x) / 2 - w / 2;
+    candidates.add(new int[] {middle, top - h - 4});
+    candidates.add(new int[] {middle, bottom + 4});
+    candidates.add(new int[] {Math.min(points[0].x, points[1].x) + 2, top - h - 4});
+    candidates = com.brunnen.vp.mcp.util.ActivityDiagramUtils.onCanvas(candidates);
     int[] spot =
         com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(candidates, w, h, obstacles);
     caption.setBounds(spot[0], spot[1], w, h);
@@ -1669,7 +1701,6 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     if (!BpmnUtils.isRound(roleOf(from))) {
       return used;
     }
-    used.add(labelVertex(from));
     for (IDiagramElement de : getDiagramElementsList(diagram)) {
       if (de instanceof IConnectorUIModel
           && de.getModelElement() instanceof IBPSequenceFlow
@@ -1703,20 +1734,36 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     return roleOf(shape) == NodeRole.GATEWAY ? BpmnUtils.EXIT_TOP : BpmnUtils.EXIT_BOTTOM;
   }
 
+  /** The routes of the sequence flows that leave {@code from} now. */
+  private List<List<Point>> flowsLeaving(
+      IBusinessProcessDiagramUIModel diagram, IShapeUIModel from) {
+    List<List<Point>> routes = new ArrayList<>();
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel
+          && de.getModelElement() instanceof IBPSequenceFlow
+          && ((IConnectorUIModel) de).getFromShape() != null
+          && sameShape(((IConnectorUIModel) de).getFromShape(), from)
+          && ((IConnectorUIModel) de).getPoints() != null) {
+        routes.add(java.util.Arrays.asList(((IConnectorUIModel) de).getPoints()));
+      }
+    }
+    return routes;
+  }
+
   /** The route of a sequence flow, around the other elements and their name labels. */
   private BpmnUtils.FlowRoute sequenceRoute(
       IBusinessProcessDiagramUIModel diagram,
       IShapeUIModel from,
       IShapeUIModel to,
-      Set<Integer> used) {
+      Set<Integer> used,
+      List<List<Point>> others) {
     List<Rectangle> obstacles = new ArrayList<>();
-    // the names of the two ends hang outside their symbols: a flow that leaves or enters through
-    // the vertex where the name hangs would strike it through
-    for (IShapeUIModel end : java.util.Arrays.asList(from, to)) {
-      com.vp.plugin.diagram.ICaptionUIModel own = end.getCaptionUIModel();
-      if (BpmnUtils.isRound(roleOf(end)) && own != null && own.isVisible() && own.getWidth() > 0) {
-        obstacles.add(new Rectangle(own.getX(), own.getY(), own.getWidth(), own.getHeight()));
-      }
+    // the name of the target hangs outside its symbol: a flow that enters through the vertex where
+    // the name hangs would strike it through (the name of the source moves aside instead: its
+    // vertex is the last one a flow leaves through)
+    com.vp.plugin.diagram.ICaptionUIModel own = to.getCaptionUIModel();
+    if (BpmnUtils.isRound(roleOf(to)) && own != null && own.isVisible() && own.getWidth() > 0) {
+      obstacles.add(new Rectangle(own.getX(), own.getY(), own.getWidth(), own.getHeight()));
     }
     for (IShapeUIModel shape : allShapes(diagram)) {
       NodeRole role = roleOf(shape);
@@ -1736,10 +1783,32 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     return BpmnUtils.routeFlow(
         rect(from),
         BpmnUtils.isRound(roleOf(from)),
+        roleOf(from) == NodeRole.GATEWAY,
         rect(to),
         BpmnUtils.isRound(roleOf(to)),
         used,
-        obstacles);
+        obstacles,
+        BpmnUtils.isRound(roleOf(from)) ? labelVertex(from) : BpmnUtils.EXIT_AUTO,
+        others);
+  }
+
+  /**
+   * Move the name of an event or gateway to the side of the vertex where it hangs, so that a flow
+   * leaving through that vertex does not run through the name.
+   */
+  private static void moveNameAside(IShapeUIModel shape) {
+    com.vp.plugin.diagram.ICaptionUIModel cap = shape.getCaptionUIModel();
+    if (cap == null || !cap.isVisible() || cap.getWidth() <= 0) {
+      return;
+    }
+    int w = cap.getWidth();
+    int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
+    int cx = shape.getX() + shape.getWidth() / 2;
+    int y =
+        roleOf(shape) == NodeRole.GATEWAY
+            ? shape.getY() - h - 2
+            : shape.getY() + shape.getHeight() + 2;
+    cap.setBounds(cx - w - 4, y, w, h);
   }
 
   /**
@@ -1818,8 +1887,17 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
 
   /** Re-route every BPMN connector of the diagram after shapes moved or containers grew. */
   private void reanchorConnectors(IBusinessProcessDiagramUIModel diagram) {
+    // the names hang centered again (one moved aside for a flow leaving through its vertex is
+    // moved again below if that is still the vertex)
+    for (IShapeUIModel shape : allShapes(diagram)) {
+      NodeRole role = roleOf(shape);
+      if (role != null && BpmnUtils.isRound(role)) {
+        fitCaption(diagram, shape);
+      }
+    }
     // flows are routed in creation order: the branches of one gateway take their vertices in turn
     java.util.Map<String, Set<Integer>> exits = new java.util.HashMap<>();
+    java.util.Map<String, List<List<Point>>> routed = new java.util.HashMap<>();
     java.util.Map<String, Integer> pairs = new java.util.HashMap<>();
     List<int[]> legs = new ArrayList<>(); // gap lines taken by the message flows routed so far
     java.util.Map<String, Integer> attached = new java.util.HashMap<>(); // flows at each shape
@@ -1852,15 +1930,16 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
           route = routeBetween(from, to, true);
         }
       } else if (model instanceof IBPSequenceFlow) {
-        Set<Integer> used =
-            exits.computeIfAbsent(
-                from.getId(),
-                k ->
-                    BpmnUtils.isRound(roleOf(from))
-                        ? new HashSet<>(java.util.Arrays.asList(labelVertex(from)))
-                        : new HashSet<>());
-        BpmnUtils.FlowRoute flow = sequenceRoute(diagram, from, to, used);
+        Set<Integer> used = exits.computeIfAbsent(from.getId(), k -> new HashSet<>());
+        List<List<Point>> others = routed.computeIfAbsent(from.getId(), k -> new ArrayList<>());
+        BpmnUtils.FlowRoute flow = sequenceRoute(diagram, from, to, used, others);
+        if (flow.points() != null) {
+          others.add(flow.points());
+        }
         used.add(flow.exit());
+        if (flow.exit() == labelVertex(from) && BpmnUtils.isRound(roleOf(from))) {
+          moveNameAside(from);
+        }
         route = flow.points();
         if (route != null && !route.isEmpty()) {
           // the vertex the flow arrives through is taken for the flows that leave that shape
@@ -1879,6 +1958,19 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
         placeConditionLabel(diagram, connector);
       }
     }
+    routeNoteAnchors(diagram);
+  }
+
+  /** An event is a circle and a gateway a diamond: the anchor of a note ends on that outline. */
+  @Override
+  protected com.brunnen.vp.mcp.util.ShapeOutline.Kind outlineOf(IShapeUIModel shape) {
+    NodeRole role = roleOf(shape);
+    if (role == NodeRole.GATEWAY) {
+      return com.brunnen.vp.mcp.util.ShapeOutline.Kind.DIAMOND;
+    }
+    return role != null && BpmnUtils.isRound(role)
+        ? com.brunnen.vp.mcp.util.ShapeOutline.Kind.ELLIPSE
+        : com.brunnen.vp.mcp.util.ShapeOutline.Kind.RECT;
   }
 
   @Override
@@ -1929,9 +2021,193 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
 
   @Override
   protected String layoutOwnDiagram(IDiagramUIModel diagram) {
-    return diagram instanceof IBusinessProcessDiagramUIModel
-        ? laidOutWhileAdding(diagram, "BPMN diagram")
-        : null;
+    if (!(diagram instanceof IBusinessProcessDiagramUIModel)) {
+      return null;
+    }
+    IBusinessProcessDiagramUIModel bpd = (IBusinessProcessDiagramUIModel) diagram;
+    int moved = compactFlows(bpd);
+    if (moved == 0) {
+      return laidOutWhileAdding(diagram, "BPMN diagram");
+    }
+    return "Compacted BPMN diagram '"
+        + diagram.getName()
+        + "': "
+        + moved
+        + " element(s) moved left next to their sources, pools and lanes narrowed to their"
+        + " content (the rows stay where they are; move an element with setElementBounds)";
+  }
+
+  /**
+   * Move the auto-placed flow nodes left until each one stands right of its sources (the same gap a
+   * new flow leaves: wider for a condition label), in the order of the flow, without moving onto
+   * another element, then narrow the pools and lanes to what they hold. Elements placed explicitly
+   * stay where they are.
+   *
+   * @return the number of elements that moved
+   */
+  private int compactFlows(IBusinessProcessDiagramUIModel diagram) {
+    List<IShapeUIModel> nodes = new ArrayList<>();
+    java.util.Map<String, List<IConnectorUIModel>> incoming = new java.util.HashMap<>();
+    for (IShapeUIModel shape : allShapes(diagram)) {
+      NodeRole role = roleOf(shape);
+      if (role != null
+          && role != NodeRole.POOL
+          && role != NodeRole.LANE
+          && role != NodeRole.DATA_OBJECT) {
+        nodes.add(shape);
+      }
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de instanceof IConnectorUIModel
+          && de.getModelElement() instanceof IBPSequenceFlow
+          && ((IConnectorUIModel) de).getFromShape() != null
+          && ((IConnectorUIModel) de).getToShape() != null) {
+        IConnectorUIModel c = (IConnectorUIModel) de;
+        incoming.computeIfAbsent(c.getToShape().getId(), k -> new ArrayList<>()).add(c);
+      }
+    }
+    // the flow order: a node follows all its sources (a flow back to a visited node is ignored)
+    List<IShapeUIModel> order = new ArrayList<>();
+    Set<String> done = new HashSet<>();
+    Set<String> visiting = new HashSet<>();
+    for (IShapeUIModel node : nodes) {
+      visit(node, nodes, incoming, done, visiting, order);
+    }
+    int moved = 0;
+    for (IShapeUIModel node : order) {
+      List<IConnectorUIModel> in = incoming.get(node.getId());
+      if (in == null || in.isEmpty() || !autoPlaced.contains(node.getId())) {
+        continue;
+      }
+      Rectangle toBox = spacingRects(java.util.Collections.singletonList(node)).get(0);
+      int toLeft = node.getX() - toBox.x;
+      int toRight = toBox.x + toBox.width - (node.getX() + node.getWidth());
+      int x = Integer.MIN_VALUE;
+      for (IConnectorUIModel c : in) {
+        IShapeUIModel from = c.getFromShape();
+        if (indexOfShape(order, from) >= indexOfShape(order, node)) {
+          continue; // a flow back
+        }
+        String label =
+            c.getModelElement() == null
+                ? null
+                : BpmnUtils.normalizeLabel(c.getModelElement().getName());
+        int gap =
+            label == null
+                ? BpmnUtils.NODE_GAP
+                : Math.max(
+                    BpmnUtils.NODE_GAP,
+                    com.brunnen.vp.mcp.util.ActivityDiagramUtils.estimateTextWidth(label)
+                        + 2 * LABEL_MARGIN);
+        Rectangle fromBox = spacingRects(java.util.Collections.singletonList(from)).get(0);
+        x = Math.max(x, fromBox.x + fromBox.width + gap + toLeft);
+      }
+      if (x == Integer.MIN_VALUE || x >= node.getX()) {
+        continue;
+      }
+      List<IShapeUIModel> others = new ArrayList<>();
+      for (IShapeUIModel shape : nodes) {
+        if (!sameShape(shape, node)) {
+          others.add(shape);
+        }
+      }
+      List<Rectangle> obstacles = spacingRects(others);
+      int y = node.getY();
+      for (int guard = 0; guard < 50; guard++) {
+        Rectangle candidate =
+            new Rectangle(
+                x - toLeft - 10,
+                y - 10,
+                toLeft + node.getWidth() + toRight + 20,
+                node.getHeight() + 20);
+        Rectangle hit = null;
+        for (Rectangle r : obstacles) {
+          if (r.intersects(candidate)) {
+            hit = r;
+            break;
+          }
+        }
+        if (hit == null) {
+          break;
+        }
+        x = hit.x + hit.width + BpmnUtils.NODE_GAP + toLeft;
+      }
+      if (x < node.getX()) {
+        moveShapeWithCaptions(node, x - node.getX(), 0);
+        moved++;
+      }
+    }
+    if (moved > 0) {
+      narrowPools(diagram);
+      reanchorConnectors(diagram);
+    }
+    return moved;
+  }
+
+  private static int indexOfShape(List<IShapeUIModel> list, IShapeUIModel shape) {
+    for (int i = 0; i < list.size(); i++) {
+      if (sameShape(list.get(i), shape)) {
+        return i;
+      }
+    }
+    return Integer.MAX_VALUE;
+  }
+
+  private void visit(
+      IShapeUIModel node,
+      List<IShapeUIModel> all,
+      java.util.Map<String, List<IConnectorUIModel>> incoming,
+      Set<String> done,
+      Set<String> visiting,
+      List<IShapeUIModel> order) {
+    if (done.contains(node.getId()) || !visiting.add(node.getId())) {
+      return;
+    }
+    for (IConnectorUIModel c : incoming.getOrDefault(node.getId(), new ArrayList<>())) {
+      visit(c.getFromShape(), all, incoming, done, visiting, order);
+    }
+    visiting.remove(node.getId());
+    if (done.add(node.getId())) {
+      order.add(node);
+    }
+  }
+
+  /**
+   * Narrow every pool, and its lanes, to the elements it holds (all pools as wide as the widest).
+   */
+  private void narrowPools(IBusinessProcessDiagramUIModel diagram) {
+    List<IShapeUIModel> pools = shapesWithRole(diagram, NodeRole.POOL);
+    int right = Integer.MIN_VALUE;
+    for (IShapeUIModel pool : pools) {
+      int need = pool.getX() + BpmnUtils.POOL_HEADER + BpmnUtils.PAD;
+      for (IShapeUIModel kid : contentOf(diagram, pool, Content.ALL)) {
+        need = Math.max(need, kid.getX() + kid.getWidth() + BpmnUtils.PAD);
+      }
+      for (Rectangle r : spacingRects(contentOf(diagram, pool, Content.ALL))) {
+        need = Math.max(need, r.x + r.width + BpmnUtils.PAD);
+      }
+      for (IShapeUIModel lane : lanesOf(diagram, pool)) {
+        for (Rectangle r : spacingRects(contentOf(diagram, lane, Content.ALL))) {
+          need = Math.max(need, r.x + r.width + BpmnUtils.PAD);
+        }
+      }
+      right = Math.max(right, need);
+    }
+    for (IShapeUIModel pool : pools) {
+      Rectangle target =
+          new Rectangle(pool.getX(), pool.getY(), right - pool.getX(), pool.getHeight());
+      setBoundsIfChanged(pool, target);
+      for (IShapeUIModel lane : lanesOf(diagram, pool)) {
+        setBoundsIfChanged(
+            lane, new Rectangle(lane.getX(), lane.getY(), right - lane.getX(), lane.getHeight()));
+      }
+    }
+    for (IShapeUIModel shape : allShapes(diagram)) {
+      NodeRole role = roleOf(shape);
+      if (role != null && BpmnUtils.isRound(role)) {
+        fitCaption(diagram, shape);
+      }
+    }
   }
 
   @Override

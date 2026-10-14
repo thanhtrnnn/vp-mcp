@@ -40,7 +40,8 @@ public final class RouteTidy {
    * Remove short jogs at the ends of the routes and merge collinear points.
    *
    * @param items the routes (modified in place)
-   * @param rects the rectangles {x, y, w, h} of the shapes by id
+   * @param rects the rectangles {x, y, w, h} of the shapes by id; a fifth element is the distance
+   *     from a corner that an end keeps (default 8)
    * @param portGap least distance between two connector ends on one side of a shape
    * @param maxJog largest sideways jump that is removed
    */
@@ -177,8 +178,9 @@ public final class RouteTidy {
       List<Item> all,
       Map<String, int[]> rects,
       int portGap) {
-    int lo = (verticalSide ? rect[1] : rect[0]) + CORNER_MARGIN;
-    int hi = (verticalSide ? rect[1] + rect[3] : rect[0] + rect[2]) - CORNER_MARGIN;
+    int margin = rect.length > 4 ? rect[4] : CORNER_MARGIN;
+    int lo = (verticalSide ? rect[1] : rect[0]) + margin;
+    int hi = (verticalSide ? rect[1] + rect[3] : rect[0] + rect[2]) - margin;
     if (target < lo || target > hi) {
       return false;
     }

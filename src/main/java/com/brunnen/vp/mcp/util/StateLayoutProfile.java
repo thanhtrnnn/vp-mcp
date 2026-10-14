@@ -32,6 +32,11 @@ public final class StateLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public boolean pinAware() {
+    return true;
+  }
+
+  @Override
   public boolean shiftsIntoCanvas() {
     return true;
   }
@@ -86,7 +91,9 @@ public final class StateLayoutProfile extends LayoutProfile {
       int[] box = TextMetrics.caption(model.getName());
       ICaptionUIModel caption = c.getCaptionUIModel();
       int w = Math.max(box[0], caption == null ? 0 : caption.getWidth());
-      spec.labels.add(new LabelSpec("name", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.CENTER));
+      spec.labels.add(
+          new LabelSpec("name", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.CENTER)
+              .wrappable(model.getName()));
     }
     return spec;
   }
@@ -106,6 +113,21 @@ public final class StateLayoutProfile extends LayoutProfile {
       }
     }
     return widest == 0 ? null : new int[] {widest + LOOP_EXTENT, TextMetrics.LINE_HEIGHT};
+  }
+
+  @Override
+  public int[] reserved(IShapeUIModel shape) {
+    int[] loop = loopLabelBox(shape);
+    if (loop == null) {
+      return null;
+    }
+    // right of the loop (it reaches out 26 px): the text of the self-transition goes there
+    return new int[] {
+      shape.getX() + shape.getWidth() + LOOP_EXTENT - 6,
+      shape.getY() + shape.getHeight() / 2 - loop[1] / 2 - 2,
+      loop[0] - LOOP_EXTENT + 6,
+      loop[1] + 4
+    };
   }
 
   /** Width and height of the name an initial or final state shows. */

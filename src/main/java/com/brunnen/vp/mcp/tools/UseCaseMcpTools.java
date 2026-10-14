@@ -82,6 +82,9 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             if (findModelElementOnDiagram(diagram, name, IActor.class) != null) {
               return "Actor already on diagram: " + name;
             }
+            if (findModelElementOnDiagram(diagram, name, IUseCase.class) != null) {
+              return nameTaken(name, "use case", diagramName);
+            }
             // VP keeps root names unique per type: an actor of that name elsewhere in the
             // project (another use case diagram, a sequence lifeline) is the same actor.
             IActor actor = findRootElement(name, IActor.class);
@@ -134,7 +137,12 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             if (findModelElementOnDiagram(diagram, name, IUseCase.class) != null) {
               return "Use case already on diagram: " + name;
             }
-            IUseCase useCase = findRootElement(name, IUseCase.class);
+            if (findModelElementOnDiagram(diagram, name, IActor.class) != null) {
+              return nameTaken(name, "actor", diagramName);
+            }
+            // a use case that stands in a system boundary of another diagram is not a project
+            // root any more, but it is the same use case (a second one would be renamed "X2")
+            IUseCase useCase = findUseCase(name);
             boolean reused = useCase != null;
             if (!reused) {
               useCase = getModelElementFactory().createUseCase();
@@ -147,6 +155,18 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
             de.resetCaption();
             fitShape(de);
             placeNew(diagram, de, x, y);
+            IShapeUIModel box = boundaryOf(diagram);
+            if (box != null && de instanceof IShapeUIModel) {
+              // the diagram has its system boundary: a use case added later belongs inside it
+              ISystem system = (ISystem) box.getModelElement();
+              if (!ownsOther(system, useCase)) {
+                system.addUseCase(useCase);
+              }
+              box.addChild((IShapeUIModel) de);
+              if (!layoutOwnsShapes(diagram)) {
+                growToEnclose(box);
+              }
+            }
             relayout(diagram);
 
             return "Added use case '"
@@ -204,8 +224,10 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               return "Target element not found: " + targetName;
             }
 
-            IDiagramElement fromElement = findDiagramElementByName(diagram, sourceName);
-            IDiagramElement toElement = findDiagramElementByName(diagram, targetName);
+            // the shape of the use case or actor found above, never one of the other kind that
+            // happens to carry the same name
+            IDiagramElement fromElement = findDiagramElementByModel(diagram, source);
+            IDiagramElement toElement = findDiagramElementByModel(diagram, target);
             if (fromElement == null || toElement == null) {
               return "Element not on diagram: " + (fromElement == null ? sourceName : targetName);
             }
@@ -214,6 +236,10 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
               return "Unknown relationship type: "
                   + relationshipType
                   + ". Use Include, Extend, Generalization, or Association.";
+            }
+            String ends = endsError(kind, source, sourceName, target, targetName);
+            if (ends != null) {
+              return ends;
             }
             if (fromElement.getId().equals(toElement.getId())) {
               return "A " + kind + " needs two different elements (got '" + sourceName + "' twice)";
@@ -268,6 +294,93 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error adding relationship: " + e.getMessage();
     }
+  }
+
+  /**
+   * Why a relationship of that kind cannot join the two elements (an include or extend runs between
+   * use cases, a generalization between two actors or two use cases, an association joins an actor
+   * and a use case), or null.
+   */
+  private static String endsError(
+      String kind,
+      IModelElement source,
+      String sourceName,
+      IModelElement target,
+      String targetName) {
+    boolean sourceUseCase = source instanceof IUseCase;
+    boolean targetUseCase = target instanceof IUseCase;
+    switch (kind) {
+      case "Include":
+      case "Extend":
+        if (!sourceUseCase || !targetUseCase) {
+          return kind
+              + " joins two use cases; '"
+              + (sourceUseCase ? targetName : sourceName)
+              + "' is an actor";
+        }
+        return null;
+      case "Generalization":
+        if (sourceUseCase != targetUseCase) {
+          return "A generalization joins two actors or two use cases, not '"
+              + sourceName
+              + "' and '"
+              + targetName
+              + "'";
+        }
+        return null;
+      default:
+        if (sourceUseCase == targetUseCase) {
+          return "An association joins an actor and a use case, not two "
+              + (sourceUseCase ? "use cases" : "actors")
+              + " ('"
+              + sourceName
+              + "', '"
+              + targetName
+              + "')";
+        }
+        return null;
+    }
+  }
+
+  private static String nameTaken(String name, String kind, String diagramName) {
+    return "Diagram '"
+        + diagramName
+        + "' already shows a "
+        + kind
+        + " named '"
+        + name
+        + "' (a name is the handle of the tools, so one diagram cannot have an actor and a use"
+        + " case of the same name)";
+  }
+
+  /** A use case of the project by name: at the root or inside a system boundary. */
+  private IUseCase findUseCase(String name) {
+    IUseCase root = findRootElement(name, IUseCase.class);
+    if (root != null) {
+      return root;
+    }
+    for (ISystem system : allSystems()) {
+      IModelElement[] children = system.toChildArray();
+      for (IModelElement child : children == null ? new IModelElement[0] : children) {
+        if (child instanceof IUseCase && name.equals(child.getName())) {
+          return (IUseCase) child;
+        }
+      }
+    }
+    return null;
+  }
+
+  private List<ISystem> allSystems() {
+    List<ISystem> systems = new ArrayList<>();
+    com.vp.plugin.model.IProject project =
+        com.vp.plugin.ApplicationManager.instance().getProjectManager().getProject();
+    IModelElement[] roots = project == null ? null : project.toModelElementArray();
+    for (IModelElement m : roots == null ? new IModelElement[0] : roots) {
+      if (m instanceof ISystem) {
+        systems.add((ISystem) m);
+      }
+    }
+    return systems;
   }
 
   /** Canonical relationship kind (Include, Extend, Generalization, Association), or null. */
@@ -420,9 +533,16 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
         nameInOwner(system, null, boundaryName);
       }
     }
+    List<String> notOwned = new ArrayList<>();
     for (IUseCase uc : useCases) {
       if (uc.getParent() == null || !uc.getParent().getId().equals(system.getId())) {
-        system.addUseCase(uc);
+        // a boundary owns one use case of each name: Visual Paradigm would rename the second one
+        // ("Login2") as it enters
+        if (ownsOther(system, uc)) {
+          notOwned.add(uc.getName());
+        } else {
+          system.addUseCase(uc);
+        }
       }
     }
 
@@ -509,7 +629,36 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
         + "'"
         + (moved.isEmpty()
             ? ""
-            : "; moved actor(s) out of the boundary: " + String.join(", ", moved));
+            : "; moved actor(s) out of the boundary: " + String.join(", ", moved))
+        + (notOwned.isEmpty()
+            ? ""
+            : "; WARNING: the boundary already owns another use case of the name of "
+                + String.join(", ", notOwned)
+                + " (a different use case): they are drawn inside the box but not owned by it");
+  }
+
+  /** The shape of the diagram's system boundary, or null. */
+  private IShapeUIModel boundaryOf(IUseCaseDiagramUIModel diagram) {
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      if (de.getModelElement() instanceof ISystem && de instanceof IShapeUIModel) {
+        return (IShapeUIModel) de;
+      }
+    }
+    return null;
+  }
+
+  /** Whether the system owns a use case of the same name as {@code uc} that is another element. */
+  private static boolean ownsOther(ISystem system, IUseCase uc) {
+    IModelElement[] children = system.toChildArray();
+    for (IModelElement child : children == null ? new IModelElement[0] : children) {
+      if (child instanceof IUseCase
+          && uc.getName() != null
+          && uc.getName().equals(child.getName())
+          && !child.getId().equals(uc.getId())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static String connected(

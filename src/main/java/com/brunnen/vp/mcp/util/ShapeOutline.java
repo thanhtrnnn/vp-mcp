@@ -12,10 +12,28 @@ public final class ShapeOutline {
   public enum Kind {
     /** The bounding box itself. */
     RECT,
+    /** The bounding box with rounded corners: ends keep clear of the curve of the corners. */
+    ROUNDED,
     /** The ellipse inscribed in the box (use cases, circles). */
     ELLIPSE,
     /** The diamond through the middle of the four sides (decisions, gateways). */
-    DIAMOND
+    DIAMOND,
+    /**
+     * A package: a body {@link #TAB_HEIGHT} below the top of the box, with a tab on the top left
+     * that is a fifth of the width. Above the body beside the tab there is nothing to meet.
+     */
+    FOLDER
+  }
+
+  /** Distance from a corner of a rounded shape that a connector end keeps. */
+  public static final int ROUND_CORNER = 14;
+
+  /** Height of the tab of a package. */
+  public static final int TAB_HEIGHT = 20;
+
+  /** Width of the tab of a package of the given width (a fifth of it). */
+  public static int tabWidth(int width) {
+    return width / 5;
   }
 
   private ShapeOutline() {}
@@ -29,7 +47,16 @@ public final class ShapeOutline {
    * @param next the point before it (gives the direction of the last segment)
    */
   public static void snap(Kind kind, int[] rect, int[] end, int[] next) {
-    if (kind == Kind.RECT) {
+    if (kind == Kind.RECT || kind == Kind.ROUNDED) {
+      return;
+    }
+    if (kind == Kind.FOLDER) {
+      // a stub that comes down on the top of the box beside the tab ends on the body, TAB_HEIGHT
+      // lower
+      boolean onTop = end[0] == next[0] && end[1] == rect[1] && next[1] < end[1];
+      if (onTop && end[0] > rect[0] + tabWidth(rect[2]) + 2) {
+        end[1] += TAB_HEIGHT;
+      }
       return;
     }
     double cx = rect[0] + rect[2] / 2.0;

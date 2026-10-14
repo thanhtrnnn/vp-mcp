@@ -95,6 +95,12 @@ public class LayoutProfile {
     /** Preferred side of the line: -1 above/left, 1 below/right, 0 none. */
     public int side;
 
+    /** Width and height of a wrapped (narrower) box the text may take, 0 for none. */
+    public int altW;
+
+    /** Height of the wrapped box. */
+    public int altH;
+
     /**
      * A label.
      *
@@ -122,6 +128,21 @@ public class LayoutProfile {
     public LabelSpec vertical(int vw, int vh) {
       this.verticalW = vw;
       this.verticalH = vh;
+      return this;
+    }
+
+    /**
+     * Let the text wrap into two lines when the box finds no clear place beside the line (only for
+     * a text with a space in it).
+     *
+     * @param text the label's text
+     * @return this
+     */
+    public LabelSpec wrappable(String text) {
+      if (text != null && text.trim().contains(" ") && h <= 2 * TextMetrics.LINE_HEIGHT) {
+        this.altW = Math.max(w / 2 + 8, 40);
+        this.altH = 2 * Math.max(h, TextMetrics.LINE_HEIGHT);
+      }
       return this;
     }
 
@@ -167,6 +188,17 @@ public class LayoutProfile {
 
     /** The labels of the connector. */
     public final List<LabelSpec> labels = new ArrayList<>();
+  }
+
+  /**
+   * Whether the layered layout lays out the shapes that were not placed explicitly around the ones
+   * that were (they stay, the others are pushed away from them and the connectors are routed
+   * around). A family that answers false keeps every shape where it is as soon as one is pinned.
+   *
+   * @return true when pinned shapes are fixed obstacles of the layout
+   */
+  public boolean pinAware() {
+    return false;
   }
 
   /**
@@ -347,6 +379,18 @@ public class LayoutProfile {
   }
 
   /**
+   * The rectangle {x, y, w, h} beside a shape that is kept free for the label of one of its own
+   * connectors (the loop of a self-transition and its text): the routes of other connectors keep
+   * off it, labels may use it.
+   *
+   * @param shape the shape
+   * @return the rectangle, or null when nothing is reserved
+   */
+  public int[] reserved(IShapeUIModel shape) {
+    return null;
+  }
+
+  /**
    * The shape that {@code shape} sits on the border of (a port on its component). Such a shape is
    * no node of the layered layout: the connectors that end on it are laid out as connectors of its
    * owner, and once the owner has its place the shape is put on the side of the owner that its
@@ -405,6 +449,17 @@ public class LayoutProfile {
    */
   public void arrange(Map<String, IShapeUIModel> shapes, Map<String, int[]> rects) {
     // nothing by default
+  }
+
+  /**
+   * Straight lines {x1, y1, x2, y2} that connectors keep {@link #laneGap()} away from where they
+   * run alongside, as they do from other connectors (the borders of swimlanes: a flow that ran on a
+   * border would read as part of it). Crossing one is allowed.
+   *
+   * @return the lines, none by default
+   */
+  public List<int[]> guides() {
+    return new ArrayList<>();
   }
 
   /**

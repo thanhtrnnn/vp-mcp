@@ -4,6 +4,9 @@ import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramLayoutEngine;
 import com.brunnen.vp.mcp.util.DiagramUtils;
 import com.brunnen.vp.mcp.util.LayoutProfile;
+import com.brunnen.vp.mcp.util.OrthogonalRouter;
+import com.brunnen.vp.mcp.util.ShapeOutline;
+import com.brunnen.vp.mcp.util.TextMetrics;
 import com.brunnen.vp.mcp.util.VpGraphLayout;
 import com.vp.plugin.ApplicationManager;
 import com.vp.plugin.DiagramManager;
@@ -152,11 +155,12 @@ public abstract class AbstractDiagramMcpTools {
   private void layoutNow(IDiagramUIModel diagram, LayoutProfile profile) {
     activate(diagram);
     java.util.Set<String> pinned = PINNED.get(diagram.getId());
+    boolean pins = pinned != null && !pinned.isEmpty();
     if (profile.placesShapes()
         && MANAGED.contains(diagram.getId())
-        && (pinned == null || pinned.isEmpty())) {
+        && (!pins || profile.pinAware())) {
       try {
-        VpGraphLayout.layout(diagram, profile);
+        VpGraphLayout.layout(diagram, profile, pins ? pinned : new java.util.HashSet<String>());
         settleReopen(diagram, profile);
         return;
       } catch (RuntimeException e) {
@@ -559,21 +563,27 @@ public abstract class AbstractDiagramMcpTools {
       return null;
     }
     String targetName = modelElement.getName();
+    IDiagramElement sameName = null;
     Iterator<?> iter = diagram.diagramElementIterator();
     while (iter.hasNext()) {
       Object obj = iter.next();
       if (obj instanceof IDiagramElement) {
         IDiagramElement de = (IDiagramElement) obj;
         IModelElement m = de.getModelElement();
-        if (m == modelElement) {
+        if (m == modelElement || (m != null && m.getId().equals(modelElement.getId()))) {
           return de;
         }
-        if (m != null && targetName.equals(m.getName())) {
-          return de;
+        // a shape of the same kind and name stands for it too, but never an actor for a use case
+        if (sameName == null
+            && m != null
+            && targetName != null
+            && targetName.equals(m.getName())
+            && m.getModelType().equals(modelElement.getModelType())) {
+          sameName = de;
         }
       }
     }
-    return null;
+    return sameName;
   }
 
   /**
@@ -797,6 +807,20 @@ public abstract class AbstractDiagramMcpTools {
     return null;
   }
 
+  /** The package called {@code name} that {@code parent} owns, or null. */
+  protected static com.vp.plugin.model.IPackage findOwnedPackage(
+      com.vp.plugin.model.IPackage parent, String name) {
+    IModelElement[] children = parent.toChildArray();
+    if (children != null) {
+      for (IModelElement child : children) {
+        if (child instanceof com.vp.plugin.model.IPackage && name.equals(child.getName())) {
+          return (com.vp.plugin.model.IPackage) child;
+        }
+      }
+    }
+    return null;
+  }
+
   /**
    * Put a fresh element into its owner and name it there (in that order: named at the project root
    * first, it would be renamed when the root already has that name). Fails when Visual Paradigm
@@ -950,6 +974,7 @@ public abstract class AbstractDiagramMcpTools {
     if (!overlapsAny(x, y, w, h, others)) {
       return "";
     }
+    int[] range = horizontalRange(diagram, self); // a node of a lane stays in its column
     for (int ring = 1; ring <= 80; ring++) {
       int step = 20 * ring;
       int[] best = null;
@@ -957,6 +982,9 @@ public abstract class AbstractDiagramMcpTools {
       for (int dx = -step; dx <= step; dx += 20) {
         for (int dy = -step; dy <= step; dy += 20) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) != step || x + dx < 20 || y + dy < 20) {
+            continue;
+          }
+          if (range != null && (x + dx < range[0] || x + dx + (self.getWidth()) > range[1])) {
             continue;
           }
           long distance = (long) dx * dx + (long) dy * dy;
@@ -980,6 +1008,18 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return "";
+  }
+
+  /**
+   * Hook: the horizontal range {minX, maxX} a shape may be moved within when an explicit place is
+   * adjusted (a node of a swimlane stays inside its lane), null for no limit.
+   *
+   * @param diagram the diagram
+   * @param shape the shape
+   * @return the range, or null
+   */
+  protected int[] horizontalRange(IDiagramUIModel diagram, IShapeUIModel shape) {
+    return null;
   }
 
   /** A shape's rectangle together with the name or label that hangs outside it. */
@@ -1064,7 +1104,7 @@ public abstract class AbstractDiagramMcpTools {
     return profile != null
         && profile.placesShapes()
         && MANAGED.contains(diagram.getId())
-        && (pinned == null || pinned.isEmpty());
+        && (pinned == null || pinned.isEmpty() || profile.pinAware());
   }
 
   /**
@@ -1366,6 +1406,16 @@ public abstract class AbstractDiagramMcpTools {
         d.setBounds(before[i][0] + dx, before[i][1] + dy, before[i][2], before[i][3]);
       }
     }
+    // a shape moved or resized inside a node, package or component: the container grows around it
+    IDiagramElement parent = shape.getParent();
+    if (parent instanceof IShapeUIModel && isSolidContainer(parent.getModelElement())) {
+      IShapeUIModel container = (IShapeUIModel) parent;
+      int[] was = rect(container);
+      growToEnclose(container);
+      if (!java.util.Arrays.equals(was, rect(container))) {
+        note += " (" + shapeName(container) + " grew to enclose it)";
+      }
+    }
     return note;
   }
 
@@ -1609,7 +1659,7 @@ public abstract class AbstractDiagramMcpTools {
               }
               IModelElement model = de.getModelElement();
               String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
-              String name = model != null ? model.getName() : "(unnamed)";
+              String name = model != null ? listName(model) : "(unnamed)";
 
               if (model instanceof IRelationship || de instanceof IConnectorUIModel) {
                 sb.append("  - ").append(describeConnector(de, model, type)).append("\n");
@@ -1969,7 +2019,12 @@ public abstract class AbstractDiagramMcpTools {
             int px = x;
             int py = y;
             if (x <= 0 && y <= 0) {
-              if (target != null) {
+              int[] own =
+                  target == null ? null : ownNoteSpot(diagram, shape, target, width, height);
+              if (own != null) {
+                px = own[0];
+                py = own[1];
+              } else if (target != null) {
                 int[] spot = noteSpot(diagram, shape, target, width, height, true);
                 if (spot == null) {
                   // no room in the lane of the target: narrower lines (a taller, slimmer box)
@@ -1997,12 +2052,16 @@ public abstract class AbstractDiagramMcpTools {
             }
             shape.setBounds(Math.max(px, 0), Math.max(py, 0), width, height);
             shape.resetCaption();
+            fitShape(shape); // the box Visual Paradigm itself needs for the text: no orphan words
             String anchored = "";
             if (target != null) {
               com.vp.plugin.model.IAnchor anchor = getModelElementFactory().createAnchor();
               anchor.setFrom(note);
               anchor.setTo(target.getModelElement());
               IDiagramElement link = connectAndLayout(diagram, anchor, shape, target);
+              if (link instanceof IConnectorUIModel) {
+                routeNoteAnchor(diagram, (IConnectorUIModel) link);
+              }
               anchored =
                   link != null
                       ? " attached to '" + attachedTo.trim() + "'"
@@ -2030,6 +2089,149 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
+  /**
+   * Hook of {@code addNote}: where a note for {@code target} goes when the family knows better than
+   * the first free spot beside the shape (a sequence diagram puts it under the lifeline). The
+   * default returns null.
+   *
+   * @param diagram the diagram
+   * @param note the note's shape
+   * @param target the shape the note explains
+   * @param w the note's width
+   * @param h the note's height
+   * @return the top-left corner, or null
+   */
+  protected int[] noteSpotOwn(
+      IDiagramUIModel diagram, IShapeUIModel note, IShapeUIModel target, int w, int h) {
+    return null;
+  }
+
+  private static int[] ownNoteSpot(
+      IDiagramUIModel diagram, IShapeUIModel note, IShapeUIModel target, int w, int h) {
+    for (AbstractDiagramMcpTools family : families()) {
+      int[] spot = family.noteSpotOwn(diagram, note, target, w, h);
+      if (spot != null) {
+        return spot;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Hook: draw the anchor line of a note in a diagram type that has no layout profile. A family
+   * with an own idea of where the line ends (a sequence diagram: on the dashed line of a lifeline)
+   * draws it and answers true; the default answers false and the line is routed by {@link
+   * OrthogonalRouter} around the shapes.
+   *
+   * @param diagram the diagram
+   * @param anchor the anchor connector, from the note to the shape it explains
+   * @param note the note's shape
+   * @param target the shape the note explains
+   * @return true when the family drew the line
+   */
+  protected boolean routeAnchorOwn(
+      IDiagramUIModel diagram, IConnectorUIModel anchor, IShapeUIModel note, IShapeUIModel target) {
+    return false;
+  }
+
+  /**
+   * Hook: the outline of a shape in a diagram type that has no layout profile, for where a note's
+   * anchor line ends on it (a BPMN event is a circle, a gateway a diamond).
+   *
+   * @param shape the shape
+   * @return its outline, a rectangle by default
+   */
+  protected ShapeOutline.Kind outlineOf(IShapeUIModel shape) {
+    return ShapeOutline.Kind.RECT;
+  }
+
+  /**
+   * Draw the anchor of a note as a horizontal or vertical line (or an L): diagram types with a
+   * layout profile lay it out with the diagram; the others (sequence, BPMN) route it here.
+   *
+   * @param diagram the diagram
+   * @param anchor the anchor connector
+   */
+  protected void routeNoteAnchor(IDiagramUIModel diagram, IConnectorUIModel anchor) {
+    IShapeUIModel note = anchor.getFromShape();
+    IShapeUIModel target = anchor.getToShape();
+    if (profileOf(diagram) != null || note == null || target == null) {
+      return;
+    }
+    for (AbstractDiagramMcpTools family : families()) {
+      if (family.routeAnchorOwn(diagram, anchor, note, target)) {
+        return;
+      }
+    }
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      if (s.getWidth() <= 0 || isHiddenStub(s)) {
+        continue;
+      }
+      int[] extra = null;
+      com.vp.plugin.diagram.ICaptionUIModel cap = s.getCaptionUIModel();
+      if (cap != null && cap.isVisible() && cap.getWidth() > 0) {
+        int[] inside = {
+          s.getX() + cap.getX(), s.getY() + cap.getY(), cap.getWidth(), cap.getHeight()
+        };
+        if (!insideRect(rect(s), inside)) {
+          extra = new int[] {cap.getX(), cap.getY(), cap.getWidth(), cap.getHeight()};
+        }
+      }
+      shapes.add(
+          new OrthogonalRouter.Shape(
+              s.getId(),
+              rect(s),
+              s.getParent() == null ? null : s.getParent().getId(),
+              outlineOf(s),
+              extra));
+    }
+    List<OrthogonalRouter.Drawn> drawn = new ArrayList<>();
+    for (IConnectorUIModel c : diagram.toConnectorUIModelArray()) {
+      Point[] points = c.getPoints();
+      if (c.getId().equals(anchor.getId())
+          || c.getFromShape() == null
+          || c.getToShape() == null
+          || points == null
+          || points.length < 2) {
+        continue;
+      }
+      List<int[]> line = new ArrayList<>();
+      for (Point p : points) {
+        line.add(new int[] {p.x, p.y});
+      }
+      drawn.add(
+          new OrthogonalRouter.Drawn(
+              new OrthogonalRouter.Conn(
+                  c.getId(), c.getFromShape().getId(), c.getToShape().getId()),
+              line));
+    }
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    conns.add(new OrthogonalRouter.Conn(anchor.getId(), note.getId(), target.getId()));
+    List<int[]> route = OrthogonalRouter.route(shapes, conns, drawn).get(anchor.getId());
+    if (route == null || route.size() < 2) {
+      return;
+    }
+    int n = route.size();
+    ShapeOutline.snap(outlineOf(note), rect(note), route.get(0), route.get(1));
+    ShapeOutline.snap(outlineOf(target), rect(target), route.get(n - 1), route.get(n - 2));
+    VpGraphLayout.route(anchor, route);
+  }
+
+  /**
+   * Draw the anchors of all notes of a diagram again (after shapes moved): see {@link
+   * #routeNoteAnchor}.
+   *
+   * @param diagram the diagram
+   */
+  protected void routeNoteAnchors(IDiagramUIModel diagram) {
+    for (IConnectorUIModel c : diagram.toConnectorUIModelArray()) {
+      if (c.getModelElement() instanceof com.vp.plugin.model.IAnchor) {
+        routeNoteAnchor(diagram, c);
+      }
+    }
+  }
+
   /** Characters per line of a note, and of the narrow variant used when a lane has no room. */
   private static final int NOTE_COLUMNS = 30;
 
@@ -2049,13 +2251,13 @@ public abstract class AbstractDiagramMcpTools {
     return lines;
   }
 
-  /** Generous: a Vietnamese line needs about 7.5 px per character in the note font. */
+  /** The widest line in the bold font Visual Paradigm draws a note in, with room for the corner. */
   private static int noteWidth(List<String> lines) {
     int widest = 0;
     for (String l : lines) {
-      widest = Math.max(widest, l.length());
+      widest = Math.max(widest, TextMetrics.width(l, true));
     }
-    return Math.max(100, (int) Math.round(widest * 7.6) + 28);
+    return Math.max(100, widest + 40);
   }
 
   private static int noteHeight(List<String> lines) {
@@ -2320,7 +2522,10 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "removeDiagramElement",
       description =
-          "Remove an element (shape or connector) from a diagram by its model element name. Only"
+          "Remove an element (shape or connector) from a diagram by its model element name; a"
+              + " connector is also found by what getDiagramElements prints for it (\"A -> B\","
+              + " \"A -> B [guard]\") and a message by its number (\"5: tra ve\"). A text that fits"
+              + " several connectors removes none and lists them. Only"
               + " the view goes (with the connectors attached to a removed shape and the shapes"
               + " nested in it); the model element stays in the project, except lifelines, links,"
               + " messages, activity flows and state transitions, which exist on their diagram"
@@ -2334,6 +2539,29 @@ public abstract class AbstractDiagramMcpTools {
               return "Diagram not found: " + diagramName;
             }
             IDiagramElement element = findDiagramElementByName(diagram, elementName);
+            // a connector is also known by what the listings print: "A -> B", "A -> B [guard]",
+            // "N: label"; a text that fits several connectors removes none of them
+            boolean connectorWanted =
+                element == null
+                    || element instanceof IConnectorUIModel
+                    || element.getModelElement() instanceof IMessage;
+            List<IDiagramElement> printed =
+                connectorWanted ? connectorsPrintedAs(diagram, elementName) : new ArrayList<>();
+            if (!printed.isEmpty()) {
+              if (printed.size() > 1) {
+                StringBuilder candidates = new StringBuilder();
+                for (IDiagramElement c : printed) {
+                  candidates.append("\n  - ").append(connectorHandle(c));
+                }
+                return "Error removing element: '"
+                    + elementName
+                    + "' fits "
+                    + printed.size()
+                    + " connectors; none was removed. Name one of:"
+                    + candidates;
+              }
+              element = printed.get(0);
+            }
             if (element == null) {
               return "Element not found on diagram: " + elementName;
             }
@@ -2373,9 +2601,10 @@ public abstract class AbstractDiagramMcpTools {
                   return null;
                 },
                 prompts);
-            IDiagramElement left = findDiagramElementByName(diagram, elementName);
-            if (left != null && left.getId().equals(element.getId())) {
-              return "Error removing element: Visual Paradigm kept '" + elementName + "'";
+            for (IDiagramElement left : getDiagramElementsList(diagram)) {
+              if (left.getId().equals(element.getId())) {
+                return "Error removing element: Visual Paradigm kept '" + elementName + "'";
+              }
             }
             relayout(diagram); // the rest of the diagram closes up around the gap
             return "Removed element '"
@@ -2394,6 +2623,74 @@ public abstract class AbstractDiagramMcpTools {
     } catch (Exception e) {
       return "Error removing element: " + e.getMessage();
     }
+  }
+
+  /**
+   * The connectors (and message shapes) a text names: the label of the connector ("goi"), what the
+   * listings print for it ("A -> B", "A -> B [guard]", "Type 'name': A -> B") or, for a message,
+   * its number and label ("5: tra ve").
+   */
+  private List<IDiagramElement> connectorsPrintedAs(IDiagramUIModel diagram, String text) {
+    List<IDiagramElement> hits = new ArrayList<>();
+    String wanted = text == null ? "" : text.trim();
+    if (wanted.isEmpty()) {
+      return hits;
+    }
+    for (IDiagramElement de : getDiagramElementsList(diagram)) {
+      IModelElement model = de.getModelElement();
+      if (!(de instanceof IConnectorUIModel) && !(model instanceof IMessage)) {
+        continue;
+      }
+      if (connectorForms(de).contains(wanted)) {
+        hits.add(de);
+      }
+    }
+    return hits;
+  }
+
+  /** Every text that names a connector. */
+  private static List<String> connectorForms(IDiagramElement de) {
+    IModelElement model = de.getModelElement();
+    List<String> forms = new ArrayList<>();
+    String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
+    String line = describeConnector(de, model, type);
+    forms.add(line);
+    int colon = line.indexOf(": ");
+    if (colon >= 0) {
+      forms.add(line.substring(colon + 2)); // "A -> B [guard]"
+      int guard = line.lastIndexOf(" [");
+      if (guard > colon && line.endsWith("]")) {
+        forms.add(line.substring(colon + 2, guard)); // "A -> B"
+      }
+    }
+    String name = model == null ? null : model.getName();
+    if (name != null && !name.isEmpty()) {
+      forms.add(name);
+      if (model instanceof IMessage) {
+        String seq = ((IMessage) model).getSequenceNumber();
+        if (seq != null && !seq.isEmpty()) {
+          forms.add(seq + ": " + name);
+        }
+      }
+    }
+    return forms;
+  }
+
+  /** The text that names one connector among several: "5: label" for a numbered message. */
+  private static String connectorHandle(IDiagramElement de) {
+    IModelElement model = de.getModelElement();
+    String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
+    String line = describeConnector(de, model, type);
+    int colon = line.indexOf(": ");
+    String ends = colon >= 0 ? line.substring(colon + 2) : line;
+    if (model instanceof IMessage) {
+      String seq = ((IMessage) model).getSequenceNumber();
+      String name = model.getName();
+      if (seq != null && !seq.isEmpty() && name != null && !name.isEmpty()) {
+        return "\"" + seq + ": " + name + "\" (" + ends + ")";
+      }
+    }
+    return "\"" + ends + "\"";
   }
 
   /**
@@ -2646,7 +2943,7 @@ public abstract class AbstractDiagramMcpTools {
               if (obj instanceof IDiagramElement) {
                 IDiagramElement de = (IDiagramElement) obj;
                 IModelElement model = de.getModelElement();
-                if (model != null) {
+                if (model != null && !isHiddenStub(de)) {
                   String typeName = getSemanticTypeName(model);
                   counts.merge(typeName, 1, Integer::sum);
                 }
@@ -2675,7 +2972,11 @@ public abstract class AbstractDiagramMcpTools {
       appendStereotypes(sb, model, type);
       String name = model.getName();
       if (name != null && !name.isEmpty()) {
-        sb.append(" '").append(name).append("'");
+        String number = model instanceof IMessage ? ((IMessage) model).getSequenceNumber() : null;
+        sb.append(" '")
+            .append(number != null && !number.isEmpty() ? number + ": " : "")
+            .append(name)
+            .append("'");
       }
     }
     String from = null;
@@ -2857,6 +3158,25 @@ public abstract class AbstractDiagramMcpTools {
     }
   }
 
+  /**
+   * The name a listing prints for an element: its own name, ":Classifier" for an anonymous object,
+   * the first words of a note's text; what the tools accept as its handle.
+   */
+  private static String listName(IModelElement element) {
+    String name = element.getName();
+    if (name != null && !name.isEmpty()) {
+      return name;
+    }
+    if (element instanceof com.vp.plugin.model.INOTE) {
+      String text = ((com.vp.plugin.model.INOTE) element).getDescription();
+      if (text != null && !text.trim().isEmpty()) {
+        String line = text.trim().replaceAll("\\s+", " ");
+        return "\"" + (line.length() > 40 ? line.substring(0, 40) + "..." : line) + "\"";
+      }
+    }
+    return displayName(element);
+  }
+
   private static String displayName(IModelElement element) {
     if (element == null) {
       return null;
@@ -2869,6 +3189,14 @@ public abstract class AbstractDiagramMcpTools {
       Object classifier = ((IInteractionLifeLine) element).getBaseClassifier();
       if (classifier instanceof IModelElement) {
         return ":" + ((IModelElement) classifier).getName(); // anonymous object
+      }
+    }
+    if (element instanceof com.vp.plugin.model.IInstanceSpecification) {
+      // an anonymous object of an object diagram: ":Class"
+      IModelElement[] classifiers =
+          ((com.vp.plugin.model.IInstanceSpecification) element).toClassifierArray();
+      if (classifiers != null && classifiers.length > 0 && classifiers[0] != null) {
+        return ":" + classifiers[0].getName();
       }
     }
     return "(" + element.getModelType() + ")";

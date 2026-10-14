@@ -150,6 +150,17 @@ public final class ActivityDiagramUtils {
   }
 
   /**
+   * Whether a node name is only a number marker ("#1"): such a node shows no text (a decision or
+   * merge diamond without a question), the number only keeps the handle unique.
+   *
+   * @param name the node's name
+   * @return true when the name is nothing but "#n"
+   */
+  public static boolean hiddenLabel(String name) {
+    return name != null && name.trim().matches("#\\d+");
+  }
+
+  /**
    * Default size of a control node shape. Fork and join are horizontal bars, decision and merge
    * square diamonds, the initial/final nodes small circles.
    *

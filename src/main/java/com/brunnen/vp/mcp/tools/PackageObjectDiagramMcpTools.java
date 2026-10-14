@@ -531,7 +531,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
                     + String.join(", ", missing)
                     + " (attributes: "
                     + attributeNames(cls)
-                    + "); add them to the class first";
+                    + "); add them to the class first (addAttribute with diagramName empty)";
               }
             }
 
@@ -860,18 +860,6 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
 
   // --- Model lookup ---
 
-  private static IPackage findOwnedPackage(IPackage parent, String name) {
-    IModelElement[] children = parent.toChildArray();
-    if (children != null) {
-      for (IModelElement child : children) {
-        if (child instanceof IPackage && name.equals(child.getName())) {
-          return (IPackage) child;
-        }
-      }
-    }
-    return null;
-  }
-
   private static IClass findOwnedClass(IPackage pkg, String name) {
     Iterator<?> iter = pkg.childIterator();
     while (iter.hasNext()) {
@@ -962,7 +950,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               + owners(candidates)
               + ") has the slot attribute(s) "
               + String.join(", ", attributes)
-              + "; add them to the class first or pick one with modelPackage");
+              + "; add them to the class first (addAttribute with diagramName empty) or pick one"
+              + " with modelPackage");
     }
     return new ClassChoice(
         chosen, candidates.size() > 1 ? " (class of '" + ownerName(chosen) + "')" : "", null);

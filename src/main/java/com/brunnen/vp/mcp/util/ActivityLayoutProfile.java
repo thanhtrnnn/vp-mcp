@@ -20,6 +20,7 @@ import com.vp.plugin.model.IInitialNode;
 import com.vp.plugin.model.IJoinNode;
 import com.vp.plugin.model.IMergeNode;
 import com.vp.plugin.model.IModelElement;
+import com.vp.plugin.model.INOTE;
 import com.vp.plugin.model.IObjectNode;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -147,6 +148,11 @@ public final class ActivityLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public boolean pinAware() {
+    return true;
+  }
+
+  @Override
   public boolean shiftsIntoCanvas() {
     return lanes == null; // the lanes stand at the frame's own place
   }
@@ -244,6 +250,10 @@ public final class ActivityLayoutProfile extends LayoutProfile {
         spec.bar = true;
         spec.size = ActivityDiagramUtils.defaultControlNodeSize(kind);
         break;
+      case ActivityDiagramUtils.KIND_ACTION:
+        spec.growable = true;
+        spec.outline = ShapeOutline.Kind.ROUNDED;
+        break;
       default:
         spec.growable = true;
         break;
@@ -310,7 +320,8 @@ public final class ActivityLayoutProfile extends LayoutProfile {
           Math.max(
               TextMetrics.width("[" + guard + "]", false) + 8,
               caption == null ? 0 : caption.getWidth());
-      spec.labels.add(new LabelSpec("guard", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.TAIL));
+      spec.labels.add(
+          new LabelSpec("guard", w, TextMetrics.LINE_HEIGHT, ElkLayout.Slot.TAIL).wrappable(guard));
     }
     return spec;
   }
@@ -325,7 +336,8 @@ public final class ActivityLayoutProfile extends LayoutProfile {
 
   /** Width and height of the name a control node shows beside it, null when it shows none. */
   private static int[] nameBox(IShapeUIModel shape, String kind) {
-    if (!ActivityDiagramUtils.showsLabel(kind)) {
+    if (!ActivityDiagramUtils.showsLabel(kind)
+        || ActivityDiagramUtils.hiddenLabel(shape.getModelElement().getName())) {
       return null;
     }
     String name = shape.getModelElement().getName();
@@ -384,9 +396,67 @@ public final class ActivityLayoutProfile extends LayoutProfile {
     if (lane < 0) {
       return null;
     }
+    // a bar reaches over the lanes of the nodes it joins, so every flow meets it from above or
+    // below
+    int first = lane;
+    int last = lane;
+    for (IConnectorUIModel[] list :
+        new IConnectorUIModel[][] {bar.toFromConnectorArray(), bar.toToConnectorArray()}) {
+      for (IConnectorUIModel c : list == null ? new IConnectorUIModel[0] : list) {
+        IShapeUIModel other =
+            c.getFromShape() != null && c.getFromShape().getId().equals(bar.getId())
+                ? c.getToShape()
+                : c.getFromShape();
+        int l = other == null ? -1 : lanes.laneOf(other);
+        if (l >= 0) {
+          first = Math.min(first, l);
+          last = Math.max(last, l);
+        }
+      }
+    }
     int[] xs = lanes.xs();
     int[] widths = lanes.widths();
-    return new int[] {xs[lane] + LANE_PADDING / 2, xs[lane] + widths[lane] - LANE_PADDING / 2};
+    return new int[] {xs[first] + LANE_PADDING / 2, xs[last] + widths[last] - LANE_PADDING / 2};
+  }
+
+  @Override
+  public List<int[]> guides() {
+    List<int[]> lines = new ArrayList<>();
+    if (lanes == null) {
+      return lines;
+    }
+    // the borders between the lanes and the two sides of the frame
+    int[] xs = lanes.xs();
+    int[] widths = lanes.widths();
+    for (int i = 0; i <= xs.length; i++) {
+      int x = i < xs.length ? xs[i] : xs[xs.length - 1] + widths[xs.length - 1];
+      lines.add(new int[] {x, lanes.top(), x, lanes.top() + GUIDE_LENGTH});
+    }
+    return lines;
+  }
+
+  /** Length of a lane border as a guide: longer than any diagram. */
+  private static final int GUIDE_LENGTH = 20000;
+
+  @Override
+  public void beforeLayout(IDiagramUIModel diagram) {
+    if (lanes == null) {
+      return;
+    }
+    // a node never stands across the border of its lane (a renamed or resized one grew over it)
+    int[] xs = lanes.xs();
+    int[] widths = lanes.widths();
+    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
+      int lane = kindOf(s.getModelElement()) == null ? -1 : lanes.laneOf(s);
+      if (lane >= 0 && lane < xs.length) {
+        int least = xs[lane] + LANE_PADDING / 2;
+        int most = xs[lane] + widths[lane] - LANE_PADDING / 2 - s.getWidth();
+        int x = Math.max(least, Math.min(s.getX(), most));
+        if (most >= least && x != s.getX()) {
+          s.setBounds(x, s.getY(), s.getWidth(), s.getHeight());
+        }
+      }
+    }
   }
 
   @Override
@@ -395,27 +465,32 @@ public final class ActivityLayoutProfile extends LayoutProfile {
       return;
     }
     int n = lanes.size();
-    // the rows the layered layout found: nodes whose centers are on one line
+    // a node stands in its lane's column, a note in the column of the node it explains
     Map<String, Integer> lane = new HashMap<>();
     List<String> free = new ArrayList<>();
     for (String id : rects.keySet()) {
       IShapeUIModel s = shapes.get(id);
-      int l = s == null ? -1 : lanes.laneOf(s);
-      if (l >= 0 && l < n && kindOf(s.getModelElement()) != null) {
+      int l = s == null ? -1 : laneOfShape(s);
+      if (l >= 0 && l < n) {
         lane.put(id, l);
       } else {
         free.add(id);
       }
     }
+    // the rows the layered layout found: nodes whose vertical extents overlap (a bar 10 px high
+    // and an action 40 px high of one layer have centers a few pixels apart, not on one line)
     List<String> ids = new ArrayList<>(lane.keySet());
-    ids.sort((a, b) -> Integer.compare(centerY(rects.get(a)), centerY(rects.get(b))));
+    ids.sort((a, b) -> Integer.compare(rects.get(a)[1], rects.get(b)[1]));
     List<List<String>> rows = new ArrayList<>();
+    int rowBottom = Integer.MIN_VALUE;
     for (String id : ids) {
-      List<String> last = rows.isEmpty() ? null : rows.get(rows.size() - 1);
-      if (last != null && Math.abs(centerY(rects.get(last.get(0))) - centerY(rects.get(id))) <= 2) {
-        last.add(id);
-      } else {
+      int[] r = rects.get(id);
+      if (rows.isEmpty() || r[1] >= rowBottom) {
         rows.add(new ArrayList<>(Collections.singletonList(id)));
+        rowBottom = r[1] + r[3];
+      } else {
+        rows.get(rows.size() - 1).add(id);
+        rowBottom = Math.max(rowBottom, r[1] + r[3]);
       }
     }
     // width of each lane: its widest row of nodes (side by side) plus the padding
@@ -429,7 +504,8 @@ public final class ActivityLayoutProfile extends LayoutProfile {
         int count = 0;
         for (String id : row) {
           if (lane.get(id) == i) {
-            total += rects.get(id)[2] + (count++ > 0 ? ROW_NODE_GAP : 0);
+            total +=
+                footprintWidth(shapes.get(id), rects.get(id)) + (count++ > 0 ? ROW_NODE_GAP : 0);
           }
         }
         if (count > 0) {
@@ -461,7 +537,7 @@ public final class ActivityLayoutProfile extends LayoutProfile {
         inLane.sort((a, b) -> Integer.compare(rects.get(a)[0], rects.get(b)[0]));
         int total = 0;
         for (String id : inLane) {
-          total += rects.get(id)[2];
+          total += footprintWidth(shapes.get(id), rects.get(id));
         }
         total += ROW_NODE_GAP * Math.max(inLane.size() - 1, 0);
         int x = xs[i] + (widths[i] - total) / 2;
@@ -469,7 +545,7 @@ public final class ActivityLayoutProfile extends LayoutProfile {
           int[] r = rects.get(id);
           r[0] = x;
           r[1] += shiftY;
-          x += r[2] + ROW_NODE_GAP;
+          x += footprintWidth(shapes.get(id), r) + ROW_NODE_GAP;
           bottom = Math.max(bottom, r[1] + r[3]);
         }
       }
@@ -494,8 +570,46 @@ public final class ActivityLayoutProfile extends LayoutProfile {
   /** Body height the last arrangement gave the lanes (kept for {@link #afterLayout}). */
   private int[] laneGrowth;
 
-  private static int centerY(int[] r) {
-    return r[1] + r[3] / 2;
+  /**
+   * Width a node takes in a row of its lane: its box, or, when a name hangs beside it (an initial
+   * node's "Bat dau", a decision's question), the box and the name.
+   */
+  private static int footprintWidth(IShapeUIModel shape, int[] rect) {
+    String kind = shape == null ? null : kindOf(shape.getModelElement());
+    int[] name = kind == null ? null : nameBox(shape, kind);
+    if (name == null) {
+      return rect[2];
+    }
+    int beside = ActivityDiagramUtils.KIND_DECISION.equals(kind) ? rect[2] / 2 : rect[2];
+    return Math.max(rect[2], beside + NAME_GAP + name[0]);
+  }
+
+  /**
+   * The lane whose column a shape stands in: the lane of an activity node, the lane of the node a
+   * note is attached to, -1 for anything else.
+   */
+  private int laneOfShape(IShapeUIModel shape) {
+    if (kindOf(shape.getModelElement()) != null) {
+      return lanes.laneOf(shape);
+    }
+    if (shape.getModelElement() instanceof INOTE) {
+      for (IConnectorUIModel[] list :
+          new IConnectorUIModel[][] {shape.toFromConnectorArray(), shape.toToConnectorArray()}) {
+        for (IConnectorUIModel c : list == null ? new IConnectorUIModel[0] : list) {
+          if (c.getModelElement() instanceof IAnchor) {
+            IShapeUIModel other =
+                c.getFromShape() != null && c.getFromShape().getId().equals(shape.getId())
+                    ? c.getToShape()
+                    : c.getFromShape();
+            int l = other == null ? -1 : lanes.laneOf(other);
+            if (l >= 0) {
+              return l;
+            }
+          }
+        }
+      }
+    }
+    return -1;
   }
 
   @Override

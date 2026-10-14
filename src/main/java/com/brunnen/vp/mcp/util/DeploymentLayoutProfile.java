@@ -45,7 +45,9 @@ public final class DeploymentLayoutProfile extends LayoutProfile {
   public ElkLayout.Options options(IDiagramUIModel diagram) {
     return new ElkLayout.Options()
         .direction(ElkLayout.Dir.RIGHT)
-        .gaps(48, 100, 18)
+        .flexibleDirection()
+        .gaps(48, 80, 18)
+        .labelAllowance(44)
         .padding(HEADER, PAD);
   }
 

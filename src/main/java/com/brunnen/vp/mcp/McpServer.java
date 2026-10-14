@@ -1,6 +1,7 @@
 package com.brunnen.vp.mcp;
 
 import com.brunnen.vp.mcp.tool.ToolDefinition;
+import com.brunnen.vp.mcp.util.ToolResults;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -270,7 +271,7 @@ public class McpServer {
 
     ObjectNode serverInfo = MAPPER.createObjectNode();
     serverInfo.put("name", "visual-paradigm-mcp-server");
-    serverInfo.put("version", "1.32.5.67");
+    serverInfo.put("version", "1.32.6.5");
     result.set("serverInfo", serverInfo);
 
     result.put("protocolVersion", "2024-11-05");
@@ -345,7 +346,8 @@ public class McpServer {
   }
 
   private String invokeTool(ToolDefinition tool, JsonNode argsNode) throws Exception {
-    return tool.execute(argsNode);
+    // a failure always starts with "Error", whichever tool states it
+    return ToolResults.normalize(tool.execute(argsNode));
   }
 
   // --- VP API Endpoints (for Docker proxy) ---

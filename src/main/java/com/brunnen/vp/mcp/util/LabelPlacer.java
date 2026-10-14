@@ -35,6 +35,8 @@ public final class LabelPlacer {
     int verticalW;
     int verticalH;
     int side;
+    int altW;
+    int altH;
 
     /**
      * A label.
@@ -75,6 +77,20 @@ public final class LabelPlacer {
     public Spec verticalSize(int vw, int vh) {
       this.verticalW = vw;
       this.verticalH = vh;
+      return this;
+    }
+
+    /**
+     * A narrower, taller box the label may take when its own box finds no clear place (the text
+     * wraps inside it).
+     *
+     * @param w width
+     * @param h height
+     * @return this
+     */
+    public Spec wrappedTo(int w, int h) {
+      this.altW = w;
+      this.altH = h;
       return this;
     }
 
@@ -183,15 +199,38 @@ public final class LabelPlacer {
       candidates.addAll(candidates(spec, route, gap, lines, own));
     }
     int[] best = null;
-    int bestScore = Integer.MAX_VALUE;
+    long bestScore = Long.MAX_VALUE;
     for (int i = 0; i < candidates.size(); i++) {
       int[] c = candidates.get(i);
-      int score = collisions(c, shapes, lines, placed, own, canvasMin) * 1000 + i;
+      int collisions = collisions(c, shapes, lines, placed, own, canvasMin);
+      int doubt = doubt(c, lines, own);
+      long score = ((long) collisions * 10 + doubt) * 100000L + i;
       if (score < bestScore) {
         bestScore = score;
         best = c;
-        if (score < 1000) {
+        if (collisions == 0 && doubt == 0) {
           break;
+        }
+      }
+    }
+    if (spec.altW > 0 && bestScore >= 2L * 100000L) {
+      // no clear place beside the line for the label as it is: try it wrapped into a narrower box
+      Spec narrow = new Spec(spec.connector, spec.index, spec.altW, spec.altH, spec.slot);
+      narrow.side = spec.side;
+      List<int[]> alternatives = new ArrayList<>();
+      for (int gap : GAPS) {
+        alternatives.addAll(candidates(narrow, route, gap, lines, own));
+      }
+      for (int i = 0; i < alternatives.size(); i++) {
+        int[] c = alternatives.get(i);
+        int collisions = collisions(c, shapes, lines, placed, own, canvasMin);
+        int doubt = doubt(c, lines, own);
+        // wrapping costs a little: it is used when the one-line label has no clear place near
+        // its line
+        long score = ((long) collisions * 10 + doubt + 1) * 100000L + i;
+        if (score < bestScore) {
+          bestScore = score;
+          best = c;
         }
       }
     }
@@ -391,6 +430,45 @@ public final class LabelPlacer {
       n += 5; // the export clips what lies left of or above the canvas
     }
     return n;
+  }
+
+  /** A label this far from its own line does not read as the label of that line. */
+  private static final int FAR = 30;
+
+  /**
+   * How doubtful it is which connector a spot belongs to: 2 and more the farther it is from its own
+   * line, 1 when another connector's line is nearer to it than its own (a label between two
+   * parallel flows is read as the label of the other one), 0 otherwise.
+   */
+  private static int doubt(int[] r, List<int[]> lines, int own) {
+    int near = Integer.MAX_VALUE;
+    int foreign = Integer.MAX_VALUE;
+    for (int[] l : lines) {
+      int d = distance(r, l);
+      if (l[4] == own) {
+        near = Math.min(near, d);
+      } else {
+        foreign = Math.min(foreign, d);
+      }
+    }
+    if (near == Integer.MAX_VALUE) {
+      return 0;
+    }
+    if (near > FAR) {
+      // the farther from its line, the less it reads as that line's label (never more than a
+      // line through the label costs)
+      return Math.min(9, 2 + (near - FAR) / 15) + (foreign < near ? 1 : 0);
+    }
+    return foreign < near ? 1 : 0;
+  }
+
+  /** Distance of the segment {x1, y1, x2, y2} from the rectangle, 0 when they touch. */
+  private static int distance(int[] r, int[] l) {
+    int dx =
+        Math.max(Math.max(Math.min(l[0], l[2]) - (r[0] + r[2]), r[0] - Math.max(l[0], l[2])), 0);
+    int dy =
+        Math.max(Math.max(Math.min(l[1], l[3]) - (r[1] + r[3]), r[1] - Math.max(l[1], l[3])), 0);
+    return (int) Math.round(Math.sqrt((double) dx * dx + (double) dy * dy));
   }
 
   static boolean intersects(int[] a, int[] b) {

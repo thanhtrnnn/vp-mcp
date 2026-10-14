@@ -78,10 +78,13 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
           "Add a class to a class diagram. x/y (>0) place the shape explicitly: it stays there and"
               + " the connectors are routed around it; otherwise the layered layout places every"
               + " class again as things are added (generalizations decide the layers, lines are"
-              + " horizontal or vertical, nothing overlaps). modelPackage puts the class inside a model package (no package shape drawn) so"
-              + " it cannot collide with same-named classes elsewhere in the project. A class of"
-              + " that name already in the project (root, or in modelPackage) is reused: a new"
-              + " view of it is drawn")
+              + " horizontal or vertical, nothing overlaps). packageName draws the class inside that"
+              + " package frame (a package of that name already in the project is reused, the"
+              + " frame grows around its classes) and, for a new class, makes the package its"
+              + " owner. modelPackage puts the class inside a model package (no package shape"
+              + " drawn) so it cannot collide with same-named classes elsewhere in the project. A"
+              + " class of that name already in the project (root, or in modelPackage or the"
+              + " package) is reused: a new view of it is drawn")
   public String addClass(
       String diagramName,
       String className,
@@ -110,6 +113,9 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (findClassOnDiagram(diagram, className) != null) {
               return "Class already on diagram: " + className;
             }
+            if (isSet(packageColor) && parseColor(packageColor) == null) {
+              return "Error adding class: packageColor must be #RRGGBB, got '" + packageColor + "'";
+            }
             // the generalization and realizations are drawn to classes that are on this diagram:
             // refuse before anything is created rather than leave a class without its relations
             List<String> supers = new ArrayList<>();
@@ -137,6 +143,11 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             // and silently renamed "Class2".
             IPackage owner =
                 isSet(modelPackage) ? findOrCreateModelPackage(modelPackage.trim()) : null;
+            IShapeUIModel frame =
+                isSet(packageName) ? packageFrame(diagram, packageName.trim(), packageColor) : null;
+            if (owner == null && frame != null) {
+              owner = (IPackage) frame.getModelElement();
+            }
             IClass cls =
                 owner != null
                     ? ownedClass(owner, className)
@@ -155,31 +166,16 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               cls.addStereotype(stereotype.trim());
             }
 
-            // Create package if provided
-            if (packageName != null && !packageName.trim().isEmpty()) {
-              findOrCreatePackage(diagram, packageName.trim(), packageColor);
-            }
-
             IDiagramElement classDe = addToDiagram(diagram, cls, className);
             if (reused && classDe instanceof IClassUIModel && !isSet(stereotype)) {
               // a class stereotyped elsewhere (e.g. <<entity>>) stays a class box here
               ((IClassUIModel) classDe).setDisplayAsRobustnessAnalysisIcon(false);
             }
             fitShape(classDe);
-            placeNew(diagram, classDe, x, y);
-
-            // Set package fill color if provided
-            if (packageName != null
-                && !packageName.trim().isEmpty()
-                && packageColor != null
-                && !packageColor.trim().isEmpty()) {
-              IDiagramElement pkgDe = findDiagramElementByName(diagram, packageName.trim());
-              if (pkgDe instanceof IShapeUIModel) {
-                IShapeUIModel shape = (IShapeUIModel) pkgDe;
-                IShapeUIModelFillColor fill = shape.getFillColor();
-                Color color = Color.decode(packageColor.trim());
-                fill.setColor1(color, true);
-              }
+            if (frame != null && classDe instanceof IShapeUIModel) {
+              nestChild(frame, (IShapeUIModel) classDe, x, y);
+            } else {
+              placeNew(diagram, classDe, x, y);
             }
 
             // Create generalization (extends) if provided
@@ -826,7 +822,12 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  @Tool(name = "addPackage", description = "Add a package with background color to a class diagram")
+  @Tool(
+      name = "addPackage",
+      description =
+          "Add a package frame with an optional background color (#RRGGBB) to a class diagram. A"
+              + " package of that name already in the project is reused (a new view of it is"
+              + " drawn); a name already on the diagram is refused")
   public String addPackage(String diagramName, String packageName, String backgroundColor) {
     try {
       return runOnEdt(
@@ -837,21 +838,19 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (diagram == null) {
               return diagramNotFound(diagramName);
             }
-
-            IPackage pkg = getModelElementFactory().createPackage();
-            pkg.setName(packageName);
-            addToDiagram(diagram, pkg, packageName);
-
-            // Set fill color if provided
-            if (backgroundColor != null && !backgroundColor.trim().isEmpty()) {
-              IDiagramElement de = findDiagramElementByName(diagram, packageName);
-              if (de instanceof IShapeUIModel) {
-                IShapeUIModel shape = (IShapeUIModel) de;
-                IShapeUIModelFillColor fill = shape.getFillColor();
-                Color color = Color.decode(backgroundColor.trim());
-                fill.setColor1(color, true);
-              }
+            if (!isSet(packageName)) {
+              return "packageName is required";
             }
+            if (isSet(backgroundColor) && parseColor(backgroundColor) == null) {
+              return "Error adding package: backgroundColor must be #RRGGBB, got '"
+                  + backgroundColor
+                  + "'";
+            }
+            if (findPackageShape(diagram, packageName.trim()) != null) {
+              return "Package already on diagram: " + packageName.trim();
+            }
+            packageFrame(diagram, packageName.trim(), backgroundColor);
+            relayout(diagram);
 
             return "Added package '"
                 + packageName
@@ -899,6 +898,11 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (findPackageShape(diagram, packageName.trim()) != null) {
               return "Package already on diagram: " + packageName;
             }
+            if (isSet(backgroundColor) && parseColor(backgroundColor) == null) {
+              return "Error adding package: backgroundColor must be #RRGGBB, got '"
+                  + backgroundColor
+                  + "'";
+            }
             IShapeUIModel parentShape = null;
             if (isSet(parentPackage)) {
               parentShape = findPackageShape(diagram, parentPackage.trim());
@@ -906,12 +910,18 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
                 return "Parent package not on diagram: " + parentPackage;
               }
             }
-            IPackage pkg = getModelElementFactory().createPackage();
-            pkg.setName(packageName.trim());
-            if (parentShape != null) {
-              ((IPackage) parentShape.getModelElement()).addChild(pkg);
-            } else if (isSet(modelPackage)) {
-              findOrCreateModelPackage(modelPackage.trim()).addChild(pkg);
+            // a package of that name in the same owner is the same package: a new view of it
+            IModelElement owner =
+                parentShape != null
+                    ? parentShape.getModelElement()
+                    : isSet(modelPackage) ? findOrCreateModelPackage(modelPackage.trim()) : null;
+            IPackage pkg =
+                owner != null
+                    ? findOwnedPackage((IPackage) owner, packageName.trim())
+                    : findRootElement(packageName.trim(), IPackage.class);
+            if (pkg == null) {
+              pkg = getModelElementFactory().createPackage();
+              nameInOwner(pkg, owner, packageName.trim());
             }
             IDiagramElement de = addToDiagram(diagram, pkg, packageName.trim());
             if (parentShape != null && de instanceof IShapeUIModel) {
@@ -921,9 +931,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               de.setBounds(x, y, width, height);
             }
             if (isSet(backgroundColor) && de instanceof IShapeUIModel) {
-              ((IShapeUIModel) de)
-                  .getFillColor()
-                  .setColor1(Color.decode(backgroundColor.trim()), true);
+              ((IShapeUIModel) de).getFillColor().setColor1(parseColor(backgroundColor), true);
             }
             return "Added package '"
                 + packageName.trim()
@@ -2168,21 +2176,37 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
     return pkg;
   }
 
-  private IPackage findOrCreatePackage(
-      IClassDiagramUIModel diagram, String packageName, String color) {
-    // Check if package already exists on diagram
-    IDiagramElement existing = findDiagramElementByName(diagram, packageName);
-    if (existing != null) {
-      IModelElement model = existing.getModelElement();
-      if (model instanceof IPackage) {
-        return (IPackage) model;
+  /**
+   * The frame of a package on the diagram: the one already drawn, else a new view of the package of
+   * that name in the project (a second package of the name would be renamed "Package2" by Visual
+   * Paradigm), else a new package. The fill is set when a color is given.
+   */
+  private IShapeUIModel packageFrame(IClassDiagramUIModel diagram, String name, String color) {
+    IShapeUIModel frame = findPackageShape(diagram, name);
+    if (frame == null) {
+      IPackage pkg = findRootElement(name, IPackage.class);
+      if (pkg == null) {
+        pkg = getModelElementFactory().createPackage();
+        nameInOwner(pkg, null, name);
       }
+      IDiagramElement de = addToDiagram(diagram, pkg, name);
+      if (!(de instanceof IShapeUIModel)) {
+        throw new IllegalStateException("Visual Paradigm did not draw a package shape for " + name);
+      }
+      frame = (IShapeUIModel) de;
     }
+    if (isSet(color)) {
+      frame.getFillColor().setColor1(parseColor(color), true);
+    }
+    return frame;
+  }
 
-    // Create new package
-    IPackage pkg = getModelElementFactory().createPackage();
-    pkg.setName(packageName);
-    addToDiagram(diagram, pkg, packageName);
-    return pkg;
+  /** A color from "#RRGGBB" (or 0xRRGGBB), null when the text is none. */
+  private static Color parseColor(String text) {
+    try {
+      return Color.decode(text.trim());
+    } catch (NumberFormatException e) {
+      return null;
+    }
   }
 }

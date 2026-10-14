@@ -13,6 +13,7 @@ import com.vp.plugin.model.IInteractionLifeLine;
 import com.vp.plugin.model.IInteractionLifeLineLink;
 import com.vp.plugin.model.IMessage;
 import com.vp.plugin.model.IModelElement;
+import com.vp.plugin.model.INOTE;
 import java.awt.Point;
 import java.util.ArrayList;
 import java.util.List;
@@ -104,6 +105,9 @@ public final class CommunicationLayoutProfile extends LayoutProfile {
   @Override
   public NodeSpec node(IShapeUIModel shape) {
     IModelElement model = shape.getModelElement();
+    if (model instanceof INOTE) {
+      return new NodeSpec(); // a note stands next to what it explains, its anchor is routed
+    }
     if (!isParticipant(model)) {
       return null;
     }

@@ -859,6 +859,21 @@ public final class BpmnUtils {
   /** A flow (a loop back) leaves through the left vertex. */
   public static final int EXIT_LEFT = 4;
 
+  /** A flow leaves a diamond down from its lower left edge, beside the bottom vertex. */
+  public static final int EXIT_BOTTOM_LEFT = 5;
+
+  /** A flow leaves a diamond down from its lower right edge, beside the bottom vertex. */
+  public static final int EXIT_BOTTOM_RIGHT = 6;
+
+  /** A flow leaves a diamond up from its upper left edge, beside the top vertex. */
+  public static final int EXIT_TOP_LEFT = 7;
+
+  /** A flow leaves a diamond up from its upper right edge, beside the top vertex. */
+  public static final int EXIT_TOP_RIGHT = 8;
+
+  /** How far from the vertex a flow leaves a diamond that another flow leaves by. */
+  public static final int SHOULDER = 12;
+
   /** A routed flow and the vertex of its (round) source it leaves through. */
   public static final class FlowRoute {
     private final List<Point> points;
@@ -935,6 +950,18 @@ public final class BpmnUtils {
     if (Math.abs(first.x - a.x) <= 1 && Math.abs(first.y - (a.y + a.height / 2)) <= 3) {
       return EXIT_LEFT;
     }
+    int cx = a.x + a.width / 2;
+    int rise = SHOULDER * a.height / Math.max(a.width, 1);
+    for (int sign : new int[] {-1, 1}) {
+      if (Math.abs(first.x - (cx + sign * SHOULDER)) <= 2) {
+        if (Math.abs(first.y - (a.y + a.height - rise)) <= 3) {
+          return sign < 0 ? EXIT_BOTTOM_LEFT : EXIT_BOTTOM_RIGHT;
+        }
+        if (Math.abs(first.y - (a.y + rise)) <= 3) {
+          return sign < 0 ? EXIT_TOP_LEFT : EXIT_TOP_RIGHT;
+        }
+      }
+    }
     return EXIT_AUTO;
   }
 
@@ -958,6 +985,71 @@ public final class BpmnUtils {
       boolean toRound,
       java.util.Set<Integer> usedExits,
       List<Rectangle> obstacles) {
+    return routeFlow(from, fromRound, to, toRound, usedExits, obstacles, EXIT_AUTO);
+  }
+
+  /**
+   * {@link #routeFlow(Rectangle, boolean, Rectangle, boolean, java.util.Set, List)} for a source
+   * whose name hangs at one vertex: that vertex is the last one a flow is given (after every free
+   * vertex, before sharing a vertex with another flow, because the name can be moved aside and two
+   * flows along one line cannot be told apart).
+   *
+   * @param from the source bounds
+   * @param fromRound whether the source is a circle/diamond
+   * @param to the target bounds
+   * @param toRound whether the target is a circle/diamond
+   * @param usedExits vertices of the source other flows already leave through
+   * @param obstacles the other elements (with their name labels) the legs must not cross
+   * @param labelExit the vertex the source's name hangs at, {@link #EXIT_AUTO} for none
+   * @return the route and its exit; the route is null when the shapes overlap
+   */
+  public static FlowRoute routeFlow(
+      Rectangle from,
+      boolean fromRound,
+      Rectangle to,
+      boolean toRound,
+      java.util.Set<Integer> usedExits,
+      List<Rectangle> obstacles,
+      int labelExit) {
+    return routeFlow(
+        from,
+        fromRound,
+        false,
+        to,
+        toRound,
+        usedExits,
+        obstacles,
+        labelExit,
+        new ArrayList<List<Point>>());
+  }
+
+  /**
+   * {@link #routeFlow(Rectangle, boolean, Rectangle, boolean, java.util.Set, List, int)} for a
+   * diamond source that may also leave from the edge beside a vertex another flow leaves by (a
+   * gateway with three branches), and that keeps off the flows already leaving it: a flow that
+   * crosses one costs, a flow that runs along one costs more.
+   *
+   * @param from the source bounds
+   * @param fromRound whether the source is a circle/diamond
+   * @param fromDiamond whether the source is a diamond (a gateway)
+   * @param to the target bounds
+   * @param toRound whether the target is a circle/diamond
+   * @param usedExits vertices of the source other flows already leave through
+   * @param obstacles the other elements (with their name labels) the legs must not cross
+   * @param labelExit the vertex the source's name hangs at, {@link #EXIT_AUTO} for none
+   * @param others the routes of the flows that already leave the source
+   * @return the route and its exit; the route is null when the shapes overlap
+   */
+  public static FlowRoute routeFlow(
+      Rectangle from,
+      boolean fromRound,
+      boolean fromDiamond,
+      Rectangle to,
+      boolean toRound,
+      java.util.Set<Integer> usedExits,
+      List<Rectangle> obstacles,
+      int labelExit,
+      List<List<Point>> others) {
     if (!fromRound) {
       return new FlowRoute(route(from, false, to, toRound, false), EXIT_AUTO);
     }
@@ -971,7 +1063,16 @@ public final class BpmnUtils {
     // the later in the preference list the more by a small amount; the cheapest wins.
     FlowRoute best = null;
     double bestCost = Double.MAX_VALUE;
-    int[] preference = exitPreference(from, to);
+    int[] basic = exitPreference(from, to);
+    int[] preference = basic;
+    if (fromDiamond) {
+      // the edges beside the vertices come after the vertices
+      preference = Arrays.copyOf(basic, basic.length + 4);
+      preference[basic.length] = EXIT_BOTTOM_RIGHT;
+      preference[basic.length + 1] = EXIT_BOTTOM_LEFT;
+      preference[basic.length + 2] = EXIT_TOP_RIGHT;
+      preference[basic.length + 3] = EXIT_TOP_LEFT;
+    }
     for (int rank = 0; rank < preference.length; rank++) {
       int exit = preference[rank];
       // a leg beside the source may have to come closer to it (or go further) to miss a neighbour
@@ -987,8 +1088,12 @@ public final class BpmnUtils {
         double cost =
             (crosses(points, obstacles) ? 2 : 0)
                 + (usedExits.contains(exit) ? 1 : 0)
+                + (exit == labelExit ? 0.5 : 0)
                 + rank * 0.1
                 + c * 0.01;
+        for (List<Point> other : others) {
+          cost += 1.5 * crossingsOf(points, other) + (sharesLine(points, other) ? 3 : 0);
+        }
         if (cost < bestCost) {
           bestCost = cost;
           best = new FlowRoute(points, exit);
@@ -1058,6 +1163,24 @@ public final class BpmnUtils {
           return below
               ? Arrays.asList(new Point(acx, a.y + a.height), new Point(acx, by), new Point(x2, by))
               : null;
+        case EXIT_BOTTOM_LEFT:
+        case EXIT_BOTTOM_RIGHT:
+          int sx = exit == EXIT_BOTTOM_LEFT ? acx - SHOULDER : acx + SHOULDER;
+          return below
+              ? Arrays.asList(
+                  new Point(sx, a.y + a.height - SHOULDER * a.height / Math.max(a.width, 1)),
+                  new Point(sx, by),
+                  new Point(x2, by))
+              : null;
+        case EXIT_TOP_LEFT:
+        case EXIT_TOP_RIGHT:
+          int tx = exit == EXIT_TOP_LEFT ? acx - SHOULDER : acx + SHOULDER;
+          return above
+              ? Arrays.asList(
+                  new Point(tx, a.y + SHOULDER * a.height / Math.max(a.width, 1)),
+                  new Point(tx, by),
+                  new Point(x2, by))
+              : null;
         default:
           return null;
       }
@@ -1093,6 +1216,63 @@ public final class BpmnUtils {
       default:
         return null;
     }
+  }
+
+  /** Number of places where two orthogonal routes cross (an end touching a line is no crossing). */
+  private static int crossingsOf(List<Point> a, List<Point> b) {
+    int count = 0;
+    for (int i = 0; i + 1 < a.size(); i++) {
+      for (int j = 0; j + 1 < b.size(); j++) {
+        Point p = a.get(i);
+        Point q = a.get(i + 1);
+        Point r = b.get(j);
+        Point t = b.get(j + 1);
+        boolean ah = p.y == q.y;
+        boolean bh = r.y == t.y;
+        if (ah == bh) {
+          continue;
+        }
+        Point hp = ah ? p : r;
+        Point hq = ah ? q : t;
+        Point vp = ah ? r : p;
+        Point vq = ah ? t : q;
+        if (Math.min(hp.x, hq.x) < vp.x
+            && vp.x < Math.max(hp.x, hq.x)
+            && Math.min(vp.y, vq.y) < hp.y
+            && hp.y < Math.max(vp.y, vq.y)) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  /** Whether two orthogonal routes run along one another (parallel, closer than a few pixels). */
+  private static boolean sharesLine(List<Point> a, List<Point> b) {
+    for (int i = 0; i + 1 < a.size(); i++) {
+      for (int j = 0; j + 1 < b.size(); j++) {
+        Point p = a.get(i);
+        Point q = a.get(i + 1);
+        Point r = b.get(j);
+        Point t = b.get(j + 1);
+        boolean horizontal = p.y == q.y;
+        if (horizontal != (r.y == t.y)) {
+          continue;
+        }
+        int offset = horizontal ? Math.abs(p.y - r.y) : Math.abs(p.x - r.x);
+        if (offset >= SHOULDER) {
+          continue;
+        }
+        int lo = horizontal ? Math.min(p.x, q.x) : Math.min(p.y, q.y);
+        int hi = horizontal ? Math.max(p.x, q.x) : Math.max(p.y, q.y);
+        int slo = horizontal ? Math.min(r.x, t.x) : Math.min(r.y, t.y);
+        int shi = horizontal ? Math.max(r.x, t.x) : Math.max(r.y, t.y);
+        if (Math.min(hi, shi) - Math.max(lo, slo) > 3) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private static boolean crosses(List<Point> points, List<Rectangle> obstacles) {

@@ -399,8 +399,9 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       name = "addActivityAction",
       description =
           "Add an action (rounded box, fitted to its text) to an activity diagram. actionName is"
-              + " also the handle used by addActivityFlow, so it must be unique on the diagram."
-              + " partitionName puts it in that swimlane lane (\"\" = no lane). x/y (>0) place its"
+              + " also the handle used by addActivityFlow, so it must be unique on the diagram; a"
+              + " trailing number (\"Show #2\") is only part of the handle, so the same text can"
+              + " stand in several page frames and the box shows \"Show\". partitionName puts it in that swimlane lane (\"\" = no lane). x/y (>0) place its"
               + " top-left corner explicitly (kept inside the lane, the layout routes the flows"
               + " around it); otherwise the layout puts it in the row its flows lead to, in the"
               + " column of its lane")
@@ -426,13 +427,18 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             IActivityAction action = getModelElementFactory().createActivityAction();
-            IShapeUIModel shape = createNodeShape(diagram, action, name, lane);
+            // "Show #2" is the handle of a second action that shows "Show"
+            String label = labelOf(name);
+            IShapeUIModel shape = createNodeShape(diagram, action, label, lane);
             if (shape == null) {
               return "Error adding action: Visual Paradigm did not create a shape for " + name;
             }
+            if (!label.equals(name)) {
+              handles.put(shape.getId(), name);
+            }
             resetCaption(shape);
             applyBlueFill(shape);
-            fitBox(shape, name);
+            fitBox(shape, label);
             placeIn(diagram, shape, lane, x, y);
             relayout(diagram);
 
@@ -470,7 +476,8 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
               + " the diagram; a decision shows its question (e.g. \"Valid?\"), an initial or final"
               + " node its name beside it (\"Start\"/\"End\"), the others none; a trailing number"
               + " (\"End #2\") is only part of the handle, so a second final node or a second"
-              + " decision with the same text is added as \"End #2\" and shows \"End\". partitionName"
+              + " decision with the same text is added as \"End #2\" and shows \"End\"; a name that"
+              + " is only a number (\"#1\") makes a diamond with no text. partitionName"
               + " puts it in that swimlane lane (\"\" = no lane). x/y (>0) place its top-left"
               + " corner explicitly; otherwise the layout puts it in the row its flows lead to, in"
               + " the column of its lane (a fork/join bar is as wide as the nodes it joins)")
@@ -614,15 +621,19 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
               inState.setName(stateName);
               node.addInState(inState);
             }
-            IShapeUIModel shape = createNodeShape(diagram, node, name, lane);
+            String label = labelOf(name);
+            IShapeUIModel shape = createNodeShape(diagram, node, label, lane);
             if (shape == null) {
               return "Error adding object node: Visual Paradigm did not create a shape for " + name;
+            }
+            if (!label.equals(name)) {
+              handles.put(shape.getId(), name);
             }
             if (stateName != null && shape instanceof IObjectNodeUIModel) {
               ((IObjectNodeUIModel) shape).setShowInStates(SHOW_IN_STATES);
             }
             resetCaption(shape);
-            fitBox(shape, stateName != null ? name + " [" + stateName + "]" : name);
+            fitBox(shape, stateName != null ? label + " [" + stateName + "]" : label);
             placeIn(diagram, shape, lane, x, y);
             relayout(diagram);
 
@@ -816,6 +827,20 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     relayout(diagram);
     return boundsResult(name, shape) + note;
+  }
+
+  @Override
+  protected int[] horizontalRange(IDiagramUIModel diagram, IShapeUIModel shape) {
+    Lane lane =
+        diagram instanceof IActivityDiagramUIModel
+            ? laneOf((IActivityDiagramUIModel) diagram, shape)
+            : null;
+    return lane == null
+        ? null
+        : new int[] {
+          lane.header.getX() + ActivityDiagramUtils.LANE_PADDING,
+          lane.header.getX() + lane.header.getWidth() - ActivityDiagramUtils.LANE_PADDING
+        };
   }
 
   // --- Node creation and placement ---

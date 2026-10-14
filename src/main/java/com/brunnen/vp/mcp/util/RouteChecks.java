@@ -92,6 +92,17 @@ public final class RouteChecks {
     return count;
   }
 
+  /**
+   * Number of crossings between two routes.
+   *
+   * @param a first route
+   * @param b second route
+   * @return the number of places where they cross
+   */
+  public static int crossingsBetween(List<int[]> a, List<int[]> b) {
+    return crossings(a, b) + crossings(b, a);
+  }
+
   /** Crossings of the horizontal segments of {@code h} with the vertical segments of {@code v}. */
   private static int crossings(List<int[]> h, List<int[]> v) {
     int count = 0;
