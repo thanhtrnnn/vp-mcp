@@ -147,6 +147,20 @@ public class LayoutProfile {
     }
 
     /**
+     * Let the box shrink by the padding of its caption (14 px) when it finds no clear place at its
+     * full width: a keyword like &lt;&lt;use&gt;&gt; fits a gap between two lines then.
+     *
+     * @return this
+     */
+    public LabelSpec tight() {
+      if (altW == 0 && w > 40) {
+        this.altW = w - 14;
+        this.altH = h;
+      }
+      return this;
+    }
+
+    /**
      * Prefer a side of the line.
      *
      * @param value -1 above a horizontal leg or left of a vertical one, 1 below or right
@@ -230,7 +244,7 @@ public class LayoutProfile {
       h = Math.max(h, TextMetrics.LINE_HEIGHT);
     }
     if (w > 0 && h > 0) {
-      spec.labels.add(new LabelSpec("name", w, h, ElkLayout.Slot.CENTER));
+      spec.labels.add(new LabelSpec("name", w, h, ElkLayout.Slot.CENTER).tight());
     }
   }
 

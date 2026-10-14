@@ -541,6 +541,14 @@ public final class ActivityLayoutProfile extends LayoutProfile {
         }
         total += ROW_NODE_GAP * Math.max(inLane.size() - 1, 0);
         int x = xs[i] + (widths[i] - total) / 2;
+        if (inLane.size() == 1) {
+          // alone in its row: the node itself stands in the middle of the lane (the flow above it
+          // runs straight down), pushed left only as far as its name needs
+          int[] only = rects.get(inLane.get(0));
+          int centered = xs[i] + (widths[i] - only[2]) / 2;
+          x = Math.min(centered, xs[i] + widths[i] - LANE_PADDING / 2 - total);
+          x = Math.max(x, xs[i] + LANE_PADDING / 2);
+        }
         for (String id : inLane) {
           int[] r = rects.get(id);
           r[0] = x;
