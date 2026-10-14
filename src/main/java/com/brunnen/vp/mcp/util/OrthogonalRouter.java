@@ -480,6 +480,15 @@ public final class OrthogonalRouter {
         xs.add(r[0] + r[2]);
         ys.add(r[1]);
         ys.add(r[1] + r[3]);
+        if (x.extra != null) {
+          // what hangs outside the shape (a name) has lines beside it as the shape has
+          for (int m : new int[] {0, 3, STUB - 2, STUB}) {
+            xs.add(x.extra[0] - m);
+            xs.add(x.extra[0] + x.extra[2] + m);
+            ys.add(x.extra[1] - m);
+            ys.add(x.extra[1] + x.extra[3] + m);
+          }
+        }
       }
       xs.add(Math.max(bounds[0] - 40, 5));
       xs.add(bounds[2] + 40);

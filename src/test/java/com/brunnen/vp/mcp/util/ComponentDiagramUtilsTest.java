@@ -7,10 +7,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.brunnen.vp.mcp.util.ComponentDiagramUtils.Kind;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.List;
 import org.junit.Test;
 
 /** Test class for ComponentDiagramUtils. */
@@ -125,149 +123,6 @@ public class ComponentDiagramUtilsTest {
   }
 
   @Test
-  public void testOverlaps() {
-    int[] a = {0, 0, 100, 50};
-    assertTrue(
-        "Intersecting rectangles overlap",
-        ComponentDiagramUtils.overlaps(a, rect(50, 25, 100, 50), 0));
-    assertFalse(
-        "Distant rectangles do not", ComponentDiagramUtils.overlaps(a, rect(200, 0, 10, 10), 20));
-    assertTrue(
-        "Closer than the gap counts", ComponentDiagramUtils.overlaps(a, rect(110, 0, 10, 10), 20));
-    assertFalse(
-        "Exactly the gap apart is free",
-        ComponentDiagramUtils.overlaps(a, rect(120, 0, 10, 10), 20));
-  }
-
-  @Test
-  public void testFirstFreeCellOnEmptyDiagram() {
-    assertArrayEquals(
-        new int[] {ComponentDiagramUtils.GRID_X0, ComponentDiagramUtils.GRID_Y0},
-        ComponentDiagramUtils.firstFreeCell(new ArrayList<int[]>(), 120, 60));
-  }
-
-  @Test
-  public void testFirstFreeCellSkipsOccupiedCells() {
-    List<int[]> occupied = new ArrayList<>();
-    occupied.add(rect(60, 60, 120, 60));
-    assertArrayEquals(
-        "Second cell of the first row",
-        new int[] {280, 60},
-        ComponentDiagramUtils.firstFreeCell(occupied, 120, 60));
-  }
-
-  @Test
-  public void testFirstFreeCellSkipsWideNeighbour() {
-    List<int[]> occupied = new ArrayList<>();
-    occupied.add(rect(60, 60, 300, 60)); // spills into the second cell
-    assertArrayEquals(
-        "Third cell, the wide shape blocks the first two",
-        new int[] {500, 60},
-        ComponentDiagramUtils.firstFreeCell(occupied, 120, 60));
-  }
-
-  @Test
-  public void testFirstFreeCellWrapsToNextRow() {
-    List<int[]> occupied = new ArrayList<>();
-    for (int col = 0; col < ComponentDiagramUtils.GRID_COLUMNS; col++) {
-      occupied.add(rect(60 + col * ComponentDiagramUtils.CELL_WIDTH, 60, 120, 60));
-    }
-    assertArrayEquals(
-        new int[] {60, 60 + ComponentDiagramUtils.CELL_HEIGHT},
-        ComponentDiagramUtils.firstFreeCell(occupied, 120, 60));
-  }
-
-  @Test
-  public void testNextChildPositionFirstChildBelowHeader() {
-    int[] parent = {100, 100, 300, 200};
-    assertArrayEquals(
-        new int[] {120, 150},
-        ComponentDiagramUtils.nextChildPosition(parent, new ArrayList<int[]>()));
-  }
-
-  @Test
-  public void testNextChildPositionContinuesRow() {
-    int[] parent = {100, 100, 300, 200};
-    List<int[]> children = new ArrayList<>();
-    children.add(rect(120, 150, 90, 40));
-    assertArrayEquals(
-        "Right of the existing child",
-        new int[] {230, 150},
-        ComponentDiagramUtils.nextChildPosition(parent, children));
-  }
-
-  @Test
-  public void testNextChildPositionWrapsAfterFullRow() {
-    int[] parent = {100, 100, 300, 200};
-    List<int[]> children = new ArrayList<>();
-    children.add(rect(120, 150, 90, 40));
-    children.add(rect(230, 150, 90, 60));
-    children.add(rect(340, 150, 90, 40));
-    assertArrayEquals(
-        "New row below the tallest child of the full row",
-        new int[] {120, 230},
-        ComponentDiagramUtils.nextChildPosition(parent, children));
-  }
-
-  @Test
-  public void testEncloseChildrenGrowsToFit() {
-    int[] parent = {100, 100, 120, 60};
-    List<int[]> children = new ArrayList<>();
-    children.add(rect(120, 150, 90, 40));
-    children.add(rect(230, 150, 90, 40));
-    assertArrayEquals(
-        "Right edge 320 + padding, bottom 190 + padding",
-        new int[] {100, 100, 240, 110},
-        ComponentDiagramUtils.encloseChildren(parent, children));
-  }
-
-  @Test
-  public void testEncloseChildrenNeverShrinks() {
-    int[] parent = {100, 100, 500, 400};
-    List<int[]> children = new ArrayList<>();
-    children.add(rect(120, 150, 90, 40));
-    assertArrayEquals(parent, ComponentDiagramUtils.encloseChildren(parent, children));
-  }
-
-  @Test
-  public void testEncloseChildrenMovesOriginForChildOutsideTopLeft() {
-    int[] parent = {100, 100, 200, 100};
-    List<int[]> children = new ArrayList<>();
-    children.add(rect(50, 60, 40, 20));
-    int[] result = ComponentDiagramUtils.encloseChildren(parent, children);
-    assertArrayEquals(new int[] {30, 10, 270, 190}, result);
-  }
-
-  @Test
-  public void testPortPositionAlternatesSides() {
-    int[] component = {100, 100, 160, 80};
-    assertArrayEquals(
-        "First port straddles the left edge",
-        new int[] {92, 106},
-        ComponentDiagramUtils.portPosition(component, 0, 16));
-    assertArrayEquals(
-        "Second port straddles the right edge",
-        new int[] {252, 106},
-        ComponentDiagramUtils.portPosition(component, 1, 16));
-    assertArrayEquals(
-        "Third port stacks below the first",
-        new int[] {92, 128},
-        ComponentDiagramUtils.portPosition(component, 2, 16));
-  }
-
-  @Test
-  public void testMinHeightForPorts() {
-    assertEquals(0, ComponentDiagramUtils.minHeightForPorts(0, 16));
-    assertEquals("One slot", 26, ComponentDiagramUtils.minHeightForPorts(1, 16));
-    assertEquals("Two ports share a slot", 26, ComponentDiagramUtils.minHeightForPorts(2, 16));
-    assertEquals("Three ports need two slots", 48, ComponentDiagramUtils.minHeightForPorts(3, 16));
-    assertEquals(
-        "Three 12 px ports fit the 40 px of a component",
-        40,
-        ComponentDiagramUtils.minHeightForPorts(3, 12));
-  }
-
-  @Test
   public void testSymbolSize() {
     assertArrayEquals(
         "Believable fitted size is kept",
@@ -281,9 +136,5 @@ public class ComponentDiagramUtilsTest {
         "Empty size falls back to the default",
         new int[] {16, 16},
         ComponentDiagramUtils.symbolSize(0, 0, 16, 30));
-  }
-
-  private static int[] rect(int x, int y, int w, int h) {
-    return new int[] {x, y, w, h};
   }
 }

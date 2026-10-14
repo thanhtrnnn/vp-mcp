@@ -2,6 +2,9 @@ package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
+import com.brunnen.vp.mcp.util.ObjectLayoutProfile;
+import com.brunnen.vp.mcp.util.PackageLayoutProfile;
 import com.brunnen.vp.mcp.util.PackageObjectDiagramUtils;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
@@ -48,35 +51,27 @@ import java.util.Set;
  * ILink} connectors.
  *
  * <p>Leaf shapes (class boxes, objects) are fitted to their content with Visual Paradigm's fit-size
- * API; package frames are containers and grow to enclose their children instead. Connectors are
- * anchored at shape centers, because Visual Paradigm otherwise pins both ends to the top-left
- * corners. All name lookups are scoped to the given diagram.
+ * API; package frames are containers sized around their children. Both diagram types are laid out
+ * by the shared layered layout ({@link PackageLayoutProfile}, {@link ObjectLayoutProfile}): shapes
+ * placed with x/y stay where they are, every connector is a horizontal or vertical line. All name
+ * lookups are scoped to the given diagram.
  */
 public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
+
+  @Override
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    if (IDiagramTypeConstants.DIAGRAM_TYPE_PACKAGE_DIAGRAM.equals(diagram.getType())) {
+      return new PackageLayoutProfile();
+    }
+    return IDiagramTypeConstants.DIAGRAM_TYPE_OBJECT_DIAGRAM.equals(diagram.getType())
+        ? new ObjectLayoutProfile()
+        : null;
+  }
 
   /** Minimum size of a package frame; larger when the fitted label needs more room. */
   private static final int PACKAGE_MIN_WIDTH = 100;
 
   private static final int PACKAGE_MIN_HEIGHT = 50;
-
-  /** Margin of the first auto-placed top-level shape from the diagram origin. */
-  private static final int MARGIN = 40;
-
-  /** Shapes per row and gaps of the top-level auto-placement grid. */
-  private static final int TOP_PER_ROW = 3;
-
-  private static final int PACKAGE_GAP = 60;
-
-  /** Objects sit further apart so link labels stay readable. */
-  private static final int OBJECT_GAP = 80;
-
-  /** Inner padding of a package frame and offset of its body below the tab and name. */
-  private static final int INNER_PAD = 20;
-
-  private static final int INNER_HEADER = 40;
-
-  /** Nested shapes per row: the book's view package holds its four actor packages in one row. */
-  private static final int INNER_PER_ROW = 6;
 
   /** Nesting depth limit when walking package parents or class generalizations. */
   private static final int MAX_DEPTH = 32;
@@ -111,13 +106,14 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add a package frame to a package diagram. parentPackage (a package already on the "
               + "diagram, \"\" for none) nests it in that package, in the model and on the "
-              + "diagram; the parent grows to enclose it. x/y (>0, diagram coordinates) place it "
-              + "explicitly, otherwise it is auto-placed (top level: rows of 3; nested: in one row "
-              + "of up to 6 inside the parent body). width/height (>0) set the size, otherwise "
-              + "the frame is at least 100x50 and wide enough for its name. A package of that "
+              + "diagram; the parent is sized around it. x/y (>0, diagram coordinates) place it "
+              + "explicitly and keep it there (the lines are routed around it), otherwise the "
+              + "layout decides: packages in layers by their dependencies (a package above the "
+              + "ones it depends on), children inside their frame. width/height (>0) set the size "
+              + "of an explicitly placed frame; a frame is always at least 100x50, wide enough "
+              + "for its name and big enough for what it holds. A package of that "
               + "name already in the project (root, or inside parentPackage) is reused: a new "
-              + "view of it is drawn. Add a package's children before the next top-level package "
-              + "so auto-placed frames do not overlap")
+              + "view of it is drawn")
   public String addPackageElement(
       String diagramName,
       String packageName,
@@ -176,15 +172,20 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             }
 
             // A frame is a container: fitSize() only measures the label, the frame itself is
-            // kept at least the minimum size and later grows around its children.
+            // kept at least the minimum size and sized around its children by the layout.
             fitShape(shape);
             int w = width > 0 ? width : Math.max(PACKAGE_MIN_WIDTH, shape.getWidth());
             int h = height > 0 ? height : Math.max(PACKAGE_MIN_HEIGHT, shape.getHeight());
-            int[] pos = placeShape(diagram, parentShape, shape, x, y, PACKAGE_GAP);
-            shape.setBounds(pos[0], pos[1], w, h);
-            if (parentShape != null) {
-              nestInto(parentShape, shape, pos[0], pos[1], w, h);
+            shape.setBounds(shape.getX(), shape.getY(), w, h);
+            if (width > 0 || height > 0) {
+              holdFit(diagram, shape); // the size asked for stays
             }
+            if (parentShape != null) {
+              nestChild(parentShape, shape, x, y);
+            } else {
+              placeNew(diagram, shape, x, y);
+            }
+            relayout(diagram);
 
             return "Added package '"
                 + name
@@ -252,7 +253,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             dependency.setTo(to.getModelElement());
             // Without the stereotype Visual Paradigm draws a bare dashed arrow.
             dependency.addStereotype(stereotype);
-            IDiagramElement connector = connectCentered(diagram, dependency, from, to);
+            IDiagramElement connector = connectAndLayout(diagram, dependency, from, to);
             if (connector == null) {
               dependency.delete();
               return "Visual Paradigm did not create the dependency connector";
@@ -277,8 +278,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
           "Show a small class box (name only, members hidden) inside a package frame of a "
               + "package diagram. The class is owned by that package in the model: an existing "
               + "class the package already owns is reused, otherwise a new class is created in "
-              + "the package. The box is fitted to its name, auto-placed in the package body "
-              + "(rows of 3) and the package grows to enclose it")
+              + "the package. The box is fitted to its name, placed inside the package by the layout "
+              + "and the package is sized around it")
   public String addClassInPackage(String diagramName, String packageName, String className) {
     try {
       return runOnEdt(
@@ -330,11 +331,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               classShape.setShowOwnerOption(IClassUIModel.SHOW_OWNER_NONE);
             }
             fitShape(shape);
-            int w = shape.getWidth();
-            int h = shape.getHeight();
-            int[] pos = placeShape(diagram, pkgShape, shape, 0, 0, PACKAGE_GAP);
-            shape.setBounds(pos[0], pos[1], w, h);
-            nestInto(pkgShape, shape, pos[0], pos[1], w, h);
+            nestChild(pkgShape, shape, 0, 0);
+            relayout(diagram);
 
             return "Added class '"
                 + name
@@ -402,7 +400,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
     if (line.getEndArrowHead() != null) {
       line.getEndArrowHead().setType(IArrowHead.ARROW_NONE);
     }
-    centerConnector(line);
+    line.resetCaption();
+    relayout(diagram);
     return "Added line between '" + fromName + "' and '" + toName + "'";
   }
 
@@ -449,8 +448,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               + "layer package), modelPackage names the package of the one to use; without it "
               + "the class shown on this diagram, else the one that has all the slot "
               + "attributes, is taken and the result names its owner. objectName is the handle "
-              + "used by addObjectLink. x/y (>0) place it explicitly, otherwise it is "
-              + "auto-placed in rows of 3. The box is fitted to its content")
+              + "used by addObjectLink. x/y (>0) place it explicitly and keep it there, otherwise "
+              + "the layout puts it in a layer by its links. The box is fitted to its content")
   public String addObject(
       String diagramName,
       String objectName,
@@ -573,10 +572,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
                   .setShowSlotsMode(IInstanceSpecificationUIModel.SHOW_SLOTS_MODE_SHOW_ALL);
             }
             fitShape(shape);
-            int w = shape.getWidth();
-            int h = shape.getHeight();
-            int[] pos = placeShape(diagram, null, shape, x, y, OBJECT_GAP);
-            shape.setBounds(pos[0], pos[1], w, h);
+            placeNew(diagram, shape, x, y);
+            relayout(diagram);
 
             StringBuilder result = new StringBuilder();
             result
@@ -647,7 +644,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               }
               existing.delete();
               fitShape(shape);
-              recenterConnectorsOf(shape);
+              relayout(diagram);
               return "Removed slot '" + attr + "' of object '" + objectName + "'";
             }
             if (existing == null) {
@@ -684,7 +681,7 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             shape.resetCaption();
             fitShape(shape);
-            recenterConnectorsOf(shape);
+            relayout(diagram);
             return "Set slot "
                 + PackageObjectDiagramUtils.formatSlot(attr, text)
                 + " of object '"
@@ -729,10 +726,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             String caption = PackageObjectDiagramUtils.isValidName(label) ? label.trim() : null;
             if (caption != null) {
               link.setName(caption);
-              // a link name sits mid-line: objects close together would put it on their boxes
-              makeRoomBetween(from, to, caption.length() * 8 + 50, 50);
             }
-            IDiagramElement connector = connectCentered(diagram, link, from, to);
+            IDiagramElement connector = connectAndLayout(diagram, link, from, to);
             if (connector == null) {
               link.delete();
               return "Visual Paradigm did not create the link connector";
@@ -1025,94 +1020,6 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return names.isEmpty() ? "none" : String.join(", ", names);
-  }
-
-  // --- Placement ---
-
-  /**
-   * Position of a new shape. x/y (>0) win; otherwise the shape flows after its siblings: the
-   * top-level shapes of the diagram, or the children of {@code parent} inside its body. A nested
-   * position is always kept inside the parent body.
-   */
-  private int[] placeShape(
-      IDiagramUIModel diagram, IShapeUIModel parent, IShapeUIModel self, int x, int y, int gap) {
-    List<int[]> siblings = new ArrayList<>();
-    int[] auto;
-    if (parent == null) {
-      for (IDiagramElement de : getDiagramElementsList(diagram)) {
-        if (de instanceof IShapeUIModel
-            && !sameShape(de, self)
-            && ((IShapeUIModel) de).getParent() == null) {
-          siblings.add(bounds(de));
-        }
-      }
-      auto = PackageObjectDiagramUtils.flowPlace(siblings, MARGIN, MARGIN, TOP_PER_ROW, gap, gap);
-    } else {
-      for (IShapeUIModel child : childShapes(parent)) {
-        if (!sameShape(child, self)) {
-          siblings.add(bounds(child));
-        }
-      }
-      auto =
-          PackageObjectDiagramUtils.flowPlace(
-              siblings,
-              parent.getX() + INNER_PAD,
-              parent.getY() + INNER_HEADER,
-              INNER_PER_ROW,
-              INNER_PAD,
-              INNER_PAD);
-    }
-    int targetX = x > 0 ? x : auto[0];
-    int targetY = y > 0 ? y : auto[1];
-    if (parent != null) {
-      return PackageObjectDiagramUtils.clampIntoBody(
-          targetX, targetY, bounds(parent), INNER_PAD, INNER_HEADER);
-    }
-    return new int[] {targetX, targetY};
-  }
-
-  /**
-   * Make {@code child} a diagram child of {@code parent}, keep its absolute bounds, and grow the
-   * parent (and its own parents) so they enclose it.
-   */
-  private void nestInto(IShapeUIModel parent, IShapeUIModel child, int x, int y, int w, int h) {
-    parent.addChild(child);
-    child.setBounds(x, y, w, h); // addChild may re-base the child; restore its bounds
-    child.bringToFront();
-    growToEnclose(parent);
-  }
-
-  /** Grow a package frame and every enclosing frame so each one encloses its children. */
-  private void growToEnclose(IShapeUIModel container) {
-    IShapeUIModel current = container;
-    int depth = 0;
-    while (current != null && depth++ < MAX_DEPTH) {
-      List<int[]> children = new ArrayList<>();
-      for (IShapeUIModel child : childShapes(current)) {
-        children.add(bounds(child));
-      }
-      int[] old = bounds(current);
-      int[] grown = PackageObjectDiagramUtils.encloseChildren(old, children, INNER_PAD);
-      if (grown[2] != old[2] || grown[3] != old[3]) {
-        current.setBounds(grown[0], grown[1], grown[2], grown[3]);
-        keepSize(current);
-        // the frames beside it move away (with what they hold): a dependency between two of them
-        // needs room for its <<keyword>> between the boxes
-        pushApart(current, PACKAGE_PUSH_GAP);
-      }
-      IDiagramElement parent = current.getParent();
-      current =
-          parent instanceof IShapeUIModel && parent.getModelElement() instanceof IPackage
-              ? (IShapeUIModel) parent
-              : null;
-    }
-  }
-
-  /** Free space kept between package frames that a grown frame pushed aside. */
-  private static final int PACKAGE_PUSH_GAP = 100;
-
-  private static int[] bounds(IDiagramElement de) {
-    return new int[] {de.getX(), de.getY(), de.getWidth(), de.getHeight()};
   }
 
   // --- Connectors and captions ---

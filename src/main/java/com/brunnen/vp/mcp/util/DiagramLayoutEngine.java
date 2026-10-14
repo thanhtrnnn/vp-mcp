@@ -1,18 +1,11 @@
 package com.brunnen.vp.mcp.util;
 
-import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
-import com.vp.plugin.diagram.IDiagramUIModel;
-import com.vp.plugin.diagram.LayoutOption$ConnectorStyle;
-import com.vp.plugin.diagram.LayoutOption$Hierarchical;
-import com.vp.plugin.diagram.LayoutOption$Orientation;
-import com.vp.plugin.diagram.LayoutOption$ShapePlacement;
-import com.vp.plugin.diagram.LayoutOption$SmartOrganic;
 import com.vp.plugin.model.IActor;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.IUseCase;
 
-/** Layout engine with zone-aware positioning and parameterized LayoutOption construction. */
+/** Initial placement of a new shape by the zone its kind belongs to (actors left, DAOs middle). */
 public final class DiagramLayoutEngine {
 
   /** Element zones for initial positioning. */
@@ -122,55 +115,5 @@ public final class DiagramLayoutEngine {
     }
 
     return new int[] {baseX, baseY, ELEMENT_WIDTH, ELEMENT_HEIGHT};
-  }
-
-  /**
-   * Apply structured layout to a diagram using parameterized LayoutOption.
-   *
-   * @param dm the diagram manager
-   * @param diagram the diagram to layout
-   */
-  public static void applyStructuredLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    if (diagram == null) {
-      return;
-    }
-    String type = diagram.getType();
-
-    if (IDiagramTypeConstants.DIAGRAM_TYPE_INTERACTION_DIAGRAM.equals(type)) {
-      applySequenceLayout(dm, diagram);
-    } else if (IDiagramTypeConstants.DIAGRAM_TYPE_ER_DIAGRAM.equals(type)) {
-      applyErdLayout(dm, diagram);
-    } else if (IDiagramTypeConstants.DIAGRAM_TYPE_STATE_DIAGRAM.equals(type)) {
-      applyStateLayout(dm, diagram);
-    } else {
-      dm.autoLayout(diagram);
-    }
-  }
-
-  private static void applySequenceLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    // Sequence diagrams are positioned manually (lifelines spread horizontally on creation,
-    // messages/activations placed top-to-bottom by sequence number). A graph auto-layout would
-    // scramble that vertical ordering, so this is intentionally a no-op.
-  }
-
-  private static void applyStateLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    // State machines read as a flow: initial state on the left, final state on the right.
-    LayoutOption$Hierarchical opt = dm.createHierarchicalLayoutOption();
-    opt.setOrientation(LayoutOption$Orientation.LeftToRight);
-    opt.setMinimumLayerDistance(110);
-    opt.setMinimumShapeDistance(70);
-    opt.setShapePlacement(LayoutOption$ShapePlacement.Polyline);
-    opt.setConnectorStyle(LayoutOption$ConnectorStyle.Polyline);
-    dm.openAndLayoutDiagram(diagram, opt);
-  }
-
-  private static void applyErdLayout(DiagramManager dm, IDiagramUIModel diagram) {
-    LayoutOption$SmartOrganic opt = dm.createSmartOrganicLayoutOption();
-    opt.setCompactness(0.5);
-    opt.setMinimalNodeDistance(80);
-    opt.setPreferredEdgeLength(150);
-    opt.setNodeSizeAware(true);
-    opt.setDeterministic(true);
-    dm.openAndLayoutDiagram(diagram, opt);
   }
 }

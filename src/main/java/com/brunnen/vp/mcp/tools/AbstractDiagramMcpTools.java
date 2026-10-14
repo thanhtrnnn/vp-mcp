@@ -840,9 +840,8 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /**
-   * Create a connector between two shapes whose ends are clipped at the shape borders on the
-   * center-to-center line, and render its caption. Returns null when VP refuses this connector type
-   * between the two shapes.
+   * Create a connector between two shapes and lay the diagram out: the shared layout routes every
+   * connector orthogonally and puts its labels beside it.
    *
    * @param diagram the diagram
    * @param model the relationship model
@@ -850,42 +849,11 @@ public abstract class AbstractDiagramMcpTools {
    * @param to the target shape
    * @return the connector, or null when VP did not create one
    */
-  protected IDiagramElement connectCentered(
+  protected IDiagramElement connectAndLayout(
       IDiagramUIModel diagram, IModelElement model, IDiagramElement from, IDiagramElement to) {
-    if (profileOf(diagram) != null) {
-      IDiagramElement connector = connectShapes(diagram, model, from, to);
-      if (connector != null) {
-        relayout(diagram);
-      }
-      return connector;
-    }
-    IDiagramElement connector = createChecked(diagram, model, from, to);
-    if (connector instanceof IConnectorUIModel) {
-      IConnectorUIModel created = (IConnectorUIModel) connector;
-      centerConnector(created);
-      // a new connector between an already connected pair spreads the existing ones apart too
-      if (from instanceof IShapeUIModel && to instanceof IShapeUIModel) {
-        for (IConnectorUIModel other : pairConnectors((IShapeUIModel) from, (IShapeUIModel) to)) {
-          if (!other.getId().equals(created.getId())) {
-            centerConnector(other);
-          }
-        }
-      }
-    }
+    IDiagramElement connector = connectShapes(diagram, model, from, to);
     if (connector != null) {
-      connector.resetCaption(); // fresh connectors render blank until the caption is reset
-      if (connector instanceof IConnectorUIModel && labelledAcrossShapes(model)) {
-        placeBentLabel((IConnectorUIModel) connector);
-      }
-      if (connector instanceof IConnectorUIModel
-          && ((from instanceof IShapeUIModel && isFolder((IShapeUIModel) from))
-              || (to instanceof IShapeUIModel && isFolder((IShapeUIModel) to)))) {
-        // VP clips a fresh connector at the package's bounding box (the folder tab) again once
-        // the tool's event is over: the ends on the border of the body are drawn a last time
-        // from the event queue (a later call of the same tool finds the connector settled)
-        IConnectorUIModel settled = (IConnectorUIModel) connector;
-        afterVpSettles(() -> centerConnector(settled));
-      }
+      relayout(diagram);
     }
     return connector;
   }
@@ -956,9 +924,8 @@ public abstract class AbstractDiagramMcpTools {
       return "";
     }
     IShapeUIModel self = (IShapeUIModel) shape;
-    if (isContainerModel(self)) {
-      return "";
-    }
+    // a container keeps clear of the other containers beside it; a leaf shape may stand inside one
+    boolean container = isContainerModel(self);
     String parentId = self.getParent() == null ? null : self.getParent().getId();
     LayoutProfile profile = profileOf(diagram);
     List<int[]> others = new ArrayList<>();
@@ -968,7 +935,7 @@ public abstract class AbstractDiagramMcpTools {
           || other.getWidth() <= 0
           || isHiddenStub(other)
           || other.getModelElement() == null
-          || isContainerModel(other)
+          || isContainerModel(other) != container
           || !java.util.Objects.equals(parentId, otherParent)) {
         continue;
       }
@@ -1072,6 +1039,9 @@ public abstract class AbstractDiagramMcpTools {
       de.setBounds(Math.max(x, 0), Math.max(y, 0), de.getWidth(), de.getHeight());
       avoidOverlap(diagram, de);
       pin(de);
+      if (de instanceof IShapeUIModel && isContainerModel((IShapeUIModel) de)) {
+        holdFit(diagram, (IShapeUIModel) de);
+      }
       return;
     }
     if (layoutOwnsShapes(diagram)) {
@@ -1097,12 +1067,114 @@ public abstract class AbstractDiagramMcpTools {
         && (pinned == null || pinned.isEmpty());
   }
 
-  /** Relationships whose keyword label (<<Include>>, <<use>>...) is put beside a bent line. */
-  private static boolean labelledAcrossShapes(IModelElement model) {
-    return model instanceof IInclude
-        || model instanceof IExtend
-        || model instanceof com.vp.plugin.model.IUsage
-        || model instanceof com.vp.plugin.model.IDependency;
+  /**
+   * Keep the size a container was given: with the diagram's auto-fit on, Visual Paradigm shrinks a
+   * frame to its title and children as soon as the call is over, so a size asked for would be lost.
+   * The shapes stay fitted because every tool fits them when it changes them.
+   *
+   * @param diagram the diagram
+   * @param container the container whose size was set explicitly
+   */
+  protected static void holdFit(IDiagramUIModel diagram, IShapeUIModel container) {
+    if (diagram.isAutoFitShapesSize()) {
+      diagram.setAutoFitShapesSize(false);
+    }
+    keepSize(container);
+  }
+
+  /** Space between a container's border and the shapes in its body. */
+  private static final int NEST_PAD = 24;
+
+  /** Room above the first shape of a container body: the folder tab and the title. */
+  private static final int NEST_HEADER = 46;
+
+  /** Space between the shapes of a container body that is filled by hand. */
+  private static final int NEST_GAP = 36;
+
+  /**
+   * Make {@code child} a diagram child of the container {@code parent} (a package, a component, a
+   * node). Where it stands: x/y (&gt; 0) put it there and pin it; otherwise the shared layout finds
+   * the place and sizes the container around it, or, when the diagram is not laid out by it (a
+   * shape was placed explicitly, or the diagram was opened from a file), the child goes to the
+   * first free spot of the container's body and the container grows to enclose it.
+   *
+   * @param parent the container shape
+   * @param child the new shape, at its final size
+   * @param x requested left edge, {@code > 0} to pin
+   * @param y requested top edge, {@code > 0} to pin
+   */
+  protected void nestChild(IShapeUIModel parent, IShapeUIModel child, int x, int y) {
+    IDiagramUIModel diagram = parent.getDiagramUIModel();
+    boolean explicit = x > 0 || y > 0;
+    boolean owned = !explicit && layoutOwnsShapes(diagram);
+    int w = child.getWidth();
+    int h = child.getHeight();
+    int[] spot = {child.getX(), child.getY()};
+    if (explicit) {
+      spot = new int[] {Math.max(x, 0), Math.max(y, 0)};
+    } else if (!owned) {
+      List<int[]> occupied = new ArrayList<>();
+      IShapeUIModel[] siblings = parent.toChildArray();
+      for (IShapeUIModel sibling : siblings == null ? new IShapeUIModel[0] : siblings) {
+        if (!sibling.getId().equals(child.getId())
+            && !(sibling.getModelElement() instanceof com.vp.plugin.model.IPort)
+            && sibling.getWidth() > 0) {
+          occupied.add(rect(sibling));
+        }
+      }
+      int left = parent.getX() + NEST_PAD;
+      int right = Math.max(parent.getX() + parent.getWidth() - NEST_PAD, left + 3 * (w + NEST_GAP));
+      spot =
+          DiagramUtils.firstFreeSpot(
+              occupied, left, parent.getY() + NEST_HEADER, w, h, right, NEST_GAP);
+    }
+    parent.addChild(child);
+    child.setBounds(spot[0], spot[1], w, h); // addChild may re-base the child: restore its bounds
+    child.bringToFront(); // a frame created later would hide it
+    if (explicit) {
+      pin(child);
+    }
+    if (!owned) {
+      growToEnclose(parent);
+    }
+  }
+
+  /**
+   * Grow a container, and every container around it, so that each one encloses the shapes it holds
+   * with {@link #NEST_PAD} to spare and the room for its title above them; the frames beside a
+   * grown one move away. Containers are sized by what they hold, never fitted to their label.
+   *
+   * @param container the container whose content changed
+   */
+  protected void growToEnclose(IShapeUIModel container) {
+    IShapeUIModel current = container;
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    while (current != null && seen.add(current.getId())) {
+      int left = current.getX();
+      int top = current.getY();
+      int right = left + current.getWidth();
+      int bottom = top + current.getHeight();
+      IShapeUIModel[] children = current.toChildArray();
+      for (IShapeUIModel child : children == null ? new IShapeUIModel[0] : children) {
+        if (child.getModelElement() instanceof com.vp.plugin.model.IPort || child.getWidth() <= 0) {
+          continue; // ports straddle the border by design
+        }
+        left = Math.min(left, child.getX() - NEST_PAD);
+        top = Math.min(top, child.getY() - NEST_HEADER);
+        right = Math.max(right, child.getX() + child.getWidth() + NEST_PAD);
+        bottom = Math.max(bottom, child.getY() + child.getHeight() + NEST_PAD);
+      }
+      if (left != current.getX()
+          || top != current.getY()
+          || right - left != current.getWidth()
+          || bottom - top != current.getHeight()) {
+        current.setBounds(left, top, right - left, bottom - top);
+        keepSize(current);
+        pushApart(current, PUSH_GAP);
+      }
+      IDiagramElement up = current.getParent();
+      current = up instanceof IShapeUIModel ? (IShapeUIModel) up : null;
+    }
   }
 
   /**
@@ -1162,564 +1234,6 @@ public abstract class AbstractDiagramMcpTools {
   private static String shapeName(IDiagramElement shape) {
     IModelElement m = shape.getModelElement();
     return m != null ? displayName(m) : shape.getShapeType();
-  }
-
-  private static List<IConnectorUIModel> pairConnectors(IShapeUIModel a, IShapeUIModel b) {
-    List<IConnectorUIModel> result = new ArrayList<>();
-    IConnectorUIModel[] outgoing = a.toFromConnectorArray();
-    if (outgoing != null) {
-      for (IConnectorUIModel c : outgoing) {
-        if (c.getToShape() != null && c.getToShape().getId().equals(b.getId())) {
-          result.add(c);
-        }
-      }
-    }
-    IConnectorUIModel[] incoming = a.toToConnectorArray();
-    if (incoming != null) {
-      for (IConnectorUIModel c : incoming) {
-        if (c.getFromShape() != null && c.getFromShape().getId().equals(b.getId())) {
-          result.add(c);
-        }
-      }
-    }
-    return result;
-  }
-
-  /**
-   * Re-anchor a connector on the current centers of its two shapes; VP clips the ends at the
-   * borders. Self connectors keep their own route.
-   *
-   * @param connector the connector
-   */
-  protected static void centerConnector(IConnectorUIModel connector) {
-    IShapeUIModel from = connector.getFromShape();
-    IShapeUIModel to = connector.getToShape();
-    if (from == null || to == null || from.getId().equals(to.getId())) {
-      return;
-    }
-    useCenterConnectionPoints(connector.getDiagramUIModel());
-    if (isPort(from) || isPort(to)) {
-      centerPortConnector(connector, from, to);
-      return;
-    }
-    // A second connector between the same two shapes (e.g. a flow back) would lie exactly on the
-    // first one, labels on top of each other: bend it off to one side. A line that would run
-    // through another shape gets a bend around it. Everything is computed before the points are
-    // touched: querying the diagram while the connector has a single point makes VP rebuild it
-    // with two end points, and points added afterwards are appended behind those.
-    boolean canonical = from.getId().compareTo(to.getId()) < 0;
-    IShapeUIModel first = canonical ? from : to;
-    IShapeUIModel second = canonical ? to : from;
-    List<String> parallel = connectorsBetween(from, to);
-    if (parallel.size() > 1 && isDataFlowDiagram(connector.getDiagramUIModel())) {
-      // a data flow diagram draws opposite flows as two parallel straight arrows
-      Point[] side =
-          parallelLine(
-              visibleRect(first),
-              visibleRect(second),
-              Math.max(parallel.indexOf(connector.getId()), 0),
-              parallel.size(),
-              obstaclesBetween(from, to));
-      if (side != null) {
-        Point start = canonical ? side[0] : side[1];
-        Point end = canonical ? side[1] : side[0];
-        connector.clearPoints();
-        connector.addPoint(start);
-        connector.addPoint(end);
-        connector.setUseFromShapeCenter(false);
-        connector.setUseToShapeCenter(false);
-        // pinned: with the diagram's center connection points VP would draw both flows from
-        // center to center again
-        connector.setFromPinType(IConnectorUIModel.PINTYPE_RATIO);
-        connector.setFromPinRatio(pinRatio(from, start));
-        connector.setToPinType(IConnectorUIModel.PINTYPE_RATIO);
-        connector.setToPinRatio(pinRatio(to, end));
-        connector.setRequestRebuild(false);
-        return;
-      }
-    }
-    int[][] bends =
-        DiagramUtils.routeBends(
-            visibleRect(first),
-            visibleRect(second),
-            Math.max(parallel.indexOf(connector.getId()), 0),
-            parallel.size(),
-            PARALLEL_STEP,
-            obstaclesBetween(from, to),
-            titleBands(from.getDiagramUIModel()));
-    // the bends run from the canonical first shape to the second one
-    List<Point> route = new ArrayList<>();
-    for (int i = 0; i < bends.length; i++) {
-      int[] bend = bends[canonical ? i : bends.length - 1 - i];
-      // VP drops points outside the canvas
-      route.add(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
-    }
-    // A package is drawn as a folder: its bounding box includes the tab, and VP clips a line at
-    // that box, so a line coming from above stops in the air over the body. Packages therefore get
-    // an explicit end on the border of their body; every other shape is anchored at its center.
-    boolean fromBody = isFolder(from);
-    boolean toBody = isFolder(to);
-    Point start = center(from);
-    Point end = center(to);
-    Point towardsStart = route.isEmpty() ? end : route.get(0);
-    Point towardsEnd = route.isEmpty() ? start : route.get(route.size() - 1);
-    if (fromBody) {
-      start = borderPoint(visibleRect(from), towardsStart);
-    }
-    if (toBody) {
-      end = borderPoint(visibleRect(to), towardsEnd);
-    }
-    connector.clearPoints();
-    connector.addPoint(start);
-    for (Point p : route) {
-      connector.addPoint(p);
-    }
-    connector.addPoint(end);
-    if (fromBody || toBody) {
-      // a rebuild would anchor the package at its center again
-      connector.setUseFromShapeCenter(!fromBody);
-      connector.setUseToShapeCenter(!toBody);
-      // pinned at the border point of the body (a ratio of the bounding box, tab included): VP
-      // keeps the end there when it clips a fresh connector at the bounding box
-      if (fromBody) {
-        connector.setFromPinType(IConnectorUIModel.PINTYPE_RATIO);
-        connector.setFromPinRatio(pinRatio(from, start));
-      }
-      if (toBody) {
-        connector.setToPinType(IConnectorUIModel.PINTYPE_RATIO);
-        connector.setToPinRatio(pinRatio(to, end));
-      }
-      connector.setRequestRebuild(false);
-      return;
-    }
-    if (!route.isEmpty()) {
-      // a (pending) rebuild would straighten the route; VP clips both legs at the borders
-      connector.setRequestRebuild(false);
-      return;
-    }
-    connector.setUseFromShapeCenter(true);
-    connector.setUseToShapeCenter(true);
-    connector.setRequestRebuild(true);
-  }
-
-  /**
-   * Every straight piece of every connector of the diagram as {x1, y1, x2, y2}, for keeping a label
-   * off the lines.
-   *
-   * @param diagram the diagram
-   * @return the segments
-   */
-  protected static List<int[]> lineSegments(IDiagramUIModel diagram) {
-    List<int[]> lines = new ArrayList<>();
-    for (IConnectorUIModel c : diagram.toConnectorUIModelArray()) {
-      Point[] points = c.getPoints();
-      for (int i = 0; points != null && i + 1 < points.length; i++) {
-        lines.add(new int[] {points[i].x, points[i].y, points[i + 1].x, points[i + 1].y});
-      }
-    }
-    return lines;
-  }
-
-  /**
-   * The first candidate corner for a {@code w x h} label that touches none of the boxes and none of
-   * the lines; when every candidate touches something, the one that touches least.
-   *
-   * @param candidates top-left corners, best first
-   * @param w label width
-   * @param h label height
-   * @param boxes shapes and other labels {x, y, w, h}
-   * @param lines connector segments {x1, y1, x2, y2}
-   * @return the chosen corner
-   */
-  protected static int[] clearLabelSpot(
-      List<int[]> candidates, int w, int h, List<int[]> boxes, List<int[]> lines) {
-    int[] best = candidates.get(0);
-    int bestHits = Integer.MAX_VALUE;
-    for (int[] c : candidates) {
-      int[] box = {c[0], c[1], w, h};
-      int hits = 0;
-      for (int[] r : boxes) {
-        if (box[0] < r[0] + r[2]
-            && r[0] < box[0] + box[2]
-            && box[1] < r[1] + r[3]
-            && r[1] < box[1] + box[3]) {
-          hits++;
-        }
-      }
-      for (int[] l : lines) {
-        if (DiagramUtils.segmentHitsRect(l[0], l[1], l[2], l[3], box, 1)) {
-          hits++;
-        }
-      }
-      if (c[0] < 0 || c[1] < 0) {
-        hits++;
-      }
-      if (hits == 0) {
-        return c;
-      }
-      if (hits < bestHits) {
-        bestHits = hits;
-        best = c;
-      }
-    }
-    return best;
-  }
-
-  /**
-   * Put the label of a connector that bends beside its longest leg (VP draws it at a bend, where
-   * the line runs through it), clear of shapes, other labels and every line. A label already clear
-   * stays where it is.
-   *
-   * @param connector the connector whose caption was just reset
-   */
-  protected static void placeBentLabel(IConnectorUIModel connector) {
-    com.vp.plugin.diagram.ICaptionUIModel cap = connector.getCaptionUIModel();
-    Point[] points = connector.getPoints();
-    IDiagramUIModel diagram = connector.getDiagramUIModel();
-    if (cap == null
-        || !cap.isVisible()
-        || cap.getWidth() <= 0
-        || points == null
-        || points.length < 3
-        || diagram == null) {
-      return;
-    }
-    int w = cap.getWidth();
-    int h = cap.getHeight() > 0 ? cap.getHeight() : 14;
-    List<int[]> boxes = new ArrayList<>();
-    for (IShapeUIModel shape : diagram.toShapeUIModelArray()) {
-      IShapeUIModel[] children = shape.toChildArray();
-      if (shape.getWidth() > 0 && (children == null || children.length == 0)) {
-        boxes.add(rect(shape));
-      }
-    }
-    for (IConnectorUIModel other : diagram.toConnectorUIModelArray()) {
-      com.vp.plugin.diagram.ICaptionUIModel c = other.getCaptionUIModel();
-      if (!other.getId().equals(connector.getId())
-          && c != null
-          && c.isVisible()
-          && c.getWidth() > 0) {
-        boxes.add(new int[] {c.getX(), c.getY(), c.getWidth(), c.getHeight()});
-      }
-    }
-    List<int[]> lines = lineSegments(diagram);
-    List<int[]> candidates = new ArrayList<>();
-    candidates.add(new int[] {cap.getX(), cap.getY()}); // where it is now
-    int[][] pts = new int[points.length][];
-    for (int i = 0; i < points.length; i++) {
-      pts[i] = new int[] {points[i].x, points[i].y};
-    }
-    candidates.addAll(DiagramUtils.labelSpotsBeside(pts, w, h));
-    int[] spot = clearLabelSpot(candidates, w, h, boxes, lines);
-    cap.setBounds(Math.max(spot[0], 2), Math.max(spot[1], 2), w, h);
-  }
-
-  /** The point {@code p} as a ratio of the width and height of {@code shape}. */
-  private static java.awt.geom.Point2D pinRatio(IShapeUIModel shape, Point p) {
-    return new java.awt.geom.Point2D.Double(
-        (p.x - shape.getX()) / (double) Math.max(shape.getWidth(), 1),
-        (p.y - shape.getY()) / (double) Math.max(shape.getHeight(), 1));
-  }
-
-  private static boolean isPort(IShapeUIModel shape) {
-    return shape.getModelElement() instanceof com.vp.plugin.model.IPort;
-  }
-
-  /** Length of the first leg of a connector that leaves a port: out of its component. */
-  private static final int PORT_LEG = 30;
-
-  /**
-   * Route a connector with a port at one or both ends. A port sits on the border of its component
-   * and a line through the component's body (or one that runs along its border over the other
-   * ports) is wrong: the connector leaves the port outwards, horizontally, and the rest of the
-   * route goes around the component that owns the port.
-   */
-  private static void centerPortConnector(
-      IConnectorUIModel connector, IShapeUIModel from, IShapeUIModel to) {
-    Point pf = center(from);
-    Point pt = center(to);
-    List<int[]> owners = new ArrayList<>();
-    Point legFrom = portLeg(from, pt, owners);
-    Point legTo = portLeg(to, pf, owners);
-    Point m0 = legFrom != null ? legFrom : pf;
-    Point m1 = legTo != null ? legTo : pt;
-    List<int[]> obstacles = obstaclesBetween(from, to);
-    obstacles.addAll(owners);
-    List<Point> route = new ArrayList<>();
-    if (legFrom != null) {
-      route.add(legFrom);
-    }
-    int[][] bends =
-        DiagramUtils.routeBends(
-            new int[] {m0.x, m0.y, 1, 1},
-            new int[] {m1.x, m1.y, 1, 1},
-            0,
-            1,
-            PARALLEL_STEP,
-            obstacles,
-            titleBands(from.getDiagramUIModel()));
-    for (int[] bend : bends) {
-      route.add(new Point(Math.max(bend[0], 5), Math.max(bend[1], 5)));
-    }
-    if (legTo != null) {
-      route.add(legTo);
-    }
-    connector.clearPoints();
-    connector.addPoint(pf);
-    for (Point p : route) {
-      connector.addPoint(p);
-    }
-    connector.addPoint(pt);
-    connector.setUseFromShapeCenter(true);
-    connector.setUseToShapeCenter(true);
-    connector.setRequestRebuild(false);
-  }
-
-  /**
-   * The point {@code PORT_LEG} px out of {@code shape} (when it is a port) on the side of its
-   * component, or null when the straight line towards {@code other} already leaves it outwards
-   * without crossing the component. The component's rectangle is added to {@code owners}.
-   */
-  private static Point portLeg(IShapeUIModel shape, Point other, List<int[]> owners) {
-    if (!isPort(shape) || !(shape.getParent() instanceof IShapeUIModel)) {
-      return null;
-    }
-    IShapeUIModel owner = (IShapeUIModel) shape.getParent();
-    owners.add(rect(owner));
-    Point c = center(shape);
-    int out = c.x < owner.getX() + owner.getWidth() / 2 ? -1 : 1;
-    boolean headsOut = (other.x - c.x) * out > 0;
-    boolean crosses = DiagramUtils.segmentHitsRect(c.x, c.y, other.x, other.y, rect(owner), -2);
-    if (headsOut && !crosses) {
-      return null;
-    }
-    return new Point(Math.max(c.x + out * PORT_LEG, 5), c.y);
-  }
-
-  private static boolean isDataFlowDiagram(IDiagramUIModel diagram) {
-    String type = diagram == null ? null : diagram.getType();
-    return type != null && (type.contains("DFD") || type.contains("DataFlow"));
-  }
-
-  /** Distance between parallel straight lines joining the same two shapes. */
-  private static final int PARALLEL_LINE_GAP = 18;
-
-  /**
-   * The {@code index}-th of {@code count} parallel straight lines between two shapes that stand
-   * side by side (or one above the other) with enough of their edges facing each other, from the
-   * border of {@code a} to the border of {@code b}; null when they are not aligned or something is
-   * in the way, and the lines bend apart instead.
-   */
-  private static Point[] parallelLine(
-      int[] a, int[] b, int index, int count, List<int[]> obstacles) {
-    int span = PARALLEL_LINE_GAP * (count - 1) + 20;
-    int lo = Math.max(a[1], b[1]);
-    int hi = Math.min(a[1] + a[3], b[1] + b[3]);
-    Point start = null;
-    Point end = null;
-    double offset = (index - (count - 1) / 2.0) * PARALLEL_LINE_GAP;
-    if (hi - lo >= span && (a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0])) {
-      int y = (int) Math.round((lo + hi) / 2.0 + offset);
-      boolean left = a[0] + a[2] <= b[0];
-      start = new Point(left ? a[0] + a[2] : a[0], y);
-      end = new Point(left ? b[0] : b[0] + b[2], y);
-    } else {
-      int left = Math.max(a[0], b[0]);
-      int right = Math.min(a[0] + a[2], b[0] + b[2]);
-      if (right - left >= span && (a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1])) {
-        int x = (int) Math.round((left + right) / 2.0 + offset);
-        boolean above = a[1] + a[3] <= b[1];
-        start = new Point(x, above ? a[1] + a[3] : a[1]);
-        end = new Point(x, above ? b[1] : b[1] + b[3]);
-      }
-    }
-    if (start == null) {
-      return null;
-    }
-    for (int[] r : obstacles) {
-      if (DiagramUtils.segmentHitsRect(start.x, start.y, end.x, end.y, r, 4)) {
-        return null;
-      }
-    }
-    return new Point[] {start, end};
-  }
-
-  /** Height of the band at the top of a package frame that holds its tab and title. */
-  private static final int FRAME_TITLE_BAND = 26;
-
-  /**
-   * The title bands of every package frame of the diagram: a bend (and with it the label drawn at
-   * the bend) of a connector must not lie in one, or its label reads as part of the frame's title.
-   */
-  private static List<int[]> titleBands(IDiagramUIModel diagram) {
-    List<int[]> bands = new ArrayList<>();
-    if (diagram == null) {
-      return bands;
-    }
-    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      if (isFolder(s) && s.getWidth() > 0) {
-        bands.add(new int[] {s.getX(), s.getY(), s.getWidth(), FRAME_TITLE_BAND});
-      }
-    }
-    return bands;
-  }
-
-  /** Height of a package's folder tab; a connector meets the package at the body below it. */
-  private static final int FOLDER_TAB = 19;
-
-  private static boolean isFolder(IShapeUIModel shape) {
-    return shape.getModelElement() instanceof com.vp.plugin.model.IPackage;
-  }
-
-  /**
-   * The part of a shape a connector can meet: its bounds, except for a package, whose folder tab
-   * sticks out above the body.
-   */
-  private static int[] visibleRect(IShapeUIModel shape) {
-    int[] r = rect(shape);
-    if (isFolder(shape) && r[3] > 2 * FOLDER_TAB) {
-      return new int[] {r[0], r[1] + FOLDER_TAB, r[2], r[3] - FOLDER_TAB};
-    }
-    return r;
-  }
-
-  /** Where the line from a rectangle's center towards {@code target} crosses its border. */
-  private static Point borderPoint(int[] r, Point target) {
-    double cx = r[0] + r[2] / 2.0;
-    double cy = r[1] + r[3] / 2.0;
-    double dx = target.x - cx;
-    double dy = target.y - cy;
-    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
-      return new Point((int) cx, (int) cy);
-    }
-    double tx = Math.abs(dx) < 1e-9 ? Double.MAX_VALUE : (r[2] / 2.0) / Math.abs(dx);
-    double ty = Math.abs(dy) < 1e-9 ? Double.MAX_VALUE : (r[3] / 2.0) / Math.abs(dy);
-    double t = Math.min(tx, ty);
-    return new Point((int) Math.round(cx + dx * t), (int) Math.round(cy + dy * t));
-  }
-
-  /**
-   * Shapes a connector between {@code from} and {@code to} should not run through: every leaf shape
-   * with a model on the diagram except the two ends, and every node, artifact, component or package
-   * frame that holds neither end (a line through a deployment node it does not belong to is as bad
-   * as one through a leaf). Containers holding an end, and lanes, pools and boundaries, which flows
-   * cross by design, only contribute their children.
-   */
-  private static List<int[]> obstaclesBetween(IShapeUIModel from, IShapeUIModel to) {
-    List<int[]> obstacles = new ArrayList<>();
-    IDiagramUIModel diagram = from.getDiagramUIModel();
-    if (diagram == null) {
-      return obstacles;
-    }
-    Point fromCenter = center(from);
-    Point toCenter = center(to);
-    java.util.Deque<IShapeUIModel> pending =
-        new java.util.ArrayDeque<>(java.util.Arrays.asList(diagram.toShapeUIModelArray()));
-    java.util.Set<String> seen = new java.util.HashSet<>();
-    while (!pending.isEmpty()) {
-      IShapeUIModel s = pending.poll();
-      if (s == null || !seen.add(s.getId())) {
-        continue;
-      }
-      // the line ends at the border of its end shapes: what they hold does not block it, and
-      // ports sit on the border of their component, where its connectors arrive
-      // (the diagram's shape list is flat: what an end shape holds is in it, at any depth)
-      if (s.getId().equals(from.getId())
-          || s.getId().equals(to.getId())
-          || s.getModelElement() instanceof com.vp.plugin.model.IPort
-          || isInside(s, from)
-          || isInside(s, to)) {
-        continue;
-      }
-      IShapeUIModel[] children = s.toChildArray();
-      if (children != null && children.length > 0) {
-        if (isSolidContainer(s.getModelElement())
-            && !s.getId().equals(from.getId())
-            && !s.getId().equals(to.getId())
-            && !DiagramUtils.contains(rect(s), fromCenter.x, fromCenter.y)
-            && !DiagramUtils.contains(rect(s), toCenter.x, toCenter.y)) {
-          obstacles.add(rect(s));
-          continue;
-        }
-        // a container holding an end, or a lane/pool/boundary: its children are the obstacles
-        pending.addAll(java.util.Arrays.asList(children));
-        continue;
-      }
-      if (s.getModelElement() == null
-          || s.getWidth() <= 0
-          || s.getId().equals(from.getId())
-          || s.getId().equals(to.getId())) {
-        continue;
-      }
-      obstacles.add(rect(s));
-    }
-    return obstacles;
-  }
-
-  /** Whether {@code shape} is nested, at any depth, in {@code container}. */
-  private static boolean isInside(IShapeUIModel shape, IShapeUIModel container) {
-    IDiagramElement parent = shape.getParent();
-    for (int depth = 0; parent != null && depth < 50; depth++) {
-      if (parent.getId().equals(container.getId())) {
-        return true;
-      }
-      parent = parent instanceof IShapeUIModel ? ((IShapeUIModel) parent).getParent() : null;
-    }
-    return false;
-  }
-
-  /** Containers a connector between two shapes outside them must go around. */
-  private static boolean isSolidContainer(IModelElement model) {
-    return model instanceof com.vp.plugin.model.INode
-        || model instanceof com.vp.plugin.model.IArtifact
-        || model instanceof com.vp.plugin.model.IComponent
-        || model instanceof com.vp.plugin.model.IPackage;
-  }
-
-  /** Perpendicular distance between parallel connectors joining the same two shapes. */
-  protected static final int PARALLEL_STEP = 80;
-
-  /** Ids of all connectors joining the same two shapes (either direction), sorted. */
-  private static List<String> connectorsBetween(IShapeUIModel from, IShapeUIModel to) {
-    List<String> ids = new ArrayList<>();
-    collectBetween(from.toFromConnectorArray(), to, false, ids);
-    collectBetween(from.toToConnectorArray(), to, true, ids);
-    java.util.Collections.sort(ids);
-    return ids;
-  }
-
-  private static void collectBetween(
-      IConnectorUIModel[] connectors, IShapeUIModel other, boolean incoming, List<String> ids) {
-    if (connectors == null) {
-      return;
-    }
-    for (IConnectorUIModel c : connectors) {
-      IShapeUIModel end = incoming ? c.getFromShape() : c.getToShape();
-      if (end != null && end.getId().equals(other.getId()) && !ids.contains(c.getId())) {
-        ids.add(c.getId());
-      }
-    }
-  }
-
-  /**
-   * Re-anchor every connector attached to a shape, e.g. after it was moved or resized (VP does not
-   * reroute connectors when a shape's bounds change through the API).
-   *
-   * @param shape the moved shape
-   */
-  protected static void recenterConnectorsOf(IDiagramElement shape) {
-    IConnectorUIModel[] from = shape.toFromConnectorArray();
-    IConnectorUIModel[] to = shape.toToConnectorArray();
-    if (from != null) {
-      for (IConnectorUIModel c : from) {
-        centerConnector(c);
-      }
-    }
-    if (to != null) {
-      for (IConnectorUIModel c : to) {
-        centerConnector(c);
-      }
-    }
   }
 
   /**
@@ -1866,21 +1380,6 @@ public abstract class AbstractDiagramMcpTools {
   }
 
   /**
-   * Re-anchor the connectors of a shape and of everything nested in it (VP does not reroute
-   * connectors when bounds change through the API).
-   *
-   * @param shape the moved shape
-   */
-  protected static void recenterTree(IDiagramElement shape) {
-    recenterConnectorsOf(shape);
-    if (shape instanceof IShapeUIModel) {
-      for (IShapeUIModel inner : nestedShapes((IShapeUIModel) shape)) {
-        recenterConnectorsOf(inner);
-      }
-    }
-  }
-
-  /**
    * The connectors attached to a shape or to anything nested in it, each once.
    *
    * @param shape the shape
@@ -1905,18 +1404,6 @@ public abstract class AbstractDiagramMcpTools {
       }
     }
     return result;
-  }
-
-  /**
-   * Put the captions of the connectors of a shape and of everything nested in it back at their
-   * default place on the (re-anchored) lines: a moved shape leaves them where they were.
-   *
-   * @param shape the moved shape
-   */
-  protected static void resetCaptionsOfTree(IDiagramElement shape) {
-    for (IConnectorUIModel c : connectorsOfTree(shape)) {
-      c.resetCaption();
-    }
   }
 
   /**
@@ -1994,72 +1481,7 @@ public abstract class AbstractDiagramMcpTools {
         queue.add(b);
       }
     }
-    for (IShapeUIModel s : siblings) {
-      if (moved.contains(s.getId())) {
-        recenterTree(s);
-      }
-    }
     return moved.size();
-  }
-
-  /**
-   * Widen the gap between two shapes so a connector label fits between them: when they sit side by
-   * side the right one, and every sibling shape starting at or right of it, moves right until the
-   * gap is {@code needX}; when one is above the other the lower one and every sibling at or below
-   * it moves down until the gap is {@code needY}. Moving everything beyond keeps the gaps already
-   * widened for other labels. Connectors of moved shapes are re-anchored. Shapes that overlap
-   * diagonally or already have room stay put.
-   *
-   * @param a one shape
-   * @param b the other shape
-   * @param needX horizontal gap the label needs
-   * @param needY vertical gap the label needs
-   */
-  protected void makeRoomBetween(IDiagramElement a, IDiagramElement b, int needX, int needY) {
-    if (!(a instanceof IShapeUIModel)
-        || !(b instanceof IShapeUIModel)
-        || a.getId().equals(b.getId())) {
-      return;
-    }
-    boolean sameRow = a.getY() < b.getY() + b.getHeight() && b.getY() < a.getY() + a.getHeight();
-    boolean sameColumn = a.getX() < b.getX() + b.getWidth() && b.getX() < a.getX() + a.getWidth();
-    int dx = 0;
-    int dy = 0;
-    IDiagramElement moving = null;
-    if (sameRow) {
-      IDiagramElement left = a.getX() <= b.getX() ? a : b;
-      moving = left == a ? b : a;
-      int gap = moving.getX() - (left.getX() + left.getWidth());
-      dx = gap >= 0 && gap < needX ? needX - gap : 0;
-    } else if (sameColumn) {
-      IDiagramElement top = a.getY() <= b.getY() ? a : b;
-      moving = top == a ? b : a;
-      int gap = moving.getY() - (top.getY() + top.getHeight());
-      dy = gap >= 0 && gap < needY ? needY - gap : 0;
-    }
-    if (moving == null || (dx == 0 && dy == 0)) {
-      return;
-    }
-    IDiagramUIModel diagram = moving.getDiagramUIModel();
-    List<IShapeUIModel> shifted = new ArrayList<>();
-    for (IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      if (s.getModelElement() == null
-          || !sameParent(s, (IShapeUIModel) moving)
-          || s.getWidth() <= 0) {
-        continue;
-      }
-      boolean beyond = dx > 0 ? s.getX() >= moving.getX() : s.getY() >= moving.getY();
-      if (beyond) {
-        shifted.add(s);
-      }
-    }
-    // a shifted container (a component with ports...) takes what it holds along
-    for (IShapeUIModel s : shifted) {
-      moveShapeTree(s, dx, dy);
-    }
-    for (IShapeUIModel s : shifted) {
-      recenterTree(s);
-    }
   }
 
   /**
@@ -2580,7 +2002,7 @@ public abstract class AbstractDiagramMcpTools {
               com.vp.plugin.model.IAnchor anchor = getModelElementFactory().createAnchor();
               anchor.setFrom(note);
               anchor.setTo(target.getModelElement());
-              IDiagramElement link = connectCentered(diagram, anchor, shape, target);
+              IDiagramElement link = connectAndLayout(diagram, anchor, shape, target);
               anchored =
                   link != null
                       ? " attached to '" + attachedTo.trim() + "'"
@@ -2765,6 +2187,47 @@ public abstract class AbstractDiagramMcpTools {
     return false;
   }
 
+  /** Whether {@code shape} is nested, at any depth, in {@code container}. */
+  private static boolean isInside(IShapeUIModel shape, IShapeUIModel container) {
+    IDiagramElement parent = shape.getParent();
+    for (int depth = 0; parent != null && depth < 50; depth++) {
+      if (parent.getId().equals(container.getId())) {
+        return true;
+      }
+      parent = parent instanceof IShapeUIModel ? ((IShapeUIModel) parent).getParent() : null;
+    }
+    return false;
+  }
+
+  /** Containers a connector between two shapes outside them must go around. */
+  private static boolean isSolidContainer(IModelElement model) {
+    return model instanceof com.vp.plugin.model.INode
+        || model instanceof com.vp.plugin.model.IArtifact
+        || model instanceof com.vp.plugin.model.IComponent
+        || model instanceof com.vp.plugin.model.IPackage;
+  }
+
+  private static List<IConnectorUIModel> pairConnectors(IShapeUIModel a, IShapeUIModel b) {
+    List<IConnectorUIModel> result = new ArrayList<>();
+    IConnectorUIModel[] outgoing = a.toFromConnectorArray();
+    if (outgoing != null) {
+      for (IConnectorUIModel c : outgoing) {
+        if (c.getToShape() != null && c.getToShape().getId().equals(b.getId())) {
+          result.add(c);
+        }
+      }
+    }
+    IConnectorUIModel[] incoming = a.toToConnectorArray();
+    if (incoming != null) {
+      for (IConnectorUIModel c : incoming) {
+        if (c.getFromShape() != null && c.getFromShape().getId().equals(b.getId())) {
+          result.add(c);
+        }
+      }
+    }
+    return result;
+  }
+
   /**
    * Whether an element is one of the invisible helper shapes of a sequence diagram: the small
    * per-message activations VP draws, which the tools make fully transparent under the long bar of
@@ -2779,21 +2242,25 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "autoLayoutDiagram",
       description =
-          "Apply structured layout to a diagram. MUST be called AFTER adding all elements. "
-              + "Class, use case, state, activity, flowchart and communication diagrams (and every"
-              + " diagram type that has a layout profile): layered, orthogonal layout of shapes,"
-              + " lines and labels: every line horizontal or vertical, no shape overlap, no line"
-              + " through a shape, no two lines on top of each other, labels beside their lines;"
-              + " shapes placed with x/y are not pinned any more. Class: generalizations decide the"
+          "Apply structured layout to a diagram. Call it after adding elements (every tool also"
+              + " lays the diagram out as it adds). Every diagram type except sequence and BPMN:"
+              + " layered, orthogonal layout of shapes, lines and labels: every line horizontal"
+              + " or vertical, no shape overlap, no line through a shape, no two lines on top of"
+              + " each other, labels beside their lines; shapes placed with x/y are not pinned any"
+              + " more. Class: generalizations decide the"
               + " layers; UC: actors left, use cases inside the system boundary; state: initial at"
               + " the top, final at the bottom, loops and opposite transitions side by side;"
               + " activity: rows by the flow, nodes in the column of their lane, bars spanning"
               + " their branches, page frames around their nodes; flowchart: top to bottom, a"
               + " vertex of the decision per branch; communication: actor row, boundaries,"
-              + " controls, entities, message arrows beside their links. ERD: compact organic. DFD:"
-              + " entities left, processes in the middle, data stores right. Component, package,"
-              + " object: Visual Paradigm's orthogonal layout. Sequence, BPMN and deployment"
-              + " diagrams are laid out as you add elements: nothing is moved (use"
+              + " controls, entities, message arrows beside their links. ERD: referenced tables left of"
+              + " the tables with their foreign keys. DFD: entities left, processes in the middle,"
+              + " data stores right. Component: layers and containers around their components,"
+              + " client above supplier, ports on the side their lines lead away to. Package:"
+              + " frames around what they hold, a package above the ones it depends on. Object:"
+              + " layers by the links. Deployment: nodes from left to right by their communication"
+              + " paths, nested nodes, artifacts and components inside their node. Sequence and"
+              + " BPMN diagrams are laid out as you add elements: nothing is moved (use"
               + " setElementBounds and rerouteConnectors)")
   public String autoLayoutDiagram(String diagramName) {
     try {
@@ -2822,8 +2289,11 @@ public abstract class AbstractDiagramMcpTools {
                   + summary
                   + ")";
             }
-            layoutDiagram(diagram);
-            return "Auto-layout applied to diagram: " + diagramName;
+            return "Diagram '"
+                + diagramName
+                + "' is a "
+                + diagram.getType()
+                + ": the plugin has no layout for that diagram type, nothing was moved";
           });
     } catch (Exception e) {
       return "Error applying auto-layout: " + e.getMessage();
@@ -2845,10 +2315,6 @@ public abstract class AbstractDiagramMcpTools {
         + diagram.getName()
         + "' are placed where they belong as they are added and were not moved (move one with"
         + " setElementBounds, re-route its connectors with rerouteConnectors)";
-  }
-
-  protected void layoutDiagram(IDiagramUIModel diagram) {
-    DiagramLayoutEngine.applyStructuredLayout(getDiagramManager(), diagram);
   }
 
   @Tool(
@@ -3150,11 +2616,7 @@ public abstract class AbstractDiagramMcpTools {
                 }
                 shape.resetCaption();
                 fitShape(shape);
-                if (profileOf(shape.getDiagramUIModel()) != null) {
-                  relayout(shape.getDiagramUIModel()); // the box may be wider: lay out again
-                } else {
-                  recenterConnectorsOf(shape);
-                }
+                relayout(shape.getDiagramUIModel()); // the box may be wider: lay out again
               }
             }
             return "Renamed '" + old + "' to '" + wanted + "' on diagram '" + diagramName + "'";

@@ -2,7 +2,9 @@ package com.brunnen.vp.mcp.tools;
 
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.ErdLayoutProfile;
 import com.brunnen.vp.mcp.util.ErdUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
@@ -17,8 +19,17 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-/** MCP tools for Visual Paradigm ERD operations. */
+/**
+ * MCP tools for Visual Paradigm ERD operations. The diagram is laid out by the shared layered
+ * layout ({@link ErdLayoutProfile}): referenced tables left, tables with their foreign keys right,
+ * every foreign key a horizontal or vertical line.
+ */
 public class ErdMcpTools extends AbstractDiagramMcpTools {
+
+  @Override
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    return diagram instanceof IERDiagramUIModel ? new ErdLayoutProfile() : null;
+  }
 
   @Tool(
       name = "createErd",
@@ -44,9 +55,10 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       name = "addTable",
       description =
           "Add a table/entity to an ER diagram. A table of that name elsewhere in the project is"
-              + " the same table and is shown again (with its columns). Tables are placed left to"
-              + " right, four to a row (room is kept for the columns still to come); names are SQL"
-              + " identifiers (letters, digits, underscore: no spaces or diacritics)")
+              + " the same table and is shown again (with its columns). The layout puts the tables"
+              + " in columns by their foreign keys (referenced tables left) and every foreign key"
+              + " is a horizontal or vertical line; names are SQL identifiers (letters, digits,"
+              + " underscore: no spaces or diacritics)")
   public String addTable(String diagramName, String tableName) {
     try {
       return runOnEdt(
@@ -71,8 +83,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             IDiagramElement de = addToDiagram(diagram, table, name);
             de.resetCaption();
             fitShape(de);
-            int[] spot = tableSlot(diagram, de);
-            de.setBounds(spot[0], spot[1], de.getWidth(), de.getHeight());
+            relayout(diagram);
 
             return "Added table '"
                 + name
@@ -240,12 +251,6 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
                   + toTable
                   + "' already exists; name the column (fromColumn) for a second one";
             }
-            if (isSet(relationshipName)) {
-              // a named relationship prints its name mid-line: the tables need room for it
-              makeRoomBetween(
-                  parentShape, childShape, relationshipName.trim().length() * 8 + 40, 50);
-            }
-
             // VP's foreign key runs from the referenced (parent) table to the child and adds an
             // FK column to the child that references the parent's primary key.
             IDBForeignKey fk = getModelElementFactory().createDBForeignKey();
@@ -257,7 +262,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             fk.setFromMultiplicity(IDBForeignKey.FROM_MULTIPLICITY_ONE);
             fk.setToMultiplicity(IDBForeignKey.TO_MULTIPLICITY_ZERO_TO_MANY);
             String columnNote = adoptForeignKeyColumn(fk, child, childCol, refCol, newColumnName);
-            IDiagramElement connector = connectCentered(diagram, fk, parentShape, childShape);
+            IDiagramElement connector = connectShapes(diagram, fk, parentShape, childShape);
             if (connector == null) {
               fk.delete();
               return "Error adding foreign key: Visual Paradigm refused the connector";
@@ -340,7 +345,7 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
             fk.setToMultiplicity(toMult);
             fk.setIdentifying("identifying".equalsIgnoreCase(type));
             IDiagramElement connector =
-                connectCentered(
+                connectShapes(
                     diagram,
                     fk,
                     findDiagramElementByModel(diagram, source),
@@ -466,33 +471,6 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return added.isEmpty() ? "" : "; added column(s): " + String.join(", ", added);
-  }
-
-  /**
-   * Top-left corner for an auto-placed table: four to a row. Members are added after the table, so
-   * every table keeps a slot the size of a typical one until its real size is larger.
-   */
-  private static int[] tableSlot(IDiagramUIModel diagram, IDiagramElement self) {
-    List<int[]> occupied = new ArrayList<>();
-    for (com.vp.plugin.diagram.IShapeUIModel s : diagram.toShapeUIModelArray()) {
-      if (s.getId().equals(self.getId()) || s.getParent() != null || s.getWidth() <= 0) {
-        continue;
-      }
-      int[] r = rect(s);
-      if (s.getModelElement() instanceof IDBTable) {
-        r[2] = Math.max(r[2], TABLE_SLOT_W);
-        r[3] = Math.max(r[3], TABLE_SLOT_H);
-      }
-      occupied.add(r);
-    }
-    return DiagramUtils.firstFreeSpot(
-        occupied,
-        50,
-        50,
-        Math.max(self.getWidth(), TABLE_SLOT_W),
-        Math.max(self.getHeight(), TABLE_SLOT_H),
-        TABLE_ROW_RIGHT,
-        TABLE_GAP);
   }
 
   @Tool(
@@ -677,17 +655,18 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  /** Refit every view of a table after its columns changed and keep it clear of its neighbours. */
+  /** Refit every view of a table after its columns changed and lay the diagram out again. */
   private void refitTable(IDBTable table) {
     IDiagramElement[] views = table.getDiagramElements();
     if (views == null) {
       return;
     }
+    java.util.Set<String> laidOut = new java.util.HashSet<>();
     for (IDiagramElement view : views) {
       fitShape(view);
-      if (view instanceof com.vp.plugin.diagram.IShapeUIModel) {
-        pushApart((com.vp.plugin.diagram.IShapeUIModel) view, TABLE_GAP);
-        recenterConnectorsOf(view);
+      IDiagramUIModel diagram = view.getDiagramUIModel();
+      if (diagram != null && laidOut.add(diagram.getId())) {
+        relayout(diagram); // the box grew: the places and the lines change
       }
     }
   }
@@ -730,17 +709,6 @@ public class ErdMcpTools extends AbstractDiagramMcpTools {
   private static boolean isSet(String value) {
     return value != null && !value.trim().isEmpty();
   }
-
-  /** Tables wrap to a new row past this x (four per row). */
-  private static final int TABLE_ROW_RIGHT = 1050;
-
-  /** Room reserved for a table before its columns are added. */
-  private static final int TABLE_SLOT_W = 190;
-
-  private static final int TABLE_SLOT_H = 200;
-
-  /** Space kept between tables. */
-  private static final int TABLE_GAP = 60;
 
   @Tool(
       name = "generateDdl",

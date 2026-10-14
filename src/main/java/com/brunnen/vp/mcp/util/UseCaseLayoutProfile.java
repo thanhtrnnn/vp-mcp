@@ -66,6 +66,11 @@ public final class UseCaseLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public int headerHeight(IShapeUIModel container) {
+    return container.getModelElement() instanceof ISystem ? 32 : 0;
+  }
+
+  @Override
   public IShapeUIModel container(IShapeUIModel shape) {
     if (boundary != null && shape.getModelElement() instanceof IUseCase) {
       IModelElement owner = ((IUseCase) shape.getModelElement()).getParent();

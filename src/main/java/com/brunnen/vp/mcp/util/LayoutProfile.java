@@ -5,6 +5,8 @@ import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramUIModel;
 import com.vp.plugin.diagram.IShapeUIModel;
+import com.vp.plugin.model.IAnchor;
+import com.vp.plugin.model.INOTE;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +62,14 @@ public class LayoutProfile {
 
     /** Least width and height of a container (room for its title), null for none. */
     public int[] minSize;
+
+    /**
+     * Room {left, top, right, bottom} the layout keeps free around the shape for what hangs on its
+     * border (the names of ports): neighbours keep that far away, the shape itself keeps its size.
+     * Only for a layout whose connectors are all drawn by the router ({@link
+     * LayoutProfile#routesAll()}), null for none.
+     */
+    public int[] pad;
   }
 
   /** A label of a connector. */
@@ -171,6 +181,28 @@ public class LayoutProfile {
   }
 
   /**
+   * Give a connector a label beside the middle of its line, the size of its caption: the name of
+   * the relationship or the keyword Visual Paradigm prints (&lt;&lt;use&gt;&gt;). A connector
+   * without any text gets none.
+   *
+   * @param spec the connector's spec
+   * @param c the connector (its caption has been reset, so its size is known)
+   * @param name the relationship's name, whose width is the fallback when the caption is empty
+   */
+  protected static void addCaptionLabel(EdgeSpec spec, IConnectorUIModel c, String name) {
+    ICaptionUIModel caption = c.getCaptionUIModel();
+    int w = caption == null ? 0 : caption.getWidth();
+    int h = caption == null ? 0 : caption.getHeight();
+    if (name != null && !name.trim().isEmpty()) {
+      w = Math.max(w, TextMetrics.caption(name.trim())[0]);
+      h = Math.max(h, TextMetrics.LINE_HEIGHT);
+    }
+    if (w > 0 && h > 0) {
+      spec.labels.add(new LabelSpec("name", w, h, ElkLayout.Slot.CENTER));
+    }
+  }
+
+  /**
    * The size a small shape (a circle, a diamond) needs so that every connector that ends on it has
    * a port of its own: a side takes ports {@link OrthogonalRouter#PORT_GAP} apart inside the middle
    * half of its length.
@@ -272,7 +304,25 @@ public class LayoutProfile {
    */
   public IShapeUIModel container(IShapeUIModel shape) {
     IDiagramElement parent = shape.getParent();
-    return parent instanceof IShapeUIModel ? (IShapeUIModel) parent : null;
+    if (parent instanceof IShapeUIModel) {
+      return (IShapeUIModel) parent;
+    }
+    return shape.getModelElement() instanceof INOTE ? containerOfNoted(shape, 0) : null;
+  }
+
+  /**
+   * A note stands in the container of the shape it explains (a note on a class in a package sits
+   * inside that package's frame, not across its border).
+   */
+  private IShapeUIModel containerOfNoted(IShapeUIModel note, int depth) {
+    IConnectorUIModel[] anchors = note.toFromConnectorArray();
+    for (IConnectorUIModel c : anchors == null ? new IConnectorUIModel[0] : anchors) {
+      IShapeUIModel to = c.getToShape();
+      if (c.getModelElement() instanceof IAnchor && to != null && depth < 4) {
+        return container(to);
+      }
+    }
+    return null;
   }
 
   /**
@@ -294,6 +344,41 @@ public class LayoutProfile {
    */
   public int[] hanging(IShapeUIModel shape) {
     return null;
+  }
+
+  /**
+   * The shape that {@code shape} sits on the border of (a port on its component). Such a shape is
+   * no node of the layered layout: the connectors that end on it are laid out as connectors of its
+   * owner, and once the owner has its place the shape is put on the side of the owner that its
+   * connectors lead away to ({@link #placedAttached}). Only for a layout whose connectors are all
+   * drawn by the router ({@link #routesAll()}).
+   *
+   * @param shape a shape of the diagram
+   * @return the owner shape, or null when the shape stands on its own
+   */
+  public IShapeUIModel attachedTo(IShapeUIModel shape) {
+    return null;
+  }
+
+  /**
+   * Called when an attached shape was put on the border of its owner: its name moves outside.
+   *
+   * @param shape the attached shape, at its new place
+   * @param side the side of the owner it sits on: 0 north, 1 east, 2 south, 3 west
+   */
+  public void placedAttached(IShapeUIModel shape, int side) {
+    // nothing by default
+  }
+
+  /**
+   * Height of the band across the top of a container that holds its title (the tab and name of a
+   * package, the keyword and name of a node): labels keep off it.
+   *
+   * @param container a container shape
+   * @return the height in pixels, 0 for none
+   */
+  public int headerHeight(IShapeUIModel container) {
+    return 0;
   }
 
   /**

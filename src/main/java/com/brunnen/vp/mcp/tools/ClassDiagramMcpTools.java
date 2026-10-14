@@ -190,7 +190,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               IGeneralization gen = getModelElementFactory().createGeneralization();
               gen.setFrom(parent);
               gen.setTo(cls);
-              connectCentered(diagram, gen, parentDe, classDe);
+              connectAndLayout(diagram, gen, parentDe, classDe);
             }
 
             // Create realization (implements) if provided
@@ -203,7 +203,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               IRealization real = getModelElementFactory().createRealization();
               real.setFrom(iface); // VP: supplier -> client
               real.setTo(cls);
-              connectCentered(diagram, real, ifaceDe, classDe);
+              connectAndLayout(diagram, real, ifaceDe, classDe);
             }
 
             relayout(diagram);
@@ -554,7 +554,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               toEnd.setMultiplicity(toMultiplicity.trim());
             }
-            connectCentered(diagram, assoc, fromElement, toElement);
+            connectAndLayout(diagram, assoc, fromElement, toElement);
 
             return "Added association from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -603,7 +603,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             IGeneralization gen = getModelElementFactory().createGeneralization();
             gen.setFrom(target);
             gen.setTo(source);
-            connectCentered(diagram, gen, toElement, fromElement);
+            connectAndLayout(diagram, gen, toElement, fromElement);
 
             return "Added generalization from '" + fromClass + "' extends '" + toClass + "'";
           });
@@ -656,7 +656,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               ((IAssociationEnd) assoc.getToEnd()).setMultiplicity(toMultiplicity.trim());
             }
-            connectCentered(diagram, assoc, fromElement, toElement);
+            connectAndLayout(diagram, assoc, fromElement, toElement);
 
             return "Added aggregation from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -709,7 +709,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             if (toMultiplicity != null && !toMultiplicity.trim().isEmpty()) {
               ((IAssociationEnd) assoc.getToEnd()).setMultiplicity(toMultiplicity.trim());
             }
-            connectCentered(diagram, assoc, fromElement, toElement);
+            connectAndLayout(diagram, assoc, fromElement, toElement);
 
             return "Added composition from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -745,7 +745,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             IDependency dep = getModelElementFactory().createDependency();
             dep.setFrom(source);
             dep.setTo(target);
-            connectCentered(diagram, dep, fromElement, toElement);
+            connectAndLayout(diagram, dep, fromElement, toElement);
 
             return "Added dependency from '" + fromClass + "' to '" + toClass + "'";
           });
@@ -785,7 +785,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             // would draw the triangle on the implementing class.
             real.setFrom(target);
             real.setTo(source);
-            connectCentered(diagram, real, toElement, fromElement);
+            connectAndLayout(diagram, real, toElement, fromElement);
 
             return "Added realization from '" + fromClass + "' implements '" + toClass + "'";
           });
@@ -1006,7 +1006,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
             usage.setFrom(from.getModelElement());
             usage.setTo(to.getModelElement());
             usage.addStereotype("use"); // VP draws a usage as a bare dashed arrow otherwise
-            if (connectCentered(diagram, usage, from, to) == null) {
+            if (connectAndLayout(diagram, usage, from, to) == null) {
               return "Visual Paradigm refused a usage from '" + fromName + "' to '" + toName + "'";
             }
             return "Added usage from '" + fromName + "' to '" + toName + "'";
@@ -1354,11 +1354,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               note += avoidOverlap(diagram, de);
               pin(de);
               relayout(diagram);
-              return boundsResult(elementName, de) + note;
             }
-            // VP does not reroute connectors when bounds change through the API
-            recenterTree(de);
-            resetCaptionsOfTree(de);
             return boundsResult(elementName, de) + note;
           });
     } catch (Exception e) {
@@ -1928,14 +1924,7 @@ public class ClassDiagramMcpTools extends AbstractDiagramMcpTools {
               settleReopen(diagram, profile);
               return "Rerouted " + summary.connectors + " connector(s) on '" + diagramName + "'";
             }
-            int count = 0;
-            for (IDiagramElement de : getDiagramElementsList(diagram)) {
-              if (de instanceof IConnectorUIModel) {
-                centerConnector((IConnectorUIModel) de);
-                count++;
-              }
-            }
-            return "Rerouted " + count + " connector(s) on '" + diagramName + "'";
+            return "Diagram '" + diagramName + "' has no connectors to route again";
           });
     } catch (Exception e) {
       return "Error rerouting connectors: " + e.getMessage();

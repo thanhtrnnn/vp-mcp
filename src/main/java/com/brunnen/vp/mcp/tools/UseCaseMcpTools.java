@@ -235,7 +235,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
                 IInclude include = getModelElementFactory().createInclude();
                 include.setFrom(source);
                 include.setTo(target);
-                connector = connectCentered(diagram, include, fromElement, toElement);
+                connector = connectAndLayout(diagram, include, fromElement, toElement);
                 break;
               case "Extend":
                 // VP's IExtend runs from the extended (base) use case to the extension and draws
@@ -244,7 +244,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
                 IExtend extend = getModelElementFactory().createExtend();
                 extend.setFrom(target);
                 extend.setTo(source);
-                connector = connectCentered(diagram, extend, toElement, fromElement);
+                connector = connectAndLayout(diagram, extend, toElement, fromElement);
                 hideExtensionPoints(toElement);
                 relayout(diagram); // the base use case lost its compartment: it is smaller
                 break;
@@ -254,13 +254,13 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
                 IGeneralization gen = getModelElementFactory().createGeneralization();
                 gen.setFrom(target);
                 gen.setTo(source);
-                connector = connectCentered(diagram, gen, toElement, fromElement);
+                connector = connectAndLayout(diagram, gen, toElement, fromElement);
                 break;
               default:
                 IAssociation assoc = getModelElementFactory().createAssociation();
                 assoc.setFrom(source);
                 assoc.setTo(target);
-                connector = connectCentered(diagram, assoc, fromElement, toElement);
+                connector = connectAndLayout(diagram, assoc, fromElement, toElement);
                 break;
             }
             return connected(connector, kind, sourceName, targetName);

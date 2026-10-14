@@ -2,7 +2,6 @@ package com.brunnen.vp.mcp.util;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -149,83 +148,6 @@ public final class PackageObjectDiagramUtils {
       result.put(name, value);
     }
     return Collections.unmodifiableMap(result);
-  }
-
-  /**
-   * Next free position in a left-to-right, top-to-bottom flow of shapes. The last row is the row of
-   * siblings with the largest y; the new shape goes to its right while the row has fewer than
-   * {@code perRow} shapes, otherwise it starts a new row below every sibling.
-   *
-   * @param siblings bounds {x, y, width, height} of the shapes already in the area, may be null
-   * @param originX left edge of the area
-   * @param originY top edge of the area
-   * @param perRow maximum shapes per row (values below 1 are treated as 1)
-   * @param gapX horizontal gap between shapes
-   * @param gapY vertical gap between rows
-   * @return {x, y} of the new shape
-   */
-  public static int[] flowPlace(
-      List<int[]> siblings, int originX, int originY, int perRow, int gapX, int gapY) {
-    if (siblings == null || siblings.isEmpty()) {
-      return new int[] {originX, originY};
-    }
-    int lastRowY = Integer.MIN_VALUE;
-    for (int[] s : siblings) {
-      lastRowY = Math.max(lastRowY, s[1]);
-    }
-    int inLastRow = 0;
-    int lastRowRight = originX;
-    int bottom = originY;
-    for (int[] s : siblings) {
-      if (s[1] == lastRowY) {
-        inLastRow++;
-        lastRowRight = Math.max(lastRowRight, s[0] + s[2]);
-      }
-      bottom = Math.max(bottom, s[1] + s[3]);
-    }
-    if (inLastRow < Math.max(1, perRow)) {
-      return new int[] {lastRowRight + gapX, lastRowY};
-    }
-    return new int[] {originX, bottom + gapY};
-  }
-
-  /**
-   * Keep a child position inside a container's body: at least {@code pad} from the left edge and
-   * {@code header} from the top edge (below the package tab and name).
-   *
-   * @param x the requested x
-   * @param y the requested y
-   * @param container container bounds {x, y, width, height}
-   * @param pad left inner padding
-   * @param header top inner offset
-   * @return {x, y} moved right/down when it was left of or above the body
-   */
-  public static int[] clampIntoBody(int x, int y, int[] container, int pad, int header) {
-    return new int[] {Math.max(x, container[0] + pad), Math.max(y, container[1] + header)};
-  }
-
-  /**
-   * Grow a container so it encloses all of its children plus padding. Only the width and height
-   * grow (the top-left corner never moves, so children are not shifted); a container that is
-   * already large enough keeps its size.
-   *
-   * @param container container bounds {x, y, width, height}
-   * @param children bounds {x, y, width, height} of the children, may be null
-   * @param pad padding kept between the children and the right/bottom edges
-   * @return the new container bounds
-   */
-  public static int[] encloseChildren(int[] container, List<int[]> children, int pad) {
-    int x = container[0];
-    int y = container[1];
-    int right = x + container[2];
-    int bottom = y + container[3];
-    if (children != null) {
-      for (int[] c : children) {
-        right = Math.max(right, c[0] + c[2] + pad);
-        bottom = Math.max(bottom, c[1] + c[3] + pad);
-      }
-    }
-    return new int[] {x, y, right - x, bottom - y};
   }
 
   private static String stripPrefix(String text, String... prefixes) {

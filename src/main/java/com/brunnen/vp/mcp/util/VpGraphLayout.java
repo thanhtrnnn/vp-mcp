@@ -68,6 +68,7 @@ public final class VpGraphLayout {
     if (graph.shapes.isEmpty()) {
       return summary;
     }
+    graph.holdSizes(diagram);
     ElkLayout.Result result = graph.solve(profile.options(diagram));
     profile.arrange(graph.shapes, result.nodes());
     graph.spanBars(profile, result);
@@ -75,6 +76,7 @@ public final class VpGraphLayout {
     if (profile.routesAll()) {
       // the layered layout only decides where the shapes go; the router draws every connector
       graph.place(profile, result, summary);
+      graph.attach(profile);
       routes = new LinkedHashMap<>();
       graph.reroute(profile, routes, new ArrayList<>(graph.edgeOrder));
     } else {
@@ -104,10 +106,12 @@ public final class VpGraphLayout {
     if (graph.shapes.isEmpty()) {
       return summary;
     }
+    graph.holdSizes(diagram);
     graph.growSmallShapes();
     for (IShapeUIModel s : graph.shapes.values()) {
       profile.placed(s); // detached names follow the shapes where they stand now
     }
+    graph.attach(profile);
     graph.assignSides();
     List<OrthogonalRouter.Shape> shapes = graph.routerShapes(profile);
     List<OrthogonalRouter.Conn> conns = new ArrayList<>();
@@ -147,6 +151,7 @@ public final class VpGraphLayout {
     final Map<String, IShapeUIModel> shapes = new LinkedHashMap<>();
     final Map<String, LayoutProfile.NodeSpec> nodeSpecs = new HashMap<>();
     final Map<String, String> parents = new HashMap<>();
+    final Map<String, String> owners = new HashMap<>();
     final Map<String, int[]> size = new HashMap<>();
     final Map<String, IConnectorUIModel> connectors = new LinkedHashMap<>();
     final Map<String, LayoutProfile.EdgeSpec> edgeSpecs = new HashMap<>();
@@ -169,6 +174,11 @@ public final class VpGraphLayout {
                 : new int[] {Math.max(s.getWidth(), 10), Math.max(s.getHeight(), 10)});
       }
       for (IShapeUIModel s : new ArrayList<>(g.shapes.values())) {
+        IShapeUIModel owner = profile.attachedTo(s);
+        if (owner != null && g.shapes.containsKey(owner.getId())) {
+          g.owners.put(s.getId(), owner.getId()); // a port: placed on its owner's border later
+          continue;
+        }
         IShapeUIModel parent = profile.container(s);
         if (parent != null && g.shapes.containsKey(parent.getId())) {
           g.parents.put(s.getId(), parent.getId());
@@ -216,16 +226,58 @@ public final class VpGraphLayout {
           break;
         }
       }
+      removePad(result);
       return result;
+    }
+
+    /**
+     * A diagram that holds containers or ports stops fitting its shapes on its own: with the
+     * diagram's auto-fit on, Visual Paradigm shrinks every container around its children and puts
+     * every port back where it first drew it, as soon as this call is over, undoing the layout. The
+     * shapes stay fitted to their content because every tool fits them when it changes them.
+     */
+    void holdSizes(IDiagramUIModel diagram) {
+      if ((!parents.isEmpty() || !owners.isEmpty()) && diagram.isAutoFitShapesSize()) {
+        diagram.setAutoFitShapesSize(false);
+      }
+    }
+
+    /** The id of the shape that stands for {@code id} in the layered layout (a port: its owner). */
+    String end(String id) {
+      return owners.getOrDefault(id, id);
+    }
+
+    /** The shapes of the layered layout keep the room they reserved around themselves. */
+    private void removePad(ElkLayout.Result result) {
+      for (Map.Entry<String, LayoutProfile.NodeSpec> e : nodeSpecs.entrySet()) {
+        int[] pad = e.getValue().pad;
+        int[] r = result.nodes().get(e.getKey());
+        if (pad != null && r != null) {
+          result
+              .nodes()
+              .put(
+                  e.getKey(),
+                  new int[] {
+                    r[0] + pad[0], r[1] + pad[1], r[2] - pad[0] - pad[2], r[3] - pad[1] - pad[3]
+                  });
+        }
+      }
     }
 
     private ElkLayout.Result run() {
       List<ElkLayout.Node> nodes = new ArrayList<>();
       for (Map.Entry<String, IShapeUIModel> e : shapes.entrySet()) {
         String id = e.getKey();
+        if (owners.containsKey(id)) {
+          continue; // a port is no node: its connectors lead to its owner
+        }
         int[] sz = size.get(id);
         LayoutProfile.NodeSpec spec = nodeSpecs.get(id);
-        ElkLayout.Node node = new ElkLayout.Node(id, sz[0], sz[1]).layer(spec.layer).row(spec.row);
+        int[] pad = spec.pad == null ? new int[4] : spec.pad;
+        ElkLayout.Node node =
+            new ElkLayout.Node(id, sz[0] + pad[0] + pad[2], sz[1] + pad[1] + pad[3])
+                .layer(spec.layer)
+                .row(spec.row);
         if (parents.containsKey(id)) {
           node.in(parents.get(id));
         }
@@ -244,8 +296,11 @@ public final class VpGraphLayout {
         if (spec.deferred) {
           continue;
         }
-        String from = c.getFromShape().getId();
-        String to = c.getToShape().getId();
+        String from = end(c.getFromShape().getId());
+        String to = end(c.getToShape().getId());
+        if (from.equals(to) && !c.getFromShape().getId().equals(c.getToShape().getId())) {
+          continue; // a port to its own component: nothing to layer
+        }
         ElkLayout.Edge edge =
             spec.reverse ? new ElkLayout.Edge(id, to, from) : new ElkLayout.Edge(id, from, to);
         edge.priority(spec.priority);
@@ -278,8 +333,8 @@ public final class VpGraphLayout {
         }
         IConnectorUIModel c = connectors.get(id);
         boolean reverse = edgeSpecs.get(id).reverse;
-        String src = (reverse ? c.getToShape() : c.getFromShape()).getId();
-        String tgt = (reverse ? c.getFromShape() : c.getToShape()).getId();
+        String src = end((reverse ? c.getToShape() : c.getFromShape()).getId());
+        String tgt = end((reverse ? c.getFromShape() : c.getToShape()).getId());
         note(ends, src, route.get(0), result.nodes().get(src));
         note(ends, tgt, route.get(route.size() - 1), result.nodes().get(tgt));
       }
@@ -356,6 +411,9 @@ public final class VpGraphLayout {
     void place(LayoutProfile profile, ElkLayout.Result result, Summary summary) {
       for (Map.Entry<String, IShapeUIModel> e : shapes.entrySet()) {
         int[] r = result.nodes().get(e.getKey());
+        if (r == null) {
+          continue; // a port: attach() puts it on its owner
+        }
         IShapeUIModel s = e.getValue();
         s.setRequestFitSize(false);
         s.setRequestFitSizeFromCenter(false);
@@ -376,6 +434,13 @@ public final class VpGraphLayout {
           int[] hanging = profile.hanging(s);
           if (hanging != null) {
             obstacles.add(hanging);
+          }
+        } else {
+          // the title of a container (tab and name of a package) is no place for a label
+          int header = profile.headerHeight(s);
+          if (header > 0) {
+            int[] r = rect(s);
+            obstacles.add(new int[] {r[0], r[1], r[2], Math.min(header, r[3])});
           }
         }
       }
@@ -822,6 +887,68 @@ public final class VpGraphLayout {
           } else {
             spec.preferToSide = c.getValue();
           }
+        }
+      }
+    }
+
+    /**
+     * Put every port on the border of its owner: on the side its connectors lead away to, as near
+     * to the shape at the other end as the side allows. The connectors of a port then leave it
+     * outwards: their end side at the port is that side.
+     */
+    void attach(LayoutProfile profile) {
+      if (owners.isEmpty()) {
+        return;
+      }
+      Map<String, List<String>> byOwner = new LinkedHashMap<>();
+      for (String id : shapes.keySet()) {
+        if (owners.containsKey(id)) {
+          byOwner.computeIfAbsent(owners.get(id), k -> new ArrayList<>()).add(id);
+        }
+      }
+      Map<String, Integer> sides = new HashMap<>();
+      for (Map.Entry<String, List<String>> entry : byOwner.entrySet()) {
+        int[] owner = rect(shapes.get(entry.getKey()));
+        List<PortPlacer.Port> ports = new ArrayList<>();
+        for (String portId : entry.getValue()) {
+          IShapeUIModel port = shapes.get(portId);
+          double sx = 0;
+          double sy = 0;
+          int count = 0;
+          for (String edge : edgeOrder) {
+            String other = otherEnd(connectors.get(edge), portId);
+            if (other != null && !end(other).equals(entry.getKey())) {
+              int[] r = rect(shapes.get(end(other)));
+              sx += r[0] + r[2] / 2.0;
+              sy += r[1] + r[3] / 2.0;
+              count++;
+            }
+          }
+          int[] label = nodeSpecs.get(portId).outsideLabel;
+          int labelW = label == null ? 0 : label[0];
+          ports.add(
+              count == 0
+                  ? new PortPlacer.Port(port.getWidth(), port.getHeight(), labelW)
+                  : new PortPlacer.Port(
+                      port.getWidth(), port.getHeight(), labelW, sx / count, sy / count));
+        }
+        List<PortPlacer.Placed> placed = PortPlacer.place(owner, ports);
+        for (int i = 0; i < placed.size(); i++) {
+          IShapeUIModel port = shapes.get(entry.getValue().get(i));
+          int[] r = placed.get(i).rect();
+          port.setBounds(r[0], r[1], r[2], r[3]);
+          sides.put(port.getId(), placed.get(i).side());
+          profile.placedAttached(port, placed.get(i).side());
+        }
+      }
+      for (String id : edgeOrder) {
+        IConnectorUIModel c = connectors.get(id);
+        LayoutProfile.EdgeSpec spec = edgeSpecs.get(id);
+        if (sides.containsKey(c.getFromShape().getId())) {
+          spec.fromSide = sides.get(c.getFromShape().getId());
+        }
+        if (sides.containsKey(c.getToShape().getId())) {
+          spec.toSide = sides.get(c.getToShape().getId());
         }
       }
     }

@@ -3,10 +3,11 @@ package com.brunnen.vp.mcp.tools;
 import com.brunnen.vp.mcp.tool.Tool;
 import com.brunnen.vp.mcp.util.ComponentDiagramUtils;
 import com.brunnen.vp.mcp.util.ComponentDiagramUtils.Kind;
+import com.brunnen.vp.mcp.util.ComponentLayoutProfile;
 import com.brunnen.vp.mcp.util.DiagramUtils;
+import com.brunnen.vp.mcp.util.LayoutProfile;
 import com.vp.plugin.DiagramManager;
 import com.vp.plugin.diagram.IComponentDiagramUIModel;
-import com.vp.plugin.diagram.IConnectorUIModel;
 import com.vp.plugin.diagram.IDiagramElement;
 import com.vp.plugin.diagram.IDiagramTypeConstants;
 import com.vp.plugin.diagram.IDiagramUIModel;
@@ -42,11 +43,18 @@ import java.util.Set;
  * {@link IComponent} with the {@code interface} keyword drawn as a plain box. VP's lollipop shape
  * ({@code ComponentInterface}) is not rendered when it is created through the API.
  *
- * <p>Shapes are fitted to their text (VP fit-size); a component that contains nested components is
- * instead grown to enclose them, and its ports are kept on its left and right edges. Connectors are
- * anchored at shape centers because VP anchors them at the top-left corners otherwise.
+ * <p>Shapes are fitted to their text (VP fit-size); frames and components that hold nested
+ * components are containers sized around their contents. The diagram is laid out by the shared
+ * layered layout ({@link ComponentLayoutProfile}): shapes placed with x/y stay where they are,
+ * every connector is a horizontal or vertical line, a port stands on the border of its component on
+ * the side its lines lead away to.
  */
 public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
+
+  @Override
+  protected LayoutProfile layoutProfile(IDiagramUIModel diagram) {
+    return diagram instanceof IComponentDiagramUIModel ? new ComponentLayoutProfile() : null;
+  }
 
   /**
    * Keyword of an interface. Lower case: with VP's own "Interface" stereotype VP would pick its
@@ -91,12 +99,12 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               + " Paradigm itself and ignored; a component that already exists in the project is"
               + " reused and keeps its own stereotypes). parentComponent (a component"
               + " already on the diagram, \"\" = none) nests the new component inside it, in the"
-              + " model and on the diagram, and the parent grows to enclose it. packageName (a"
+              + " model and on the diagram, and the parent is sized around it. packageName (a"
               + " layer frame added with addComponentPackage, \"\" = none) puts it in that"
               + " package frame instead. x/y (>0) place the component explicitly in diagram"
-              + " coordinates, otherwise it is auto-placed on a grid (or in the container's next"
-              + " free slot); its first dependency or interface link then moves an auto-placed"
-              + " target next to its source. The box is fitted to its text")
+              + " coordinates and keep it there (the lines are routed around it), otherwise the"
+              + " layout decides: components in layers by their dependencies (the client above"
+              + " its supplier), inside their frame. The box is fitted to its text")
   public String addComponent(
       String diagramName,
       String componentName,
@@ -178,28 +186,12 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             showCaption(shape);
 
-            int[] pos =
-                parent != null
-                    ? childPosition(parent, shape, x, y)
-                    : topLevelPosition(diagram, shape, x, y);
-            shape.setBounds(pos[0], pos[1], shape.getWidth(), shape.getHeight());
             if (parent != null) {
-              shape.bringToFront(); // the parent was drawn first and would hide it otherwise
-              encloseUpwards(parent);
-              IShapeUIModel top = parent;
-              while (parentShapeOf(top) != null) {
-                top = parentShapeOf(top);
-              }
-              if (pushApart(top) > 0) {
-                recenterConnectors(diagram);
-              }
-              // Visual Paradigm fits a frame around its new child once this call is over: the
-              // size asked for is put back then
-              IShapeUIModel frame = parent;
-              afterVpSettles(() -> encloseUpwards(frame));
-            } else if (x <= 0 && y <= 0) {
-              autoPlaced.add(shape.getId());
+              nestChild(parent, shape, x, y);
+            } else {
+              placeNew(diagram, shape, x, y);
             }
+            relayout(diagram);
 
             StringBuilder result = new StringBuilder("Added component '").append(name).append("'");
             if (reused) {
@@ -231,7 +223,8 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               + " through the API). An interface of that name elsewhere in the project is reused."
               + " Connect it to components with addProvidedInterface (realization, hollow"
               + " triangle at the interface) / addRequiredInterface (<<use>> dependency). x/y"
-              + " (>0) place it explicitly, otherwise it is auto-placed on the grid")
+              + " (>0) place it explicitly, otherwise the layout puts it between the component"
+              + " that requires it and the one that provides it")
   public String addComponentInterface(String diagramName, String interfaceName, int x, int y) {
     try {
       return runOnEdt(
@@ -272,11 +265,8 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
                   .setShowOption(IComponentUIModel.SHOW_COMPONENT_OPTION_NONE);
             }
             showCaption(shape);
-            int[] pos = topLevelPosition(diagram, shape, x, y);
-            shape.setBounds(pos[0], pos[1], shape.getWidth(), shape.getHeight());
-            if (x <= 0 && y <= 0) {
-              autoPlaced.add(shape.getId());
-            }
+            placeNew(diagram, shape, x, y);
+            relayout(diagram);
 
             return "Added interface '"
                 + name
@@ -313,13 +303,12 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             IShapeUIModel source = ends[0];
             IShapeUIModel target = ends[1];
 
-            moveNear(diagram, target, source);
             IRealization realization = getModelElementFactory().createRealization();
             // VP stores a realization supplier -> client (proven on class diagrams): the
             // interface is the "from" end, so the realization ends on the interface.
             realization.setFrom(target.getModelElement());
             realization.setTo(source.getModelElement());
-            IDiagramElement connector = connectCentered(diagram, realization, target, source);
+            IDiagramElement connector = connectAndLayout(diagram, realization, target, source);
             if (connector == null) {
               realization.delete();
               return "Error adding provided interface: Visual Paradigm could not draw the"
@@ -360,12 +349,11 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             IShapeUIModel source = ends[0];
             IShapeUIModel target = ends[1];
 
-            moveNear(diagram, target, source);
             String drawnAs = "usage";
             IUsage usage = getModelElementFactory().createUsage();
             usage.setFrom(source.getModelElement());
             usage.setTo(target.getModelElement());
-            IDiagramElement connector = connectCentered(diagram, usage, source, target);
+            IDiagramElement connector = connectAndLayout(diagram, usage, source, target);
             if (connector == null) {
               // Component diagrams do not list the Usage connector type; a dependency stereotyped
               // <<use>> is the same UML relationship.
@@ -374,7 +362,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               dependency.setFrom(source.getModelElement());
               dependency.setTo(target.getModelElement());
               dependency.addStereotype(USE_STEREOTYPE);
-              connector = connectCentered(diagram, dependency, source, target);
+              connector = connectAndLayout(diagram, dependency, source, target);
               if (connector == null) {
                 dependency.delete();
                 return "Error adding required interface: Visual Paradigm could not draw the"
@@ -402,10 +390,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       description =
           "Add a dependency (dashed arrow) between two components, interfaces or ports of a"
               + " component diagram. stereotype is optional (\"\" = none, e.g. \"use\", \"call\";"
-              + " several may be comma-separated) and shown as <<stereotype>> on the arrow."
-              + " Components added without x/y or a frame are auto-placed in a grid: for a"
-              + " crowded diagram call autoLayoutDiagram once everything is added (orthogonal"
-              + " layout), or place the components with x/y")
+              + " several may be comma-separated) and shown as <<stereotype>> on the arrow. Every"
+              + " line is horizontal or vertical; the diagram is laid out again after each"
+              + " dependency (autoLayoutDiagram does it on demand)")
   public String addComponentDependency(
       String diagramName, String fromComponent, String toComponent, String stereotype) {
     try {
@@ -441,7 +428,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               return "fromComponent and toComponent must be different elements";
             }
 
-            moveNear(diagram, to, from);
             List<String> stereotypes = ComponentDiagramUtils.parseStereotypes(stereotype);
             IDependency dependency = getModelElementFactory().createDependency();
             dependency.setFrom(from.getModelElement());
@@ -449,7 +435,7 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             for (String s : stereotypes) {
               dependency.addStereotype(s);
             }
-            IDiagramElement connector = connectCentered(diagram, dependency, from, to);
+            IDiagramElement connector = connectAndLayout(diagram, dependency, from, to);
             if (connector == null) {
               dependency.delete();
               return "Error adding dependency: Visual Paradigm could not draw the dependency";
@@ -472,9 +458,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   @Tool(
       name = "addPort",
       description =
-          "Add a port (small square on the border) to a component of a component diagram. Ports"
-              + " alternate between the component's left and right edges, top to bottom; the"
-              + " component grows when they do not fit. A port can then provide or require"
+          "Add a port (small square on the border) to a component of a component diagram. The"
+              + " layout puts a port on the side of its component its lines lead away to (its"
+              + " name outside), and the lines leave it outwards. A port can provide or require"
               + " interfaces (addProvidedInterface / addRequiredInterface with the port name)")
   public String addPort(String diagramName, String componentName, String portName) {
     try {
@@ -527,19 +513,8 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
                 ComponentDiagramUtils.symbolSize(
                     portShape.getWidth(), portShape.getHeight(), PORT_SIZE, PORT_MAX);
             portShape.setBounds(portShape.getX(), portShape.getY(), size[0], size[1]);
-            snapPorts(owner);
-            // a port's name is a detached label laid out where the caption was last reset, so
-            // reset the captions of all the owner's ports now that they sit on its edges
-            for (IShapeUIModel p : portsOf(owner)) {
-              p.resetCaption();
-              placePortCaption(owner, p);
-            }
             portShape.bringToFront();
-            makeRoomForPorts(owner);
-            IShapeUIModel up = parentShapeOf(owner);
-            if (up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE)) {
-              encloseUpwards(up); // the owner may have grown to fit its ports
-            }
+            relayout(diagram);
 
             return "Added port '"
                 + name
@@ -555,147 +530,17 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     }
   }
 
-  /** Free space kept between a port's name and the neighbouring component. */
-  private static final int PORT_CLEARANCE = 30;
-
-  /**
-   * How far the names of a component's ports reach outside its left and right edges: {left, right},
-   * 0 when no port sits there.
-   */
-  private static int[] portExtents(IShapeUIModel component) {
-    int left = 0;
-    int right = 0;
-    int edge = component.getX() + component.getWidth();
-    for (IShapeUIModel port : portsOf(component)) {
-      com.vp.plugin.diagram.ICaptionUIModel cap = port.getCaptionUIModel();
-      int nameWidth = cap != null && cap.getWidth() > 0 ? cap.getWidth() : 0;
-      boolean leftSide =
-          port.getX() + port.getWidth() / 2 < component.getX() + component.getWidth() / 2;
-      if (leftSide) {
-        left = Math.max(left, component.getX() - (port.getX() - nameWidth - 3));
-      } else {
-        right = Math.max(right, port.getX() + port.getWidth() + 3 + nameWidth - edge);
-      }
-    }
-    return new int[] {left, right};
-  }
-
-  /**
-   * A port sits on the border of its component and its name is drawn outside it: the neighbours on
-   * that side move away until the names of both components' ports fit between the two boxes (a name
-   * that is clipped by the next box, or that runs into the name of the neighbour's port, is
-   * unreadable).
-   */
-  private void makeRoomForPorts(IShapeUIModel owner) {
-    int right = owner.getX() + owner.getWidth();
-    int[] own = portExtents(owner);
-    int needLeft = own[0];
-    IDiagramUIModel diagram = owner.getDiagramUIModel();
-    IShapeUIModel rightNeighbour = null;
-    IShapeUIModel leftNeighbour = null;
-    for (IShapeUIModel other : allShapes(diagram)) {
-      if (sameShape(other, owner)
-          || !hasSize(other)
-          || kindOf(other) == Kind.PORT
-          || kindOf(other) == Kind.PACKAGE
-          || !sameParentShape(other, owner)
-          || other.getY() >= owner.getY() + owner.getHeight()
-          || owner.getY() >= other.getY() + other.getHeight()) {
-        continue;
-      }
-      if (other.getX() >= right - 2
-          && (rightNeighbour == null || other.getX() < rightNeighbour.getX())) {
-        rightNeighbour = other;
-      } else if (other.getX() + other.getWidth() <= owner.getX() + 2
-          && (leftNeighbour == null
-              || other.getX() + other.getWidth()
-                  > leftNeighbour.getX() + leftNeighbour.getWidth())) {
-        leftNeighbour = other;
-      }
-    }
-    IShapeUIModel frame = parentShapeOf(owner);
-    if (leftNeighbour == null && needLeft > 0 && frame != null) {
-      // the first component of a frame: its left port's name must stay inside the frame, so the
-      // components move right (the frame grows on the right afterwards)
-      int captionLeft = owner.getX() - needLeft;
-      int shift = frame.getX() + 8 - captionLeft;
-      if (shift > 0) {
-        for (IShapeUIModel child : childrenOf(frame)) {
-          if (kindOf(child) != Kind.PORT) {
-            moveShapeTree(child, shift, 0);
-          }
-        }
-        for (IShapeUIModel child : childrenOf(frame)) {
-          recenterTree(child);
-        }
-      }
-    }
-    if (rightNeighbour != null && (own[1] > 0 || portExtents(rightNeighbour)[0] > 0)) {
-      // the names of the ports on the facing edges both have to fit between the two boxes
-      makeRoomBetween(
-          owner, rightNeighbour, own[1] + portExtents(rightNeighbour)[0] + PORT_CLEARANCE, 0);
-    }
-    if (leftNeighbour != null && (needLeft > 0 || portExtents(leftNeighbour)[1] > 0)) {
-      makeRoomBetween(
-          leftNeighbour, owner, portExtents(leftNeighbour)[1] + needLeft + PORT_CLEARANCE, 0);
-    }
-    for (IShapeUIModel s : allShapes(diagram)) {
-      if (kindOf(s) == Kind.COMPONENT) {
-        for (IShapeUIModel port : portsOf(s)) {
-          port.resetCaption();
-          placePortCaption(s, port);
-        }
-      }
-    }
-  }
-
-  private static boolean sameParentShape(IShapeUIModel a, IShapeUIModel b) {
-    IShapeUIModel pa = parentShapeOf(a);
-    IShapeUIModel pb = parentShapeOf(b);
-    return pa == null ? pb == null : pb != null && sameShape(pa, pb);
-  }
-
-  @Override
-  protected String moveOwnShape(
-      IDiagramUIModel diagram,
-      IDiagramElement de,
-      String name,
-      int x,
-      int y,
-      int width,
-      int height) {
-    if (!(diagram instanceof IComponentDiagramUIModel)
-        || !(de instanceof IShapeUIModel)
-        || kindOf(de) == Kind.PORT) {
-      return null;
-    }
-    // a component takes its nested components and ports along; its ports sit on its new edges
-    IShapeUIModel shape = (IShapeUIModel) de;
-    String note = applyBounds(shape, x, y, width, height);
-    snapPorts(shape);
-    for (IShapeUIModel port : portsOf(shape)) {
-      port.resetCaption();
-      placePortCaption(shape, port);
-    }
-    IShapeUIModel up = parentShapeOf(shape);
-    if (up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE)) {
-      encloseUpwards(up); // a shape moved or grown out of its frame pulls the frame along
-    }
-    recenterTree(shape);
-    return boundsResult(name, shape) + note;
-  }
-
   @Tool(
       name = "addComponentPackage",
       description =
           "Add a package (layer) frame to a component diagram, e.g. \"Presentation Layer\","
               + " \"Data Layer\". Components added with packageName go inside it and the frame"
-              + " grows to enclose them. parentPackage (\"\" = none) nests it in another package"
-              + " frame. x/y (>0) place it explicitly, otherwise it is stacked below the previous"
-              + " layer frames (so dependencies between layers run downwards); width/height (>0)"
-              + " are minimum sizes (the frame still grows around its components), otherwise it"
-              + " starts at 200x100. A package of that name already in the project (same owner)"
-              + " is reused")
+              + " is sized around them. parentPackage (\"\" = none) nests it in another package"
+              + " frame. x/y (>0) place it explicitly and keep it there, otherwise the layout"
+              + " stacks the frames by the dependencies between their components (a layer above"
+              + " the layers it depends on); width/height (>0) size an explicitly placed frame"
+              + " (it still grows around its components). A package of that name already in the"
+              + " project (same owner) is reused")
   public String addComponentPackage(
       String diagramName,
       String packageName,
@@ -745,19 +590,16 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             int w = width > 0 ? width : Math.max(PACKAGE_MIN_WIDTH, shape.getWidth());
             int h = height > 0 ? height : Math.max(PACKAGE_MIN_HEIGHT, shape.getHeight());
             shape.setBounds(shape.getX(), shape.getY(), w, h);
-            int[] pos =
-                parent != null
-                    ? childPosition(parent, shape, x, y)
-                    : topLevelPosition(diagram, shape, x, y);
-            shape.setBounds(pos[0], pos[1], w, h);
-            keepSize(shape);
-            shape.sendToBack();
             if (width > 0 || height > 0) {
-              minimumSize.put(shape.getId(), new int[] {w, h});
+              holdFit(diagram, shape); // the size asked for stays
             }
             if (parent != null) {
-              encloseUpwards(parent);
+              nestChild(parent, shape, x, y);
+            } else {
+              placeNew(diagram, shape, x, y);
             }
+            shape.sendToBack();
+            relayout(diagram);
             return "Added package '"
                 + name
                 + "'"
@@ -776,121 +618,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int PACKAGE_MIN_WIDTH = 200;
 
   private static final int PACKAGE_MIN_HEIGHT = 100;
-
-  /** Width and height asked for with addComponentPackage, by shape id: frames never get smaller. */
-  private final java.util.Map<String, int[]> minimumSize = new java.util.HashMap<>();
-
-  /** Ids of top-level shapes placed automatically, which their first connection may move. */
-  private final Set<String> autoPlaced = new HashSet<>();
-
-  /**
-   * Move an auto-placed top-level shape that gets its first connection next to the other end: below
-   * it, else right, left or above of it, else further along the rows below it, at the first spot
-   * clear of every other top-level shape and of the lines already drawn, from which its own line
-   * crosses no shape. Shapes placed with x/y, nested ones and already connected ones stay put.
-   */
-  private void moveNear(IDiagramUIModel diagram, IShapeUIModel shape, IShapeUIModel anchor) {
-    if (!autoPlaced.contains(shape.getId())
-        || parentShapeOf(shape) != null
-        || hasConnections(shape)) {
-      return;
-    }
-    IShapeUIModel host = anchor;
-    while (parentShapeOf(host) != null) {
-      host = parentShapeOf(host); // next to the top-level frame holding the anchor
-    }
-    int w = shape.getWidth();
-    int h = shape.getHeight();
-    int gap = 60;
-    int centerX = host.getX() + (host.getWidth() - w) / 2;
-    int below = host.getY() + host.getHeight() + gap;
-    List<int[]> spots = new ArrayList<>();
-    spots.add(new int[] {centerX, below});
-    spots.add(
-        new int[] {host.getX() + host.getWidth() + gap, host.getY() + (host.getHeight() - h) / 2});
-    spots.add(new int[] {host.getX() - gap - w, host.getY() + (host.getHeight() - h) / 2});
-    spots.add(new int[] {centerX, host.getY() - gap - h});
-    // the rows below it, nearest first: left and right of the center, then one row lower
-    for (int row = 0; row < 3; row++) {
-      for (int step = 1; step <= 3; step++) {
-        int y = below + row * (h + gap);
-        spots.add(new int[] {centerX - step * (w + gap), y});
-        spots.add(new int[] {centerX + step * (w + gap), y});
-      }
-      if (row < 2) {
-        spots.add(new int[] {centerX, below + (row + 1) * (h + gap)});
-      }
-    }
-    // lines already drawn: the shape must not land on one of them
-    List<int[]> segments = new ArrayList<>();
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (de instanceof IConnectorUIModel) {
-        java.awt.Point[] pts = ((IConnectorUIModel) de).getPoints();
-        for (int i = 0; pts != null && i + 1 < pts.length; i++) {
-          segments.add(new int[] {pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y});
-        }
-      }
-    }
-    int anchorX = anchor.getX() + anchor.getWidth() / 2;
-    int anchorY = anchor.getY() + anchor.getHeight() / 2;
-    for (int[] spot : spots) {
-      if (spot[0] < 10 || spot[1] < 10) {
-        continue;
-      }
-      int[] candidate = {spot[0], spot[1], w, h};
-      boolean free = true;
-      for (IShapeUIModel other : allShapes(diagram)) {
-        if (sameShape(other, shape)
-            || parentShapeOf(other) != null
-            || !hasSize(other)
-            || (autoPlaced.contains(other.getId()) && !hasConnections(other))) {
-          // auto-placed shapes still waiting for their first connection move later
-          continue;
-        }
-        if (ComponentDiagramUtils.overlaps(candidate, rect(other), 30)
-            || (!sameShape(other, host)
-                && DiagramUtils.segmentHitsRect(
-                    anchorX, anchorY, spot[0] + w / 2.0, spot[1] + h / 2.0, rect(other), 5))) {
-          // on top of (or too close to) another shape, or its line would cross one
-          free = false;
-          break;
-        }
-      }
-      for (int i = 0; free && i < segments.size(); i++) {
-        int[] g = segments.get(i);
-        if (DiagramUtils.segmentHitsRect(g[0], g[1], g[2], g[3], candidate, 10)) {
-          free = false;
-        }
-      }
-      if (free) {
-        shape.setBounds(spot[0], spot[1], w, h);
-        autoPlaced.remove(shape.getId());
-        return;
-      }
-    }
-  }
-
-  private static boolean hasConnections(IShapeUIModel shape) {
-    IDiagramElement[] none = new IDiagramElement[0];
-    IDiagramElement[] from = shape.toFromConnectorArray();
-    IDiagramElement[] to = shape.toToConnectorArray();
-    return (from != null ? from : none).length + (to != null ? to : none).length > 0;
-  }
-
-  /**
-   * Put a port's name outside its component: left of a port on the left edge, right of one on the
-   * right edge (VP draws it under the square, across the component's border).
-   */
-  private static void placePortCaption(IShapeUIModel owner, IShapeUIModel port) {
-    com.vp.plugin.diagram.ICaptionUIModel caption = port.getCaptionUIModel();
-    if (caption == null || caption.getWidth() <= 0) {
-      return;
-    }
-    boolean left = port.getX() + port.getWidth() / 2 < owner.getX() + owner.getWidth() / 2;
-    int capX = left ? port.getX() - caption.getWidth() - 3 : port.getX() + port.getWidth() + 3;
-    int capY = port.getY() - caption.getHeight() - 1;
-    caption.setBounds(capX, capY, caption.getWidth(), caption.getHeight());
-  }
 
   /** The component called {@code name} owned by {@code owner} (the project root when null). */
   private static IComponent ownedComponent(IModelElement owner, String name) {
@@ -1086,14 +813,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
     return result;
   }
 
-  private void recenterConnectors(IDiagramUIModel diagram) {
-    for (IDiagramElement de : getDiagramElementsList(diagram)) {
-      if (de instanceof IConnectorUIModel) {
-        centerConnector((IConnectorUIModel) de);
-      }
-    }
-  }
-
   /** Port shapes drawn on a component, in creation order. */
   private static List<IShapeUIModel> portsOf(IShapeUIModel component) {
     List<IShapeUIModel> ports = new ArrayList<>();
@@ -1103,128 +822,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return ports;
-  }
-
-  /** Rectangles of the components/interfaces nested in a shape (ports excluded). */
-  private static List<int[]> nestedRects(IShapeUIModel parent, IShapeUIModel except) {
-    List<int[]> rects = new ArrayList<>();
-    for (IShapeUIModel child : childrenOf(parent)) {
-      if (child.getModelElement() != null
-          && kindOf(child) != Kind.PORT
-          && hasSize(child)
-          && !sameShape(child, except)) {
-        rects.add(rect(child));
-      }
-    }
-    return rects;
-  }
-
-  private static IShapeUIModel parentShapeOf(IShapeUIModel shape) {
-    IDiagramElement parent = shape.getParent();
-    return parent instanceof IShapeUIModel ? (IShapeUIModel) parent : null;
-  }
-
-  // --- Placement helpers ---
-
-  /** Explicit x/y when given, else the first free cell of the diagram's grid. */
-  private static int[] topLevelPosition(
-      IDiagramUIModel diagram, IShapeUIModel shape, int x, int y) {
-    if (x > 0 || y > 0) {
-      return new int[] {Math.max(x, 0), Math.max(y, 0)};
-    }
-    List<int[]> occupied = new ArrayList<>();
-    int stackX = -1;
-    for (IShapeUIModel other : allShapes(diagram)) {
-      if (!sameShape(other, shape) && parentShapeOf(other) == null && hasSize(other)) {
-        occupied.add(rect(other));
-        if (kindOf(other) == Kind.PACKAGE && (stackX < 0 || other.getX() < stackX)) {
-          stackX = other.getX();
-        }
-      }
-    }
-    if (kindOf(shape) == Kind.PACKAGE && stackX >= 0) {
-      // layers are stacked: each new frame goes below the previous ones, so dependencies between
-      // layers run downwards (a row of frames would make them arch over each other)
-      return DiagramUtils.firstFreeSpot(
-          occupied,
-          stackX,
-          ComponentDiagramUtils.GRID_Y0,
-          shape.getWidth(),
-          shape.getHeight(),
-          stackX + shape.getWidth() + 1,
-          LAYER_GAP);
-    }
-    return ComponentDiagramUtils.firstFreeCell(occupied, shape.getWidth(), shape.getHeight());
-  }
-
-  /** Free space between stacked layer frames: room for the dependencies and their labels. */
-  private static final int LAYER_GAP = 70;
-
-  /** Explicit x/y when given, else the parent's next free child slot. */
-  private static int[] childPosition(IShapeUIModel parent, IShapeUIModel shape, int x, int y) {
-    if (x > 0 || y > 0) {
-      return new int[] {Math.max(x, 0), Math.max(y, 0)};
-    }
-    // components of a component are the parts that call each other: far enough apart for the
-    // arrow between two of them to show its label
-    int gap =
-        kindOf(parent) == Kind.COMPONENT
-            ? NESTED_COMPONENT_GAP
-            : ComponentDiagramUtils.CHILD_PADDING;
-    return ComponentDiagramUtils.nextChildPosition(rect(parent), nestedRects(parent, shape), gap);
-  }
-
-  /** Free space between components nested in a component. */
-  private static final int NESTED_COMPONENT_GAP = 90;
-
-  /**
-   * Grow a component (and each enclosing component above it) so it encloses its nested components,
-   * then put its ports back on its edges. Containers are sized to their children, not fitted to
-   * their label.
-   */
-  private void encloseUpwards(IShapeUIModel start) {
-    Set<String> seen = new HashSet<>();
-    IShapeUIModel current = start;
-    while (current != null && seen.add(current.getId())) {
-      int[] r = ComponentDiagramUtils.encloseChildren(rect(current), nestedRects(current, null));
-      // a size asked for is a minimum: Visual Paradigm shrinks a frame around its children
-      int[] minimum = minimumSize.get(current.getId());
-      if (minimum != null) {
-        r[2] = Math.max(r[2], minimum[0]);
-        r[3] = Math.max(r[3], minimum[1]);
-      }
-      current.setBounds(r[0], r[1], r[2], r[3]);
-      keepSize(current);
-      snapPorts(current);
-      IShapeUIModel up = parentShapeOf(current);
-      current =
-          up != null && (kindOf(up) == Kind.COMPONENT || kindOf(up) == Kind.PACKAGE) ? up : null;
-    }
-  }
-
-  /** Lay a component's ports out on its left/right edges, growing it when they do not fit. */
-  private static void snapPorts(IShapeUIModel component) {
-    List<IShapeUIModel> ports = portsOf(component);
-    if (ports.isEmpty()) {
-      return;
-    }
-    int needed = ComponentDiagramUtils.minHeightForPorts(ports.size(), PORT_SIZE);
-    if (component.getHeight() < needed) {
-      component.setBounds(component.getX(), component.getY(), component.getWidth(), needed);
-    }
-    int[] box = rect(component);
-    for (int i = 0; i < ports.size(); i++) {
-      IShapeUIModel port = ports.get(i);
-      int[] slot = ComponentDiagramUtils.portPosition(box, i, PORT_SIZE);
-      int w = port.getWidth() > 0 ? port.getWidth() : PORT_SIZE;
-      int h = port.getHeight() > 0 ? port.getHeight() : PORT_SIZE;
-      // Center the actual square on the slot so odd sizes still straddle the edge.
-      port.setBounds(slot[0] + (PORT_SIZE - w) / 2, slot[1] + (PORT_SIZE - h) / 2, w, h);
-    }
-  }
-
-  private static boolean hasSize(IShapeUIModel shape) {
-    return shape.getWidth() > 0 && shape.getHeight() > 0;
   }
 
   private static String bounds(IDiagramElement de) {

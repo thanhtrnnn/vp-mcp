@@ -1,7 +1,5 @@
 package com.brunnen.vp.mcp.util;
 
-import java.awt.Point;
-import java.awt.Rectangle;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -9,16 +7,10 @@ import java.util.regex.Pattern;
 
 /**
  * Pure helpers for flowcharts and data flow diagrams: kind/notation parsing, DFD modelling rules,
- * ID numbering, label normalization and grid placement. No Visual Paradigm API calls, so every
- * method is unit-testable without a running VP.
+ * ID numbering and label normalization. No Visual Paradigm API calls, so every method is
+ * unit-testable without a running VP.
  */
 public final class FlowchartDfdUtils {
-
-  /** Smallest distance kept between an auto-placed shape and the diagram's top/left edge. */
-  public static final int MIN_MARGIN = 10;
-
-  /** Upper bound on grid cells scanned for a free slot; far more than any readable diagram. */
-  private static final int MAX_CELLS_SCANNED = 1000;
 
   /**
    * Splits an ID into a prefix and its trailing number: {@code D3 -> D, 3}, {@code 1.2 -> 1., 2}.
@@ -387,105 +379,6 @@ public final class FlowchartDfdUtils {
     return label.startsWith("[") && label.endsWith("]") ? " " + label : " [" + label + "]";
   }
 
-  /** A grid of equally sized cells filled column by column, top to bottom. */
-  public static final class Grid {
-    private final int originCenterX;
-    private final int originCenterY;
-    private final int cellWidth;
-    private final int cellHeight;
-    private final int rowsPerColumn;
-
-    /**
-     * Create a grid.
-     *
-     * @param originCenterX x of the first cell's center
-     * @param originCenterY y of the first cell's center
-     * @param cellWidth horizontal distance between column centers
-     * @param cellHeight vertical distance between row centers
-     * @param rowsPerColumn rows before wrapping to the next column ({@code Integer.MAX_VALUE} for a
-     *     single column)
-     */
-    public Grid(
-        int originCenterX, int originCenterY, int cellWidth, int cellHeight, int rowsPerColumn) {
-      this.originCenterX = originCenterX;
-      this.originCenterY = originCenterY;
-      this.cellWidth = cellWidth;
-      this.cellHeight = cellHeight;
-      this.rowsPerColumn = Math.max(1, rowsPerColumn);
-    }
-
-    /**
-     * Center of the cell at a column-major index.
-     *
-     * @param index the cell index
-     * @return the cell center
-     */
-    public Point cellCenter(int index) {
-      int column = index / rowsPerColumn;
-      int row = index % rowsPerColumn;
-      return new Point(originCenterX + column * cellWidth, originCenterY + row * cellHeight);
-    }
-
-    /**
-     * Area of the cell at a column-major index, inset by {@link #MIN_MARGIN} so a shape that only
-     * touches a neighbouring cell's border does not block it.
-     *
-     * @param index the cell index
-     * @return the cell area
-     */
-    public Rectangle cellArea(int index) {
-      Point c = cellCenter(index);
-      return new Rectangle(
-          c.x - cellWidth / 2 + MIN_MARGIN,
-          c.y - cellHeight / 2 + MIN_MARGIN,
-          Math.max(1, cellWidth - 2 * MIN_MARGIN),
-          Math.max(1, cellHeight - 2 * MIN_MARGIN));
-    }
-  }
-
-  /**
-   * Find the first grid cell (column-major) whose area overlaps none of the occupied rectangles.
-   *
-   * @param grid the grid
-   * @param occupied the bounds of the shapes already on the diagram
-   * @return the center of the free cell
-   */
-  public static Point freeCellCenter(Grid grid, List<Rectangle> occupied) {
-    for (int i = 0; i < MAX_CELLS_SCANNED; i++) {
-      Rectangle area = grid.cellArea(i);
-      boolean free = true;
-      if (occupied != null) {
-        for (Rectangle r : occupied) {
-          if (r != null && r.intersects(area)) {
-            free = false;
-            break;
-          }
-        }
-      }
-      if (free) {
-        return grid.cellCenter(i);
-      }
-    }
-    return grid.cellCenter(MAX_CELLS_SCANNED);
-  }
-
-  /**
-   * Top-left corner of a shape: explicit x/y win when positive, otherwise the shape is centered on
-   * the auto-placement point (never closer than {@link #MIN_MARGIN} to the diagram edge).
-   *
-   * @param x the explicit x, or a value &lt;= 0 for auto placement
-   * @param y the explicit y, or a value &lt;= 0 for auto placement
-   * @param autoCenter the auto-placement center
-   * @param width the shape width
-   * @param height the shape height
-   * @return the top-left corner
-   */
-  public static Point placeShape(int x, int y, Point autoCenter, int width, int height) {
-    int px = x > 0 ? x : Math.max(MIN_MARGIN, autoCenter.x - width / 2);
-    int py = y > 0 ? y : Math.max(MIN_MARGIN, autoCenter.y - height / 2);
-    return new Point(px, py);
-  }
-
   private static long parseOrZero(String digits) {
     try {
       return Long.parseLong(digits);
@@ -523,42 +416,5 @@ public final class FlowchartDfdUtils {
       return t.substring(1);
     }
     return t;
-  }
-
-  /**
-   * Column layout of a data flow diagram: one column per role (entities, processes, stores; empty
-   * columns collapse), the elements of a column ordered by where the elements they exchange data
-   * with stand, and spread so linked elements face each other when they can.
-   *
-   * @param columns column of each element (0 left)
-   * @param widths width of each element
-   * @param heights height of each element
-   * @param edges pairs {a, b} of elements joined by a flow (indexes)
-   * @param colGap free space between columns (room for the flow labels)
-   * @param rowGap free space between the elements of a column
-   * @param originX left edge of the layout
-   * @param originY top edge of the layout
-   * @return the top-left corner {x, y} of each element
-   */
-  public static int[][] columnLayout(
-      int[] columns,
-      int[] widths,
-      int[] heights,
-      int[][] edges,
-      int colGap,
-      int rowGap,
-      int originX,
-      int originY) {
-    // the same layering as a communication diagram, turned a quarter: columns are its rows
-    // the processes keep their order: entities and stores line up with the processes they feed
-    int[][] turned =
-        CommunicationDiagramUtils.layeredLayout(
-            columns, heights, widths, edges, rowGap, colGap, originY, originX, 1);
-    int[][] result = new int[turned.length][2];
-    for (int i = 0; i < turned.length; i++) {
-      result[i][0] = turned[i][1];
-      result[i][1] = turned[i][0];
-    }
-    return result;
   }
 }

@@ -237,4 +237,50 @@ public class OrthogonalRouterTest {
       }
     }
   }
+
+  @Test
+  public void aNameHangingOutsideAnEndShapeIsKeptClearOfEvenWhenItBlocksTheNearestLines() {
+    // a port on the east border of a component with its name beside it: the line leaves east and
+    // has to go round the name, there is no grid line beyond it unless the name adds its own
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(shape("owner", 475, 546, 130, 40));
+    shapes.add(
+        new OrthogonalRouter.Shape(
+            "port",
+            new int[] {599, 560, 12, 12},
+            null,
+            ShapeOutline.Kind.RECT,
+            new int[] {614, 545, 71, 14}));
+    shapes.add(shape("iface", 482, 378, 116, 40));
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    conns.add(new OrthogonalRouter.Conn("c", "iface", "port").sides(2, 1));
+    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
+    List<int[]> route = routes.get("c");
+    assertNotNull(route);
+    for (int i = 0; i + 1 < route.size(); i++) {
+      int[] a = route.get(i);
+      int[] b = route.get(i + 1);
+      assertTrue("segment " + i + " is horizontal or vertical", a[0] == b[0] || a[1] == b[1]);
+      assertFalse(
+          "no segment through the owner or the name",
+          LabelPlacer.intersects(
+                  new int[] {
+                    Math.min(a[0], b[0]),
+                    Math.min(a[1], b[1]),
+                    Math.abs(a[0] - b[0]) + 1,
+                    Math.abs(a[1] - b[1]) + 1
+                  },
+                  new int[] {475, 547, 130, 38})
+              || LabelPlacer.intersects(
+                  new int[] {
+                    Math.min(a[0], b[0]),
+                    Math.min(a[1], b[1]),
+                    Math.abs(a[0] - b[0]) + 1,
+                    Math.abs(a[1] - b[1]) + 1
+                  },
+                  new int[] {614, 546, 71, 12}));
+    }
+    int[] last = route.get(route.size() - 1);
+    assertEquals("ends on the east face of the port", 611, last[0]);
+  }
 }

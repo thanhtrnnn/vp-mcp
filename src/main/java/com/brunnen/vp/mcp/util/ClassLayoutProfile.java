@@ -119,6 +119,11 @@ public final class ClassLayoutProfile extends LayoutProfile {
   }
 
   @Override
+  public int headerHeight(IShapeUIModel container) {
+    return container.getModelElement() instanceof IPackage ? 44 : 0;
+  }
+
+  @Override
   public NodeSpec node(IShapeUIModel shape) {
     NodeSpec spec = new NodeSpec();
     if (shape.getModelElement() instanceof IPackage) {
