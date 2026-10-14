@@ -215,16 +215,26 @@ public final class PortPlacer {
     return vertical ? 2 * LABEL_HEIGHT + 4 : port.thickness + port.labelW + 24;
   }
 
-  /** Whether a side still has room for one more port next to those already on it. */
+  /**
+   * Whether a side still has room for one more port next to those already on it: the room the ports
+   * need, a pitch apart, with the margins at both corners (counted for the widest pitch, as the
+   * order along the side is not known yet).
+   */
   private static boolean room(
       int[] owner, List<Integer> placed, int side, List<Port> ports, Port added) {
+    if (placed.isEmpty()) {
+      return true;
+    }
     boolean vertical = side == 1 || side == 3;
     int length = vertical ? owner[3] : owner[2];
-    double need = added.length + 2.0 * CORNER;
+    double widest = added.length;
+    double pitch = pitch(side, added);
     for (int i : placed) {
-      need += Math.max(pitch(side, ports.get(i)), (ports.get(i).length + added.length) / 2.0 + 4);
+      widest = Math.max(widest, ports.get(i).length);
+      pitch = Math.max(pitch, pitch(side, ports.get(i)));
     }
-    return placed.isEmpty() || need <= length;
+    double need = 2.0 * CORNER + widest + pitch * placed.size();
+    return need <= length;
   }
 
   /** The coordinate along the side the port's connectors lead to (the middle without any). */

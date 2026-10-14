@@ -125,8 +125,8 @@ public final class ComponentLayoutProfile extends LayoutProfile {
 
   /**
    * Where the name of a port goes: above-left of a port on the west side and above-right of one on
-   * the east side (the line leaves the square at its middle, below the name), right of a port on
-   * the north or south side, outside the component.
+   * the east or north side (the line leaves the square at its middle, below the name), below-right
+   * of a port on the south side, outside the component.
    */
   private static int[] labelRect(IShapeUIModel port, int side) {
     int[] box = nameBox(port);
@@ -139,8 +139,6 @@ public final class ComponentLayoutProfile extends LayoutProfile {
         return new int[] {x - NAME_GAP - box[0], y - box[1] - 1, box[0], box[1]};
       case 2:
         return new int[] {x + w + NAME_GAP, y + h + 1, box[0], box[1]};
-      case 0:
-        return new int[] {x + w + NAME_GAP, y - box[1] - 1, box[0], box[1]};
       default:
         return new int[] {x + w + NAME_GAP, y - box[1] - 1, box[0], box[1]};
     }

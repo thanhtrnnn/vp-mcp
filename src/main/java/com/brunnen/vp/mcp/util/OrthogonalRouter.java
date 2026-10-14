@@ -216,6 +216,7 @@ public final class OrthogonalRouter {
     final List<Object[]> ports = new ArrayList<>(); // {shapeId, side, position}
     final int lane;
     boolean sharePorts;
+    boolean ignoreExtra;
 
     Context(List<Shape> list, int laneGap) {
       this.lane = laneGap;
@@ -300,6 +301,15 @@ public final class OrthogonalRouter {
           r = search(c, s, t, false, 3);
         }
         sharePorts = false;
+      }
+      if (r == null) {
+        // a name hanging outside a shape is a lesser evil than a line through a shape
+        ignoreExtra = true;
+        r = search(c, s, t, false, STUB - 2);
+        if (r == null) {
+          r = search(c, s, t, false, 3);
+        }
+        ignoreExtra = false;
       }
       return r != null ? r : direct(s, t);
     }
@@ -447,17 +457,17 @@ public final class OrthogonalRouter {
           }
         } else {
           hard.add(inflate(x.rect, inflation));
-          if (x.extra != null) {
+          if (x.extra != null && !ignoreExtra) {
             hard.add(inflate(x.extra, inflation));
           }
         }
       }
       hard.add(s.rect);
       hard.add(t.rect);
-      if (s.extra != null) {
+      if (s.extra != null && !ignoreExtra) {
         hard.add(s.extra);
       }
-      if (t.extra != null) {
+      if (t.extra != null && !ignoreExtra) {
         hard.add(t.extra);
       }
       // grid lines

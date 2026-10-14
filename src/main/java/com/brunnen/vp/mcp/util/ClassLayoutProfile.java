@@ -24,9 +24,15 @@ import java.awt.Rectangle;
  */
 public final class ClassLayoutProfile extends LayoutProfile {
 
+  /** Height of the band across the top of a package frame: the folder tab and the name. */
+  private static final int FRAME_HEADER = 44;
+
   @Override
   public ElkLayout.Options options(IDiagramUIModel diagram) {
-    return new ElkLayout.Options().direction(ElkLayout.Dir.DOWN).gaps(60, 90, 18).padding(44, 30);
+    return new ElkLayout.Options()
+        .direction(ElkLayout.Dir.DOWN)
+        .gaps(60, 90, 18)
+        .padding(FRAME_HEADER, 30);
   }
 
   @Override
@@ -120,7 +126,7 @@ public final class ClassLayoutProfile extends LayoutProfile {
 
   @Override
   public int headerHeight(IShapeUIModel container) {
-    return container.getModelElement() instanceof IPackage ? 44 : 0;
+    return container.getModelElement() instanceof IPackage ? FRAME_HEADER : 0;
   }
 
   @Override

@@ -108,4 +108,14 @@ public class PortPlacerTest {
     assertEquals("thin across the border", 12, east.rect()[2]);
     assertTrue("longer along the border", east.rect()[3] > 12);
   }
+
+  @Test
+  public void twoPortsWhoseNamesDoNotFitAlongOneSideDoNotShareIt() {
+    // both lead north; a 130 px side holds one name of 68 px with its pitch, not two
+    List<PortPlacer.Port> ports = new ArrayList<>();
+    ports.add(new PortPlacer.Port(12, 68, 2, 150, 20));
+    ports.add(new PortPlacer.Port(12, 68, 1, 170, 20));
+    List<PortPlacer.Placed> placed = PortPlacer.place(OWNER, ports);
+    assertTrue(placed.get(0).side() != placed.get(1).side());
+  }
 }

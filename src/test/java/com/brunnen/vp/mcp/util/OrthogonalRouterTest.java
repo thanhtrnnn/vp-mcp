@@ -283,4 +283,35 @@ public class OrthogonalRouterTest {
     int[] last = route.get(route.size() - 1);
     assertEquals("ends on the east face of the port", 611, last[0]);
   }
+
+  @Test
+  public void aNameThatBoxesInAnEndShapeNeverMakesTheLineGoThroughAShape() {
+    // the hanging rectangle of the first shape covers every way out: without the names the line
+    // goes round the wall, the straight fallback would run through it
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(
+        new OrthogonalRouter.Shape(
+            "a",
+            new int[] {50, 100, 100, 40},
+            null,
+            ShapeOutline.Kind.RECT,
+            new int[] {20, 60, 160, 120}));
+    shapes.add(shape("wall", 250, 60, 100, 140));
+    shapes.add(shape("b", 450, 100, 100, 40));
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    conns.add(new OrthogonalRouter.Conn("ab", "a", "b"));
+    List<int[]> route = OrthogonalRouter.route(shapes, conns).get("ab");
+    assertNotNull(route);
+    for (int i = 0; i + 1 < route.size(); i++) {
+      int[] p = route.get(i);
+      int[] q = route.get(i + 1);
+      assertTrue(p[0] == q[0] || p[1] == q[1]);
+      int[] box = {
+        Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1])
+      };
+      assertFalse(
+          "segment " + i + " must stay out of the wall",
+          box[0] < 350 && 250 < box[0] + box[2] && box[1] < 200 && 60 < box[1] + box[3]);
+    }
+  }
 }
