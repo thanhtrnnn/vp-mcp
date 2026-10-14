@@ -39,15 +39,31 @@ text, attachedTo, x, y)` (a comment box at the first free spot beside the shape 
 bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
 and matches the exact diagram type.
 
-Class, use case, state, activity, flowchart and communication diagrams are laid out by a layered,
-orthogonal layout (the Eclipse Layout Kernel that Visual Paradigm bundles in `lib02.jar` decides where
-the shapes go, an obstacle-aware router draws the lines): after every `add*` call the shapes, lines and
-labels are placed again, so every line is horizontal or vertical (right-angle elbows, rectangular
-loops), shapes never overlap, no line runs through a shape or on top of another line, and labels sit
-beside their lines. A shape placed with x/y (or moved with `setElementBounds`) is pinned: lines are
-routed around it. `autoLayoutDiagram` lays the whole diagram out again; `rerouteConnectors` routes the
-lines around the shapes where they stand. Deployment nodes, devices and execution environments are flat
-rectangles with their keyword and name.
+Every diagram type except sequence and BPMN is laid out by a layered, orthogonal layout (the Eclipse
+Layout Kernel that Visual Paradigm bundles in `lib02.jar` decides where the shapes go, an obstacle-aware
+router draws the lines): after every `add*` call the shapes, lines and labels are placed again, so every
+line is horizontal or vertical (right-angle elbows, rectangular loops), shapes never overlap, no line runs
+through a shape or on top of another line, and labels sit beside their lines. A shape placed with x/y (or
+moved with `setElementBounds`) is pinned: lines are routed around it. `autoLayoutDiagram` lays the whole
+diagram out again; `rerouteConnectors` routes the lines around the shapes where they stand. Deployment
+nodes, devices and execution environments are flat rectangles with their keyword and name. A diagram that
+holds containers (packages, nodes, nested components) or component ports no longer lets Visual Paradigm
+fit its shapes on its own (the diagram's auto-fit is switched off by the first layout): VP otherwise
+shrinks every frame around its children and puts every port back where it first drew it as soon as a call
+is over. The shapes stay fitted to their content because every tool fits them when it changes them.
+
+Structural diagrams: a **data flow diagram** (all four notations) runs from the external entities on the
+left through the processes to the data stores on the right, two opposite flows between a pair run side by
+side; an **ERD** puts the referenced tables left of the tables that hold their foreign keys; a **package
+diagram** draws frames around the packages and classes they hold and puts a package above the ones it
+depends on; an **object diagram** layers the objects by their links; a **component diagram** draws layer
+frames and nested components as containers around their components, puts the client above its supplier and
+the interface between the component that requires it and the one that provides it, and every **port**
+stands on the side of its component its lines lead away to (name outside, the line leaves outwards; a port
+that several lines end on is stretched along the border so every line has an end of its own); a
+**deployment diagram** lays the nodes out from the left to the right by their communication paths with the
+nested nodes, artifacts and components inside their node. A note stands in the container of the shape it
+explains.
 
 In an activity diagram the rows follow the flow and every node stands in the column of its lane (the lanes
 grow to hold their nodes); the branches of a decision leave from different vertices of its diamond, a merge
@@ -115,13 +131,13 @@ entities in rows; every message is an arrow beside its link, turned along the le
 - **addProvidedInterface(diagramName, componentName, interfaceName)**: Component provides an interface
 - **addRequiredInterface(diagramName, componentName, interfaceName)**: Component requires an interface
 - **addComponentDependency(diagramName, fromComponent, toComponent, stereotype)**: Add a dependency
-- **addPort(diagramName, componentName, portName)**: Add a port on a component's edge
+- **addPort(diagramName, componentName, portName)**: Add a port on a component's edge (the layout puts it on the side its lines lead away to; a dependency between a port and its own component is refused)
 
 ##### Deployment Diagram (7 tools)
 - **createDeploymentDiagram(diagramName)**: Create new deployment diagrams
 - **addDeploymentNode(diagramName, nodeName, kind, parentNode, x, y, width, height)**: Add node/device/executionEnvironment, optionally nested
 - **addDeploymentArtifact(diagramName, artifactName, nodeName, x, y)**: Add an artifact, optionally inside a node
-- **addDeploymentComponent(diagramName, componentName, nodeName, x, y)**: Add a component inside a node or an artifact (the components of one host go in a row)
+- **addDeploymentComponent(diagramName, componentName, nodeName, x, y)**: Add a component inside a node or an artifact (the components of one host follow their dependencies from left to right)
 - **addCommunicationPath(diagramName, fromNode, toNode, label)**: Connect two nodes
 - **addDeployDependency(diagramName, artifactName, nodeName)**: Add a <<deploy>> dependency
 - **addDeploymentDependency(diagramName, fromElement, toElement, label)**: Add a dashed dependency between components or artifacts

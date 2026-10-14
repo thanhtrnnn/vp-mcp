@@ -915,9 +915,14 @@ public final class VpGraphLayout {
           double sx = 0;
           double sy = 0;
           int count = 0;
+          int ends = 0;
           for (String edge : edgeOrder) {
             String other = otherEnd(connectors.get(edge), portId);
-            if (other != null && !end(other).equals(entry.getKey())) {
+            if (other == null) {
+              continue;
+            }
+            ends++;
+            if (!end(other).equals(entry.getKey())) {
               int[] r = rect(shapes.get(end(other)));
               sx += r[0] + r[2] / 2.0;
               sy += r[1] + r[3] / 2.0;
@@ -926,11 +931,11 @@ public final class VpGraphLayout {
           }
           int[] label = nodeSpecs.get(portId).outsideLabel;
           int labelW = label == null ? 0 : label[0];
+          int size = Math.min(port.getWidth(), port.getHeight());
           ports.add(
               count == 0
-                  ? new PortPlacer.Port(port.getWidth(), port.getHeight(), labelW)
-                  : new PortPlacer.Port(
-                      port.getWidth(), port.getHeight(), labelW, sx / count, sy / count));
+                  ? new PortPlacer.Port(size, labelW)
+                  : new PortPlacer.Port(size, labelW, ends, sx / count, sy / count));
         }
         List<PortPlacer.Placed> placed = PortPlacer.place(owner, ports);
         for (int i = 0; i < placed.size(); i++) {

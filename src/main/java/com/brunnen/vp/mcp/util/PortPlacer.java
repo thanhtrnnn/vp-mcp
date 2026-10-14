@@ -7,8 +7,10 @@ import java.util.List;
 /**
  * Puts the ports of a component on its border. A port stands on the side its connectors lead away
  * to (so the line leaves straight outwards), as near as it can to the coordinate of the shape at
- * the other end (so the line is straight when it can be), never closer to another port than a gap,
- * and on another side when its own is full. Pure geometry: rectangles are {x, y, w, h}.
+ * the other end (so the line is straight when it can be), never closer to another port than its
+ * name needs, and on another side when its own is full. A port that several lines end on is
+ * stretched along the border so that every line has an end of its own on its outer face. Pure
+ * geometry: rectangles are {x, y, w, h}.
  */
 public final class PortPlacer {
 
@@ -18,12 +20,18 @@ public final class PortPlacer {
   /** Height of the name of a port. */
   private static final int LABEL_HEIGHT = 14;
 
+  /** Distance between two line ends on one face of a port. */
+  private static final int END_GAP = 12;
+
+  /** Distance of the outermost line end from the end of the face. */
+  private static final int END_MARGIN = 8;
+
   private PortPlacer() {}
 
   /** A port to place. */
   public static final class Port {
-    final int w;
-    final int h;
+    final int thickness;
+    final int length;
     final int labelW;
     final double towardX;
     final double towardY;
@@ -32,35 +40,34 @@ public final class PortPlacer {
     /**
      * A port whose connectors lead to a place.
      *
-     * @param w width of the port's square
-     * @param h height of the port's square
+     * @param size side length of the port's square
      * @param labelW width of the port's name, which hangs outside next to the square
+     * @param ends number of lines that end on the port
      * @param towardX x of the shape at the other end of its connectors
      * @param towardY y of the shape at the other end of its connectors
      */
-    public Port(int w, int h, int labelW, double towardX, double towardY) {
-      this.w = w;
-      this.h = h;
-      this.labelW = labelW;
-      this.towardX = towardX;
-      this.towardY = towardY;
-      this.known = true;
+    public Port(int size, int labelW, int ends, double towardX, double towardY) {
+      this(size, labelW, ends, towardX, towardY, true);
     }
 
     /**
      * A port without connectors: it goes on a side with room, east first.
      *
-     * @param w width of the port's square
-     * @param h height of the port's square
+     * @param size side length of the port's square
      * @param labelW width of the port's name
      */
-    public Port(int w, int h, int labelW) {
-      this.w = w;
-      this.h = h;
+    public Port(int size, int labelW) {
+      this(size, labelW, 0, 0, 0, false);
+    }
+
+    private Port(int size, int labelW, int ends, double towardX, double towardY, boolean known) {
+      this.thickness = size;
+      // the face the lines end on is long enough for an end of its own for every line
+      this.length = ends <= 1 ? size : Math.max(size, 2 * END_MARGIN + END_GAP * (ends - 1));
       this.labelW = labelW;
-      this.towardX = 0;
-      this.towardY = 0;
-      this.known = false;
+      this.towardX = towardX;
+      this.towardY = towardY;
+      this.known = known;
     }
   }
 
@@ -84,7 +91,8 @@ public final class PortPlacer {
     }
 
     /**
-     * The port's square {x, y, w, h}: it straddles the border.
+     * The port's rectangle {x, y, w, h}: it straddles the border, longer along the border when
+     * several lines end on it.
      *
      * @return the rectangle
      */
@@ -120,7 +128,7 @@ public final class PortPlacer {
     for (int i : order) {
       int chosen = prefer[i][0];
       for (int candidate : prefer[i]) {
-        if (onSide.get(candidate).size() < capacity(owner, candidate, ports.get(i))) {
+        if (room(owner, onSide.get(candidate), candidate, ports, ports.get(i))) {
           chosen = candidate;
           break;
         }
@@ -131,65 +139,8 @@ public final class PortPlacer {
     int[][] rects = new int[n][];
     for (int s = 0; s < 4; s++) {
       List<Integer> list = onSide.get(s);
-      if (list.isEmpty()) {
-        continue;
-      }
-      boolean vertical = s == 1 || s == 3; // the side runs along y
-      int length = vertical ? owner[3] : owner[2];
-      int start = vertical ? owner[1] : owner[0];
-      // wanted centers along the side, sorted, then pushed apart
-      list.sort(
-          (a, b) ->
-              Double.compare(
-                  wanted(owner, ports.get(a), vertical), wanted(owner, ports.get(b), vertical)));
-      int count = list.size();
-      double[] center = new double[count];
-      int pitch = 0;
-      for (int k = 0; k < count; k++) {
-        Port p = ports.get(list.get(k));
-        pitch = Math.max(pitch, pitch(s, p));
-        center[k] = wanted(owner, p, vertical);
-      }
-      double lo = CORNER + (vertical ? ports.get(list.get(0)).h : ports.get(list.get(0)).w) / 2.0;
-      double hi = length - lo;
-      if (hi - lo < (count - 1) * (double) pitch) {
-        // more ports than the side can hold at their wish: spread them evenly
-        for (int k = 0; k < count; k++) {
-          center[k] = length * (k + 1.0) / (count + 1);
-        }
-      } else {
-        for (int k = 0; k < count; k++) {
-          center[k] = Math.max(center[k], lo);
-          if (k > 0) {
-            center[k] = Math.max(center[k], center[k - 1] + pitch);
-          }
-        }
-        for (int k = count - 1; k >= 0; k--) {
-          center[k] = Math.min(center[k], hi);
-          if (k < count - 1) {
-            center[k] = Math.min(center[k], center[k + 1] - pitch);
-          }
-        }
-      }
-      for (int k = 0; k < count; k++) {
-        Port p = ports.get(list.get(k));
-        int along = (int) Math.round(center[k]);
-        int x;
-        int y;
-        if (s == 0) {
-          x = start + along - p.w / 2;
-          y = owner[1] - p.h / 2;
-        } else if (s == 2) {
-          x = start + along - p.w / 2;
-          y = owner[1] + owner[3] - p.h / 2;
-        } else if (s == 1) {
-          x = owner[0] + owner[2] - p.w / 2;
-          y = start + along - p.h / 2;
-        } else {
-          x = owner[0] - p.w / 2;
-          y = start + along - p.h / 2;
-        }
-        rects[list.get(k)] = new int[] {x, y, p.w, p.h};
+      if (!list.isEmpty()) {
+        spread(owner, s, list, ports, rects);
       }
     }
     List<Placed> result = new ArrayList<>();
@@ -199,6 +150,61 @@ public final class PortPlacer {
     return result;
   }
 
+  /** Put the ports of one side along it: near their wish, apart from each other. */
+  private static void spread(
+      int[] owner, int side, List<Integer> list, List<Port> ports, int[][] rects) {
+    boolean vertical = side == 1 || side == 3; // the side runs along y
+    int length = vertical ? owner[3] : owner[2];
+    int start = vertical ? owner[1] : owner[0];
+    list.sort(
+        (a, b) ->
+            Double.compare(
+                wanted(owner, ports.get(a), vertical), wanted(owner, ports.get(b), vertical)));
+    int count = list.size();
+    double[] center = new double[count];
+    double[] pitch = new double[count]; // distance to the next port
+    double total = 0;
+    for (int k = 0; k < count; k++) {
+      Port p = ports.get(list.get(k));
+      center[k] = wanted(owner, p, vertical);
+      Port next = k + 1 < count ? ports.get(list.get(k + 1)) : p;
+      pitch[k] = Math.max(pitch(side, p), (p.length + next.length) / 2.0 + 4);
+      total += k + 1 < count ? pitch[k] : 0;
+    }
+    double lo = CORNER + ports.get(list.get(0)).length / 2.0;
+    double hi = length - CORNER - ports.get(list.get(count - 1)).length / 2.0;
+    if (hi - lo < total) {
+      // more ports than the side holds at their wish: spread them evenly
+      for (int k = 0; k < count; k++) {
+        center[k] = length * (k + 1.0) / (count + 1);
+      }
+    } else {
+      for (int k = 0; k < count; k++) {
+        center[k] = Math.max(center[k], k == 0 ? lo : center[k - 1] + pitch[k - 1]);
+      }
+      for (int k = count - 1; k >= 0; k--) {
+        center[k] = Math.min(center[k], k == count - 1 ? hi : center[k + 1] - pitch[k]);
+      }
+    }
+    for (int k = 0; k < count; k++) {
+      Port p = ports.get(list.get(k));
+      int along = (int) Math.round(center[k]);
+      int t = p.thickness;
+      int l = p.length;
+      int[] rect;
+      if (side == 0) {
+        rect = new int[] {start + along - l / 2, owner[1] - t / 2, l, t};
+      } else if (side == 2) {
+        rect = new int[] {start + along - l / 2, owner[1] + owner[3] - t / 2, l, t};
+      } else if (side == 1) {
+        rect = new int[] {owner[0] + owner[2] - t / 2, start + along - l / 2, t, l};
+      } else {
+        rect = new int[] {owner[0] - t / 2, start + along - l / 2, t, l};
+      }
+      rects[list.get(k)] = rect;
+    }
+  }
+
   /**
    * Distance between the centers of two ports on a side: the name of a port hangs above its square
    * (beside a vertical side) or to its right (along a horizontal side) and no line of the next port
@@ -206,15 +212,19 @@ public final class PortPlacer {
    */
   private static int pitch(int side, Port port) {
     boolean vertical = side == 1 || side == 3;
-    return vertical ? 2 * LABEL_HEIGHT + 4 : port.w + port.labelW + 24;
+    return vertical ? 2 * LABEL_HEIGHT + 4 : port.thickness + port.labelW + 24;
   }
 
-  /** How many ports a side holds. */
-  private static int capacity(int[] owner, int side, Port port) {
+  /** Whether a side still has room for one more port next to those already on it. */
+  private static boolean room(
+      int[] owner, List<Integer> placed, int side, List<Port> ports, Port added) {
     boolean vertical = side == 1 || side == 3;
     int length = vertical ? owner[3] : owner[2];
-    int size = vertical ? port.h : port.w;
-    return Math.max(1, (length - 2 * CORNER - size) / pitch(side, port) + 1);
+    double need = added.length + 2.0 * CORNER;
+    for (int i : placed) {
+      need += Math.max(pitch(side, ports.get(i)), (ports.get(i).length + added.length) / 2.0 + 4);
+    }
+    return placed.isEmpty() || need <= length;
   }
 
   /** The coordinate along the side the port's connectors lead to (the middle without any). */

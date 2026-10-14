@@ -314,7 +314,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               return "Error adding provided interface: Visual Paradigm could not draw the"
                   + " realization";
             }
-            connector.resetCaption();
 
             return "Added provided interface: '"
                 + componentName.trim()
@@ -370,7 +369,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               }
               drawnAs = "<<use>> dependency";
             }
-            connector.resetCaption();
 
             return "Added required interface: '"
                 + componentName.trim()
@@ -427,6 +425,14 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             if (sameShape(from, to)) {
               return "fromComponent and toComponent must be different elements";
             }
+            if (isOwnPort(from, to) || isOwnPort(to, from)) {
+              return "A port belongs to its component: a dependency between '"
+                  + fromName
+                  + "' and '"
+                  + toName
+                  + "' would run from the component to itself (a port connects to the outside, or"
+                  + " to a component nested in its owner)";
+            }
 
             List<String> stereotypes = ComponentDiagramUtils.parseStereotypes(stereotype);
             IDependency dependency = getModelElementFactory().createDependency();
@@ -440,7 +446,6 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               dependency.delete();
               return "Error adding dependency: Visual Paradigm could not draw the dependency";
             }
-            connector.resetCaption(); // the stereotype only renders after a caption reset
 
             String label = ComponentDiagramUtils.formatStereotypes(stereotypes);
             return "Added dependency from '"
@@ -822,6 +827,12 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       }
     }
     return ports;
+  }
+
+  /** Whether {@code port} is a port of the component {@code owner}. */
+  private static boolean isOwnPort(IShapeUIModel port, IShapeUIModel owner) {
+    IDiagramElement parent = port.getParent();
+    return kindOf(port) == Kind.PORT && parent != null && sameShape(parent, owner);
   }
 
   private static String bounds(IDiagramElement de) {
