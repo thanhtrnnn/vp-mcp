@@ -43,6 +43,427 @@ Replaced Spring Boot/Spring AI MCP stack with a custom lightweight MCP server us
   the laid-out use cases; it computes the use-case bounding box, reparents the use cases into an
   `ISystem`, and sends the rectangle to back. Actors stay outside the box.
 
+### Layout overhaul, step "core" (server version 1.32.5.x)
+
+The user rejected the round-4 PNGs (diagonal/zigzag lines, 3-D nodes, overlaps). Hard rules:
+A every connector segment is exactly horizontal or vertical, B no 3-D shapes, C no overlaps
+(shapes, lines on lines, lines through shapes, labels). Measured with
+`scratchpad/layout_check.py` (SLANT, OVERLAP, THROUGH, SHARED, LABEL defects; CROSS and LABELLINE
+metrics; it now also reads the multiplicity rectangles that `getDiagramGeometry` prints as
+`mult x,y wxh`).
+
+**Design (one pipeline, `util/` + `AbstractDiagramMcpTools`)**
+- ELK 0.8.1 is inside VP (`lib02.jar`). pom: system-scope dependency like openapi, excluded from the
+  assembly (VP provides it; proved live with a 3-node probe: the plugin sees it through the app
+  class loader). Java 8 bytecode, runs fine on VP's JRE 11 and on JDK 26 for the JUnit tests.
+- `ElkLayout` (pure): layered, ORTHOGONAL, INCLUDE_CHILDREN containers (the options must be set on
+  every container node too, otherwise the layer gap inside a container shrinks to ~20 px), fixed
+  node sizes, head/tail labels, FIRST/LAST layer constraints, actor names as outside bottom node
+  labels. Routes are snapped to exact H/V ints. Centre labels are NOT given to ELK (each one adds a
+  dummy layer and 3x the layer gap); the layer gap is raised to label width + 96 instead and
+  `LabelPlacer` puts them on the finished routes.
+- `RouteTidy` (pure): removes the 5-25 px jogs ELK leaves at connector ends by sliding the end along
+  its side (corner margin 8, port gap 12), drops collinear points.
+- `OrthogonalRouter` (pure): grid Dijkstra with port cost (bend 30, crossing 70, clash with a parallel segment
+  closer than 12 px 20000), stub of 16 px at every shape, ports every 12 px along the sides (aligned
+  with the other end), ends >= 12 px apart, shortest connector first, rectangular self loops, two
+  lanes for A->B and B->A, soft containers, side hints. Used for pinned shapes, setElementBounds,
+  rerouteConnectors, deferred connectors (actor generalization) and the deployment diagram.
+- `ShapeOutline`: stubs end ON the outline of an ellipse/diamond (the end slides inwards along its
+  own axis, so the line stays H/V).
+- `LabelPlacer` (pure): tail/head/centre labels beside their line (gap 3, 14, 26 px), cost: shape or
+  label 3, line 1; fallbacks past either end of a short leg and around the whole route.
+- `VpGraphLayout.layout/route` (VP side) + `LayoutProfile` per family (`ClassLayoutProfile`,
+  `UseCaseLayoutProfile`, `DeploymentLayoutProfile`). A profile says which shapes are nodes and
+  containers, how each connector points (reverse, priority, deferred, sides), its labels and where
+  they are written (multiplicity rectangles of an association, captions), what hangs outside a shape.
+- `AbstractDiagramMcpTools`: `layoutProfile` hook, `relayout(diagram)` (full ELK layout of a diagram
+  the tools created and that has no pinned shape, otherwise route-only), `pin`, `placeNew`,
+  `connectShapes`, `profileOf`; `connectCentered` now routes through `relayout` when the family has
+  a profile (other families still use the old centering until their step). `autoLayoutDiagram` runs
+  the layered layout for every family with a profile and releases all pins; a failing ELK run falls
+  back to route-only.
+- Class: generalization/realization decide the layers (priority 10) and leave the bottom of the
+  general class for the top of the specialization (soft side preference in the router); an association
+  keeps its declared direction (the class it is drawn from stands above: JSP above DAO above entity,
+  whole above part; a level based reversal was tried and dropped because it put the JSPs below
+  the DAOs of the design class diagram); dependencies point downwards; notes are placed after their
+  target. Use case: DIRECTION RIGHT, actors FIRST layer in one column, use cases are the
+  children of the system boundary (also as VP children, `addChild`), include/extend labels beside
+  the line, actor generalization is a deferred connector routed as a bracket left of the actor column
+  (both ends on the west sides; ELK would otherwise spread the actors over layers).
+- `VpGraphLayout.repair`: after the layered layout every route is checked with `RouteChecks`
+  (through a shape that is not an end or a container of an end, on top of another route); offenders
+  are routed again by the router around the shapes and the good routes. `relayout` also schedules a
+  second layout from `afterVpSettles` when a shape changed size after the call (VP fits the members
+  of a class that is shown again, a renamed element).
+- Explicit x/y and setElementBounds pin a shape and `avoidOverlap` moves it to the nearest spot that
+  keeps 48 px from the sibling shapes (packages, nodes and the boundary do not count).
+- Rule B: `setPresentationOption(PRESENTATION_OPTION_PRIMITIVE)` + `PRIMITIVE_SHAPE_TYPE_RECTANGLE`
+  draws a node flat; VP then prints the stereotype keyword from the model and the *custom text* as the
+  name (set it to the model name; `renameElement` already keeps it in step), the caption box keeps the
+  width it had at creation and wraps the keyword - `syncCaption` sets it to the node width, also after
+  VP's own fit of a container (which runs after the tool call: `settle` re-syncs and re-routes from
+  `afterVpSettles`). Node sizes come from `TextMetrics` (Dialog 12 bold + padding).
+
+**VP facts learned (all probed live with a temporary devEval tool that compiles a Java body inside VP;
+the bundled JRE has javac but no zipfs, so the classpath must be directories)**
+- `setBounds` through the API never reroutes connectors: stored points stay where they were.
+- Pins: `setFromPinType/ToPinType(PINTYPE_RATIO)` + `setPinRatio` moves the end point to
+  `shape.x + ratio*w` immediately and keeps it through later calls. The ratio is (offset + 0.25)/size
+  so a floor or a round gives the same pixel. Without pins VP re-anchors at the centers.
+- `CS_RECTI_LINEAR` decision: set on every connector the plugin draws. A connector with that style and
+  `setRequestRebuild(true)` is rebuilt by VP itself with H/V segments (probed: A bottom -> down ->
+  right into B's left side), so a later drag in the GUI cannot slant it; the plugin's own routes are
+  explicit points with pinned ends and `setRequestRebuild(false)`.
+- A use case shape is not a child of the system boundary unless `addChild` is called (the model
+  ownership `system.addUseCase` is separate).
+- ELK: FIRST layer nodes may have no incoming edge from a non-FIRST node (hence the deferred actor
+  generalization); `SPACING_PORTS_SURROUNDING` / node `MARGINS` are ignored for free ports, ports
+  cluster around the middle of a side at `SPACING_PORT_PORT` (14) - which suits ellipses and stick
+  figures; outside node labels are honoured; self loops of one node are spread with
+  `SelfLoopDistributionStrategy.EQUALLY`.
+- `fmt-maven-plugin` reformats the sources on every build (python edits that match unformatted text
+  fail after the first build).
+
+**Verified live (F5c_ diagrams, checker output in the task result)**: class (4 long names with
+members added later, generalization, composition, aggregation, association with multiplicities,
+6 classes / 8 relations, DAO pattern, 10 classes / 17 relations, packages, notes, pinned x/y with
+setElementBounds and rerouteConnectors), use case (karaoke, overview with 7 actors / 17 use cases,
+include with actor-specific login, extend, notes, boundary), deployment MVC (flat nodes, H/V paths,
+move/resize).
+
+**Final measurements (server 1.32.5.28, layout_check.py)**: all F5c_ diagrams clean (SLANT, OVERLAP,
+THROUGH, SHARED, LABEL = 0, LABELLINE = 0): F5c_Class1..5, Pin1, Pkg1, Ext, Big (28 classes / 44
+relations, CROSS 14), F5c_UC1..4, Note1, F5c_Dep1. Random fuzz through the tools (scratchpad/fuzz.py):
+class 100+, use case 100+, pinned class 95 diagrams; the only defects left were 1 SHARED in a use case
+diagram whose actor has 11 associations (an actor figure offers about 10 distinct ends) and name
+labels of self loops / crowded explicit placements in 2 pinned diagrams. 256 JUnit tests green.
+
+**Remaining limits**: an actor with more than about 10 connectors shares an end (a stick figure has room
+for four ends per side plus head and feet); the other families were converted in the behavioral and structural steps;
+actor generalization is a bracket on the west side (parent not forced above its children); a
+deployment node asked to be larger than its content is refitted by VP (setElementBounds on a
+container keeps its size); relayout after every add re-places the whole diagram (diagrams opened
+from a file are never re-placed, only routed); a use case overview with many actors has 20+
+crossings (inherent to one actor column).
+
+### Layout overhaul, step "behavioral" (server version 1.32.5.29 .. 1.32.5.52)
+
+Scope: activity, state, communication and flowchart diagrams on top of the core pipeline (`VpGraphLayout`,
+`ElkLayout`, `OrthogonalRouter`, `LabelPlacer`). Each family is now a `LayoutProfile`
+(`ActivityLayoutProfile`, `StateLayoutProfile`, `CommunicationLayoutProfile`, `FlowchartLayoutProfile`)
+and its tools only create shapes/connectors, pin explicit x/y and call `relayout(diagram)`. Removed with
+the old code: slot grids, `placeAfter`/`arrangeRow`, bar/lane/loop routing of the activity tool, state
+`placeNext`/self loop geometry, communication `layeredLayout` use/`declutterMessages`/slot code,
+flowchart branch/rejoin/column routing, `keepRoute`/`recenterPair`/`overlay`.
+
+**What is new in the shared pipeline**
+- `LayoutProfile.routesAll()`: ELK only decides where the shapes go, the router draws every connector
+  (needed for diamonds, bars, loops, messages). `ownSides` (diamond ends get a vertex of their own by
+  where the other shape stands: straight ends first, then left/right, next free side), `bar` (fork/join
+  as wide as the span of the shapes they join, clamped to the lane by `barRange`), `size` (notation size
+  instead of the current one, used to grow a circle/diamond that has more connectors than ports and to
+  reset a bar), `row` (ELK layer choice: a role per row), `outsideLabel` + `ElkLayout.Side` (a name
+  hanging beside a shape), `arrange` (swimlane columns), `laneGap`, `reopensDiagram`,
+  `shiftsIntoCanvas`.
+- `ElkLayout.Options`: `flowOrder()` (cycles break at the sources: DEPTH_FIRST + creation order of nodes and
+  edges, so the first branch is on the left and a back transition is the one that turns round),
+  `centerParents()` (no straight-edge bias: a decision with three branches stands over the middle one,
+  with the bias it lines up with the first and the other two branches wrap around), `labelAllowance`,
+  `edgeNodeGap`.
+- `OrthogonalRouter`: lane gap per call (36 for communication links), shared end as last resort before the
+  `direct` L that could run through a shape. `VpGraphLayout.removeJogs` slides route ends along their side
+  with `RouteTidy` to remove 2-28 px jogs (reverted per route when that would run through a shape or on
+  another line). Small pinned circles/diamonds grow in `route()` too (`growSmallShapes`).
+- `LabelPlacer`: label size per leg orientation, preferred side, proximity cost (a label never sits right
+  beside the line of another connector), the side with more room before the next parallel line (labels leave
+  bundles), gaps up to 150, canvas minimum. `VpGraphLayout.draw`: a line through the label of another
+  connector is routed again around the labels that stay (at most twice, kept only when it adds no crossing),
+  a full layout of a profile with `shiftsIntoCanvas` lets labels go left of the first shape and then shifts the
+  drawing right/down so everything is on the canvas.
+- `avoidOverlap` (explicit x/y, setElementBounds) keeps the hanging name of a shape clear too (footprint).
+
+**Per family**
+- State: DOWN, initial FIRST layer / final LAST layer, names right of the circle (final: below right so the
+  transitions can arrive on all four sides), a self transition gets room to the right for loop and label
+  (rectangular loop by the router on a free side), opposite transitions are two lanes.
+- Flowchart: DOWN, decision diamonds with `ownSides`, Yes/No beside the lines, flows back go around the column.
+- Activity: ELK (flat) decides the rows; with swimlanes `ActivityLayoutProfile.arrange` snaps every node into
+  the column of its lane (nodes of one row in one lane side by side, lane width = widest row, lanes sized by
+  `ActivityDiagramMcpTools.LaneSet`, the lane shapes are moved before the nodes because VP drags children
+  with their compartment); a node outside the lanes stands right of the frame. Decision/merge/initial/final
+  names hang beside the node (decision: above, right of the entering flow), merge/fork/join show no name.
+  Page frames (`addActivityFrame`) are ELK containers around the nodes they were made for (membership kept per
+  diagram; a frame the tools did not make holds what lies inside it). twoWay draws two parallel arrows (the old
+  single double-headed line was two connectors on top of each other).
+- Communication: DOWN rows by role through ELK's layer choice constraint (actor, boundary, control, entity;
+  plain objects follow their links); links inside a role are not given to ELK (it cannot lay out in-layer
+  edges), only routed. A message is a label of its link: arrow box beside the line, text beyond it, placed by
+  `LabelPlacer` on the longest leg, forward messages on one side and messages back on the other
+  (`applyLabel` turns the compound rectangle into the 60x60 message box and its caption). Diagram is closed and
+  opened once after every layout (`settleReopen`) because VP turns the arrows only then.
+
+**VP facts learned (probed live with a temporary devEval tool, not committed)**
+- ELK `PARTITIONING` orders partitions along the flow (layers), it cannot make swimlane columns; the layer
+  choice constraint (`LAYERING_LAYER_CHOICE_CONSTRAINT`) puts nodes of a role in one layer; flat ELK
+  centers the nodes of a layer on one line (so layers can be read back from the node centers).
+- A communication message arrow is drawn at the center of its 60x60 box, turned along the link leg that is
+  nearest, only after the diagram has been laid out by VP (close + open); link points survive that, loops of
+  self links do not (the router draws everything again after the reopen).
+- Names of shapes whose caption is detached (states, flowchart shapes, control nodes, actors, robustness icons)
+  stay at the diagram origin after `setBounds`: `resetCaption()` after every move (profiles do it in `placed`).
+- Flowchart shapes are no `INodeUIModel`: there is no presentation option, so the flowchart `database`
+  symbol stays VP's flat 2D cylinder outline (no shadow/gradient; wontfix).
+
+**Checker and geometry dump**: `getDiagramGeometry` now lists the nodes of an activity page frame under the frame
+(they are no VP children of it, so the dump showed the frame as a leaf and the checker reported every guard
+inside it as "caption on Activity"); with that the original `layout_check.py` is clean on every F5b_ diagram.
+scratchpad/layout_check.py additionally treats lanes and shapes that hold other shapes as containers and
+checks communication message captions + arrow boxes and the hanging names of actors/icons/pseudo states/
+decisions as labels (original kept as layout_check.orig.py; both are clean).
+
+**Measured (server 1.32.5.52, both checkers)**: every F5b_ diagram clean (SLANT, OVERLAP, THROUGH, SHARED, LABEL = 0,
+LABELLINE = 0): Act_DatPhong (3 lanes, decision/merge/fork/join/object/flowFinal), Act_Loop, Act_MergeLoop,
+Act_IfElse, Act_Lanes2, Act_Book/Book2/Book3 (page frames, DAO exchanges), Act_Edit, Act_Pin/Pin2 (pinned in
+lanes and lane-less), Act_Free, Act_Three; State_Phong (self transition, opposite pair), State_Screen,
+State_Edit, State_Pin; Comm_ThanhToan, Comm_Book (reference figure), Comm_Edit/Auto/Pin; FC_TinhTien,
+FC_Moved (after setElementBounds), FC_Loop, FC_Kinds. Class/use case/deployment (F5c_) unchanged and clean,
+sequence and BPMN smoke clean. Random fuzz (scratchpad/fuzz5b.py: state, activity with and without lanes,
+flowchart, communication, pinned variants, 10-20 diagrams each): no SLANT/OVERLAP/THROUGH/SHARED left except
+dense random communication diagrams (labels of 3+ messages on one link in a crowded area can still touch) and a
+pinned final state that grew onto the name of the initial state, a pinned communication participant with more than
+about eight links (they share an end). 250 JUnit tests green.
+
+**Remaining limits**: (component/package/object/DFD were converted in the structural step below, which also
+removed `CommunicationDiagramUtils.layeredLayout`; BPMN keeps its own routing.) A communication actor's links leave its sides (its name
+hangs below the figure); a crowded communication diagram (many links across the same area) can still have
+message labels beside a foreign line. A diagram that was not laid out by the tools in this session (opened
+from a file) is only routed, never re-placed. Fork/join bars are clamped to their lane: a branch in another
+lane is reached from the end of the bar.
+
+### Layout overhaul, step "structural" (server version 1.32.5.53 .. 1.32.5.66)
+
+Scope: component, package, object, deployment, ERD and data flow diagrams (all four DFD notations) on top
+of the shared pipeline, then a regression of every family. Every one of them now goes through
+`VpGraphLayout` (ELK decides the places, `OrthogonalRouter` / ELK draw the lines, `LabelPlacer` the labels);
+there is no family left with its own centre-to-centre, bow or slot code except sequence and BPMN (both
+accepted, untouched).
+
+**Profiles (all in `util/`, one `LayoutProfile` each; the tools only create shapes/connectors, pin x/y and call
+`relayout`)**
+- `DfdLayoutProfile`: DIRECTION RIGHT, entities FIRST layer, stores LAST layer, Yourdon processes are ELLIPSE
+  outlines, flow names are centre labels, lane gap 30 for two opposite flows. Same profile for the standard,
+  Gane-Sarson, Yourdon-DeMarco and Yourdon-Coad diagram types.
+- `ErdLayoutProfile`: RIGHT. Deviation from the brief ("FK edge from child to parent"): the ELK edge runs
+  parent -> child (VP's own direction), so the referenced tables stand LEFT of the tables that hold the
+  foreign key and the crow's foot is on the right-hand table (reads as 1 -> many).
+- `ObjectLayoutProfile` (DOWN, link names as centre labels), `PackageLayoutProfile` (DOWN, packages are
+  containers with `minSize` for the folder tab and a 44 px title band).
+- `ComponentLayoutProfile`: DOWN, `routesAll()` (ELK only places the shapes, the router draws every line so
+  that a line to a port leaves it outwards), layer frames and components holding components are containers,
+  interface boxes are plain nodes (consumer -> interface -> provider by VP's own connector directions).
+- `DeploymentLayoutProfile`: RIGHT, nodes/devices/execution environments/artifacts are containers sized around
+  their children (title width and an asked width/height are the minimum), flat primitive rectangles
+  (`flatten`, `titleSize`, `syncCaption` moved here from the tool), `placed()` re-syncs the caption.
+  The tool's old slot / grow / push / `moveNextToNode` / `restoreMinimum` code is gone.
+
+**New in the shared pipeline**
+- Attached shapes (ports): `LayoutProfile.attachedTo` makes a shape no ELK node (its connectors lead to its
+  owner), `VpGraphLayout.Graph.attach` runs after the owners are placed (also in route-only mode):
+  `PortPlacer` (pure, tested) puts every port on the side its connectors lead away to, as near as it can to
+  the coordinate of the other end, names outside (`placedAttached`/`hanging`: above-left of a west port, above
+  right of an east/north one, below-right of a south one), and the connectors of a port get that side as a hard
+  end side. A port that n lines end on is stretched along the border to 16 + 12(n-1) px so every line has an end of
+  its own on its outer face. A side that is full (name pitch) sends the next port to another side.
+- `NodeSpec.pad`: room around a shape that ELK keeps free (names of ports); removed from the result again, so
+  only for `routesAll` profiles.
+- `LayoutProfile.headerHeight`: the title band of a container is an obstacle for labels (package, node,
+  component with children, UC boundary, class package). Labels no longer sit across a folder tab.
+- Notes (`INOTE`) are laid out inside the container of the shape they explain (`LayoutProfile.container`).
+- `holdSizes`: a diagram that holds containers or ports gets `setAutoFitShapesSize(false)` at its first layout
+  (see VP facts). `holdFit` does the same for a container the tool sized explicitly.
+- `nestChild` / `growToEnclose` (AbstractDiagramMcpTools): one way to put a child into a package/node/component:
+  x/y pin it, otherwise the layout places it (diagram owned by the layout) or the first free spot of the body
+  (pinned diagram or diagram opened from a file), the container grows to enclose it and pushes its siblings.
+- `avoidOverlap` keeps containers clear of other containers (a leaf may still be placed inside one).
+- Router: the rectangle of what hangs outside a shape (a port name) adds grid lines; as a last resort before the
+  L fallback (which ignores shapes) the search runs again without the hanging names of its end shapes.
+- `autoLayoutDiagram` runs the layered layout for every family with a profile; for a diagram type without one it
+  says so and moves nothing (VP's generic layout, which draws slants, is gone).
+
+**VP facts learned (probed live with the temporary devEval tool)**
+- With the diagram's auto-fit ON, Visual Paradigm shrinks every container around its children and moves every
+  port back to where it first drew it (east border, 14 px below the top) as soon as the tool call is over;
+  `port.setBounds` is accepted at once and reverted by the next call, `setAutoFitShapesSize(true)` reverts it
+  too. With auto-fit OFF the bounds stick (also for ports on the north/south border). `fitSize()` still works
+  explicitly, so the tools keep fitting shapes themselves.
+- Pins (`PINTYPE_RATIO` + ratio) work on ports like on any shape: a connector end keeps the point set.
+- A tool that resets a connector's caption after `relayout` throws the label placement away (VP's default
+  position): `addProvidedInterface`/`addRequiredInterface`/`addComponentDependency` did, now `connectShapes`
+  resets once before the layout and nothing afterwards.
+- A VP `Note` has an `INOTE` model element (never null) and a `getParent()` of null.
+
+**Removed (no dead code)**: `centerConnector`, port/folder/bent-label/parallel-line variants, `recenterTree`,
+`recenterConnectorsOf`, `resetCaptionsOfTree`, `makeRoomBetween`, `lineSegments`, `clearLabelSpot`,
+`obstaclesBetween` and friends, the non-profile branch of `connectCentered` (renamed `connectAndLayout`),
+`DiagramLayoutEngine.applyStructuredLayout`, `DiagramUtils.routeBends/labelSpotsAlong/contains`,
+`FlowchartDfdUtils.Grid/freeCellCenter/placeShape/columnLayout`, `CommunicationDiagramUtils.layeredLayout`,
+`ComponentDiagramUtils` grid/child/port geometry, `DeploymentDiagramUtils.nextFlowPosition/planPush/
+clampInside/encloseChildren`, `PackageObjectDiagramUtils.flowPlace/clampIntoBody/encloseChildren` and their tests.
+
+**Measured (server 1.32.5.66, scratchpad `layout_check.py`)**: all F5s_ diagrams clean (SLANT, OVERLAP, THROUGH,
+SHARED, LABEL = 0): Comp_Basic/3Layer/Ports/Nested/Flat/Subsystem, Dep_Basic/MVC/Many, Pkg_MVC/Book/Book2,
+Obj_Links/Pkg, ERD_Karaoke/Ref, DFD_Karaoke/GaneSarson/YourdonCoad/YourdonDeMarco/Ref (CROSS 0..4, the
+karaoke DFD with both-direction flows 4). All F5c_ and F5b_ diagrams still clean (exit code 0 for the three
+prefixes), after moving shapes with `setElementBounds`, `rerouteConnectors`, renaming and removing elements.
+Sequence (F5b_Seq_*) clean; BPMN F4_fprocess_BPMN_Karaoke and _Black clean, _Inter and _Misc show the same
+SHARED/THROUGH pairs they show on 1.32.5.52 (checked by building the previous commit: identical, untouched
+code). Random fuzz through the tools (`scratchpad/fuzz5s.py`, up to 8 shapes, and SCALE=2.5/4/5 up to 58 shapes):
+DFD x4 notations, ERD, object, package, deployment 25-30 diagrams each with no defect; pinned package 1 of 25
+(a gap of 56 px between two pinned frames with four lines through it), component 1 of 25 and pinned component
+2 of 25 (see limits). A 38-shape / 46-flow DFD builds in 5 s over 85 tool calls (about 60 ms per call, every call
+re-lays the diagram).
+
+**Remaining limits**: a crowded pinned diagram (shapes placed with x/y very close together, several lines
+through a narrow gap, ports with long names) can still end with two lines in one lane (`SHARED`); lines may run
+across the title band of a container they merely pass (labels never do); a component 40 px high holds one port
+per east/west side (name pitch), more ports go to the north/south sides, then spread out; the interface lollipop
+is not available (a box with `<<interface>>`); notes added to a pinned diagram take the first free spot
+beside their target (may straddle a frame border); a diagram opened from a file is routed, never re-placed,
+and its auto-fit is switched off when it holds containers or ports; BPMN `F4_..._Inter`/`_Misc` keep their
+earlier SHARED/THROUGH (BPMN is outside this step).
+
+### Round-6 audit fixes (server version 1.32.6.x)
+
+Graded against the notation brief; every fix verified on F6_ diagrams (exported PNGs, `getDiagramGeometry`,
+`layout_check.py`: all F6 diagrams of the behavioral, structural and process families are clean).
+`scratchpad/f6/` holds the drivers (`runbeh.sh`, `runstruct.sh`, `runproc.sh` replay the R6 scenarios under
+F6 names; `deploy.sh N` tests, builds, installs, restarts VP and waits for its project).
+
+**Behavioral**
+- Activity: rows of the lane layout are the nodes whose vertical extents overlap (a 10 px bar and a 40 px
+  action of one ELK layer have centers 5 px apart: the old "centers within 2 px" test put them in different
+  rows and centered both in the lane). A bar that still shares a row with another node moves out of it
+  (`VpGraphLayout.clearBars`: toward the side with fewer connectors, so a fork goes above its row and a join
+  below). `barRange` is the union of the lanes of the nodes a bar joins (flows meet it from above/below).
+  Lane borders are guide lines (`LayoutProfile.guides`) the router treats like drawn routes (12 px clear).
+  Hanging names (initial "Bat dau", decision question) count in the width of a row. Nodes are clamped into
+  their lane in `beforeLayout`, `avoidOverlap` keeps a lane node in its lane (`horizontalRange` hook), notes
+  stand in the lane column of the node they explain. `#2` works for actions and objects, a name that is only
+  `#n` is a diamond without text. Action ports keep 14 px from the corner (`ShapeOutline.ROUNDED`).
+- Pinned shapes (`LayoutProfile.pinAware`: activity, state, flowchart): the unpinned shapes are still laid
+  out layered, the pinned ones are no ELK nodes, the unpinned ones are pushed down past them
+  (`Graph.avoidPinned`), every connector is routed around everything. A diagram with containers/ports keeps
+  the old route-only behaviour.
+- Notes: `NoteAnchor` (pure) puts a sequence note under its lifeline (dashed line ends on the lifeline's
+  dashed part) and draws every anchor as H/V or an L; communication notes are layout nodes now; BPMN anchors
+  go through `OrthogonalRouter` (notes are nested in their lane, the pool grows around them).
+- State: opposite transitions nest (the first of a pair keeps to the middle of its sides, the second is the
+  same route one lane aside: `OrthogonalRouter.mirror`), the self-loop reserves room for its text
+  (`LayoutProfile.reserved`).
+- Labels (`LabelPlacer`): a label far from its own line costs, a label nearer to another line costs, a
+  label with a space may wrap into two lines (`LabelSpec.wrappable`) when its box has no clear place;
+  flowchart Yes/No are tail labels of the decision.
+- BPMN: a gateway's 3rd/4th branch leaves from the edge beside a vertex (`EXIT_BOTTOM_LEFT` ...), the
+  gateway name is the last vertex and moves aside when used, condition labels wrap above a short leg,
+  `autoLayoutDiagram` compacts auto-placed elements left and narrows the pools.
+- Sequence: lifeline moves never land on another head (note in the answer), nested fragments stand 12 px
+  inside the outer one. The self message looked like an open bracket because VP puts its (opaque) caption
+  box on the right edge of the loop, hiding the closing vertical line: the caption now stands 6 px right of
+  the loop (`moveSelfCaption`), the loop is 16 px high.
+
+**Structural / process**
+- `ShapeOutline.FOLDER`: a connector that ends on the top of a package outside its tab ends on the body
+  (tab = width/5, 20 px); east ends keep below the tab strip. Class (`addPackage`, `addPackageShape`,
+  `addClass(packageName)`) reuse the project's package, check the name after creating, nest the class and
+  validate colours first; `addComponentPackage`/`addPackageElement` have `backgroundColor`.
+- Router: an end that is collinear with and within 12 px (end to end) of another route is a clash,
+  `FIGURE` ports (actor boxes keep 4 px from the corner: 5 ends fit), corner margin grows with big boxes,
+  `untangle` re-routes connectors that cross with a crossing price of 600 (also after the reopen of a
+  communication diagram), small mid-route jogs (<= 6 px) are removed.
+- Per-container layer gap from the labels inside that container (ELK `Node.layerGap`), deployment diagrams
+  choose between flow right and flow down (`flexibleDirection`, rarely wins: a nested host chain stays
+  wide), `applyBounds` grows the container of a resized/moved shape, an explicit node size is a minimum.
+- UC: actors in generalization-tree order and use cases below their actor (`LayoutProfile.sortNodes` +
+  ELK model order): crossings of the 7-actor/17-UC overview 31 -> 7; type-aware `addActor/addUseCase/
+  addRelationship`, a use case in another system boundary is found again, no "X2" rename. ERD: foreign
+  keys of a reused table are drawn (`showExistingForeignKeys`).
+- Shared: `removeDiagramElement` accepts `A -> B`, `A -> B [guard]`, `N: label` and refuses an ambiguous
+  text; failures start with `Error` (`ToolResults.normalize` in `McpServer`); listings print `:Class` for
+  anonymous objects, note text, `N:` on messages; component handles `Owner.port`; `#n` handles for
+  flowchart/DFD/BPMN names.
+
+**VP facts learned**
+- VP opens its last project (here `f5c_saved.vpp`) a few minutes after the MCP port is up and throws away
+  everything built before that: wait for `getProjectInfo` before replaying scenarios.
+- `fitSize()` on a freshly created note gives a size VP overrides a moment later (a note is auto-fitted
+  later); do not report it.
+- VP wraps a caption text inside the caption box width, so a narrower label box makes a two-line label
+  (only when the box is two lines high and each line fits; see "Captions never shrink").
+- A package's tab is width/5 x 20 px; the body border is drawn across the whole width.
+
+**Measured (server 1.32.6.14)**: `layout_check.py` is clean (SLANT, OVERLAP, THROUGH, SHARED, LABEL = 0) on every
+F6 diagram of the three audit families (all R6 scenarios replayed under F6 names: 80 diagrams; CROSS 0..7,
+17 on the 24-component CmpPerf, 10 on the edited state diagram). `scratchpad/layout_check_plus.py` adds
+FOLDEREND, CHILDOUT, COLLINEAR and CAPFAR: only crowded diagrams keep a CAPFAR (State_Edit, CmpPerf, DFD
+with 18 flows), the bars of an activity span lanes by design (CHILDOUT) and a flow through a bar is
+collinear with its other side by nature. 243 JUnit tests green (`Round6Test` is new).
+
+**Remaining limits**: the deployment chain client -> web server (Tomcat > war > components) -> database is
+2000+ px wide (nested hosts cannot be stacked separately from the top level by ELK's single hierarchical
+run); the handles of "End #2" style names live in memory and are lost when VP is restarted (a reopened
+project knows the shapes by their shown text only); a crowded state diagram can still have a label beside a
+foreign line when no wrapped box fits; BPMN rows stay where they were put (compaction moves left only).
+
+### Captions never shrink (server version 1.32.7.x, last build 1.32.7.5)
+
+Defect (seen in the exported PNG of the 3-layer component diagram): two of its 15 `<<use>>` captions drew as
+`<<use...` and `<<u...`. `getDiagramGeometry` showed their boxes: 60x14 and 46x14 (the other 13: 74x14).
+Visual Paradigm cuts a caption whose box is narrower than its text plus a little padding with "...".
+
+**Root causes**
+- `LabelSpec.tight()` (commit 86f3d7a) let a caption that found no clear place shrink by 14 px, the padding VP
+  adds to a caption (74 px box, 60 px of text): the label was drawn at the bare text width. Removed.
+- A layout read the size of a label from the caption it found on the connector, i.e. from what the layout
+  before it had left there. The 60 px box of the first layout became the input of the next one, which took
+  14 px off again (46 px): a squeezed caption stayed squeezed and got worse. `VpGraphLayout.Graph.read` now
+  resets every connector's caption (`CaptionFit.natural`) before the profile reads it, so a label is always
+  the size VP gives its text (a connector that takes no part gets its caption bounds back).
+- The two-line fallback (`wrappable`, and the BPMN condition label) used `w/2 + 8` as the width of the
+  wrapped box: a line wider than that box is cut with "..." as well. Both now use `TextMetrics.twoLines`:
+  the longer half of the text (split at the best space) plus the padding of a caption, two lines high.
+
+**Calibrated live (exported PNGs, VP 1.32, Dialog 12)**
+- A caption VP sizes itself is the text plus 14 px (`<<use>>`: 60 -> 74). The text is drawn in full from
+  text + 4 px (`<<use>>` in 64 px; 63 px gives `<<use...`) and from 12 px high (11 clips the glyphs).
+  Short texts need a few pixels more than `TextMetrics` measures ("gui": VP box 37, our measure 17 + 14 = 31),
+  so the layout never uses the measure for a label VP can size: it resets the caption and reads the box.
+- VP wraps a caption at spaces only when the box is two lines high (28) and each line fits (`Thanh toan hoa
+  don bang the` at 100x28, 120x28, 140x28 = two lines, at 100x14 = `Thanh toan ho...`).
+- A multiplicity box is never cut, whatever its width. `resetCaption()` on an association moves its
+  multiplicity boxes (and `resetCaptionSize()` does nothing): reading code must not reset captions.
+
+**Detection (cannot come back silently)**
+- `CaptionFit` (pure, `util`): `fits(w, h, neededW, neededH, text)` and `check(connector)`. `getDiagramGeometry`
+  prints ` text "<<use>>"` after every caption and ` TRUNCATED needs WxH` when the box is smaller than VP
+  needs. The need is the size the layout got from VP minus the 10 px that are only padding (remembered per
+  connector, bounded memory), or, for a caption no layout measured, the text plus 4 px; a taller box counts
+  when the text wraps into its lines. The check never touches the diagram (a reset would move an
+  association's multiplicities): `scratchpad/idem_check.py` proves geometry and PNG are the same before and
+  after a read.
+- `scratchpad/layout_check.py` counts TRUNCATED as defect `TRUNC` (exit code 1); the other checks are unchanged.
+- Tests: `TextMetricsTest`, `CaptionFitTest`, `LabelSizeRuleTest`, a random `LabelPlacerTest` (a label comes
+  out in one of the sizes it was given, never smaller) and `VpGraphLayoutTest` (a caption squeezed to 46 px
+  is laid out at 74).
+
+**Measured (server 1.32.7.x)**: all R6 scenarios replayed under F6 names (`runstruct.sh`, `runbeh.sh`,
+`runproc.sh`: 113 diagram checks): `layout_check.py` clean (SLANT, OVERLAP, THROUGH, SHARED, LABEL, TRUNC = 0),
+CROSS and LABELLINE the same as the build before (106 -> 106 and 1 -> 1 over the 113 checks, diagram by
+diagram). An audit that reset
+every connector caption and detached shape name of the final diagrams and compared the box with VP's size
+(574 captions, all families) found nothing narrower than the text needs.
+
 ### Round-4 audit fixes (server version 1.32.4.x)
 
 Graded against the course notation brief, verified live in VP 18.1 on F4_* diagrams (exported PNGs,
