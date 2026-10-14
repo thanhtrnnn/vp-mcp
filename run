@@ -183,7 +183,7 @@ main() {
 	docker-up)
 		log_info "Starting MCP server in Docker..."
 		docker compose up -d --build
-		log_success "MCP server started on http://localhost:2026/sse"
+		log_success "MCP server started on http://localhost:2026/mcp"
 		;;
 	docker-down)
 		log_info "Stopping Docker MCP server..."

@@ -8,20 +8,12 @@ import sys
 class McpClient:
     def __init__(self, base_url="http://localhost:2026"):
         self.base_url = base_url
-        self.session_id = None
         self.request_id = 0
 
     def connect(self):
-        """Get session ID from SSE endpoint."""
-        resp = requests.get(f"{self.base_url}/sse", stream=True, timeout=5)
-        for line in resp.iter_lines():
-            if line:
-                line = line.decode()
-                if line.startswith("data:"):
-                    self.session_id = line.split("data: ")[1]
-                    resp.close()
-                    return True
-        return False
+        """Nothing to open: streamable HTTP has no session endpoint."""
+        # Streamable HTTP: every request is a POST to /mcp, no session to open.
+        return True
 
     def call(self, method, params=None):
         """Send JSON-RPC request."""
@@ -32,7 +24,7 @@ class McpClient:
             "method": method,
             "params": params or {}
         }
-        url = f"{self.base_url}{self.session_id}"
+        url = f"{self.base_url}/mcp"
         resp = requests.post(url, json=payload, timeout=30)
         result = resp.json()
         if "error" in result:
@@ -56,7 +48,7 @@ def main():
     if not client.connect():
         print("Failed to connect!")
         sys.exit(1)
-    print(f"Connected! Session: {client.session_id}")
+    print(f"Connected to {client.base_url}/mcp")
 
     # Initialize
     result = client.call("initialize", {

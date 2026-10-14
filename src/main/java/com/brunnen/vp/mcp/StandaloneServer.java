@@ -7,8 +7,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
- * Standalone MCP server for Docker deployment. Acts as a proxy: serves MCP protocol (SSE +
- * JSON-RPC) to clients, delegates tool execution to a running VP instance via HTTP.
+ * Standalone MCP server for Docker deployment. Acts as a proxy: serves MCP protocol (streamable
+ * HTTP JSON-RPC) to clients, delegates tool execution to a running VP instance via HTTP.
  */
 public class StandaloneServer {
 
@@ -40,7 +40,7 @@ public class StandaloneServer {
     server.start();
     System.out.println("MCP Proxy Server running on port " + port);
     System.out.println("Proxied " + count + " tools from VP at " + vpBaseUrl);
-    System.out.println("SSE endpoint: http://localhost:" + port + "/sse");
+    System.out.println("Streamable HTTP endpoint: http://localhost:" + port + "/mcp");
 
     Thread.currentThread().join();
   }

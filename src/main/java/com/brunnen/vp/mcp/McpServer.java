@@ -11,30 +11,25 @@ import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 import io.undertow.util.Methods;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
 /**
- * Lightweight MCP server using Undertow HTTP server. Implements SSE transport and MCP JSON-RPC
- * protocol without any Spring dependencies.
+ * Lightweight MCP server using Undertow HTTP server. Implements the MCP JSON-RPC protocol over the
+ * streamable HTTP transport at {@code /mcp}, without any Spring dependencies.
  */
 public class McpServer {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private Undertow server;
   private final List<ToolDefinition> tools = new ArrayList<>();
-  // sessionId -> the live SSE output stream, so message responses are pushed back over SSE (MCP SSE
-  // transport). Without this the client waits forever for a response that was only sent as the POST
-  // body.
-  private final Map<String, OutputStream> sseStreams = new ConcurrentHashMap<>();
   private int port = 2026;
+
+  // Protocol versions the server can speak; initialize echoes the client's one when listed here.
+  private static final List<String> PROTOCOL_VERSIONS =
+      List.of("2025-06-18", "2025-03-26", "2024-11-05");
 
   public McpServer() {}
 
@@ -77,7 +72,6 @@ public class McpServer {
   public void stop() {
     if (server != null) {
       server.stop();
-      sseStreams.clear();
       System.out.println("MCP Server stopped");
     }
   }
@@ -90,10 +84,8 @@ public class McpServer {
 
   private void handleRequest(HttpServerExchange exchange) throws Exception {
     String path = exchange.getRequestPath();
-    if ("/sse".equals(path)) {
-      handleSse(exchange);
-    } else if ("/mcp/messages".equals(path)) {
-      handleMessage(exchange);
+    if ("/mcp".equals(path)) {
+      handleStreamableHttp(exchange);
     } else if ("/api/tools".equals(path)) {
       handleApiTools(exchange);
     } else if ("/api/execute".equals(path)) {
@@ -104,96 +96,26 @@ public class McpServer {
     }
   }
 
-  // --- SSE Transport ---
+  // --- Streamable HTTP Transport ---
 
-  private void handleSse(HttpServerExchange exchange) {
-    if (!exchange.getRequestMethod().equals(Methods.GET)) {
-      exchange.setStatusCode(405);
+  /**
+   * Streamable HTTP transport: each POST carries one JSON-RPC message and a request gets its
+   * response as a plain JSON body. The server never pushes messages, so GET (the optional
+   * server-to-client stream) is refused with 405 as the spec allows.
+   */
+  private void handleStreamableHttp(HttpServerExchange exchange) {
+    if (exchange.getRequestMethod().equals(Methods.DELETE)) {
+      exchange.setStatusCode(200);
       exchange.endExchange();
       return;
     }
-
-    String sessionId = UUID.randomUUID().toString();
-
-    // Set SSE headers
-    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/event-stream; charset=UTF-8");
-    exchange.getResponseHeaders().put(new HttpString("Cache-Control"), "no-cache");
-    exchange.setStatusCode(200);
-
-    // Dispatch to worker thread for blocking I/O
-    exchange.dispatch();
-    exchange.startBlocking();
-
-    // Run SSE loop on a separate thread
-    Executors.newSingleThreadExecutor()
-        .submit(
-            () -> {
-              OutputStream out = exchange.getOutputStream();
-              sseStreams.put(sessionId, out);
-              try {
-                // Send endpoint event
-                String endpointUrl = "/mcp/messages?sessionId=" + sessionId;
-                String sseMsg = "event: endpoint\ndata: " + endpointUrl + "\n\n";
-                synchronized (out) {
-                  out.write(sseMsg.getBytes(StandardCharsets.UTF_8));
-                  out.flush();
-                }
-
-                // Keep connection alive
-                while (!Thread.currentThread().isInterrupted()
-                    && exchange.getConnection().isOpen()) {
-                  Thread.sleep(15000);
-                  try {
-                    synchronized (out) {
-                      out.write(":\n\n".getBytes(StandardCharsets.UTF_8));
-                      out.flush();
-                    }
-                  } catch (Exception e) {
-                    break;
-                  }
-                }
-              } catch (Exception e) {
-                // Client disconnected
-              } finally {
-                sseStreams.remove(sessionId);
-              }
-            });
-  }
-
-  // --- Message Handler ---
-
-  private void handleMessage(HttpServerExchange exchange) {
-    // CORS preflight
-    if (exchange.getRequestMethod().equals(Methods.OPTIONS)) {
-      exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Origin"), "*");
-      exchange
-          .getResponseHeaders()
-          .put(new HttpString("Access-Control-Allow-Methods"), "POST, OPTIONS");
-      exchange
-          .getResponseHeaders()
-          .put(new HttpString("Access-Control-Allow-Headers"), "Content-Type");
-      exchange.setStatusCode(204);
-      exchange.endExchange();
-      return;
-    }
-
     if (!exchange.getRequestMethod().equals(Methods.POST)) {
+      exchange.getResponseHeaders().put(Headers.ALLOW, "POST, DELETE");
       exchange.setStatusCode(405);
       exchange.endExchange();
       return;
     }
 
-    exchange.getResponseHeaders().put(new HttpString("Access-Control-Allow-Origin"), "*");
-
-    // Extract sessionId from query
-    String sid = null;
-    Map<String, Deque<String>> params = exchange.getQueryParameters();
-    if (params.containsKey("sessionId")) {
-      sid = params.get("sessionId").getFirst();
-    }
-    final String sessionId = sid;
-
-    // Read request body
     exchange.dispatch();
     exchange.startBlocking();
 
@@ -203,41 +125,26 @@ public class McpServer {
               try {
                 String body =
                     new String(exchange.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-
                 JsonNode request = MAPPER.readTree(body);
-                JsonNode response = processRequest(request, sessionId);
-
-                // Notifications (no id) don't get a response
                 if (request.has("id") && !request.get("id").isNull()) {
-                  // Push the response over the SSE stream if one is open for this session (MCP SSE
-                  // transport); otherwise return it as the HTTP response body.
-                  OutputStream sseOut = sessionId != null ? sseStreams.get(sessionId) : null;
-                  if (sseOut != null) {
-                    String json = MAPPER.writeValueAsString(response);
-                    String sseMsg = "event: message\ndata: " + json + "\n\n";
-                    synchronized (sseOut) {
-                      sseOut.write(sseMsg.getBytes(StandardCharsets.UTF_8));
-                      sseOut.flush();
-                    }
-                    exchange.setStatusCode(202);
-                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
-                    exchange.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-                  } else {
-                    byte[] respBytes = MAPPER.writeValueAsBytes(response);
-                    exchange.setStatusCode(200);
-                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
-                    exchange.getOutputStream().write(respBytes);
-                  }
-                } else {
+                  byte[] respBytes = MAPPER.writeValueAsBytes(processRequest(request));
                   exchange.setStatusCode(200);
+                  exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                  exchange.getOutputStream().write(respBytes);
+                } else {
+                  // Notification or response from the client: accepted, no body.
+                  processRequest(request);
+                  exchange.setStatusCode(202);
                 }
                 exchange.getOutputStream().close();
               } catch (Exception e) {
                 try {
-                  exchange.setStatusCode(500);
-                  exchange
-                      .getOutputStream()
-                      .write(("Error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8));
+                  ObjectNode err =
+                      createErrorResponse(
+                          MAPPER.nullNode(), -32700, "Parse error: " + e.getMessage());
+                  exchange.setStatusCode(400);
+                  exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                  exchange.getOutputStream().write(MAPPER.writeValueAsBytes(err));
                   exchange.getOutputStream().close();
                 } catch (Exception ignored) {
                 }
@@ -247,7 +154,7 @@ public class McpServer {
 
   // --- MCP Protocol ---
 
-  private JsonNode processRequest(JsonNode request, String sessionId) {
+  private JsonNode processRequest(JsonNode request) {
     String method = request.has("method") ? request.get("method").asText() : "";
     JsonNode id = request.get("id");
     JsonNode params = request.get("params");
@@ -257,6 +164,8 @@ public class McpServer {
         return handleInitialize(id, params);
       case "notifications/initialized":
         return null;
+      case "ping":
+        return createSuccessResponse(id, MAPPER.createObjectNode());
       case "tools/list":
         return handleToolsList(id);
       case "tools/call":
@@ -271,10 +180,16 @@ public class McpServer {
 
     ObjectNode serverInfo = MAPPER.createObjectNode();
     serverInfo.put("name", "visual-paradigm-mcp-server");
-    serverInfo.put("version", "1.32.7.5");
+    serverInfo.put("version", "1.32.8.0");
     result.set("serverInfo", serverInfo);
 
-    result.put("protocolVersion", "2024-11-05");
+    String requested =
+        params != null && params.has("protocolVersion")
+            ? params.get("protocolVersion").asText()
+            : "";
+    result.put(
+        "protocolVersion",
+        PROTOCOL_VERSIONS.contains(requested) ? requested : PROTOCOL_VERSIONS.get(0));
 
     ObjectNode capabilities = MAPPER.createObjectNode();
     ObjectNode toolsCap = MAPPER.createObjectNode();

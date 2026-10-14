@@ -3,13 +3,13 @@
 import asyncio
 import sys
 from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 
 async def test():
     print("Connecting...")
     try:
-        async with sse_client("http://localhost:2026/sse") as (read, write):
+        async with streamablehttp_client("http://localhost:2026/mcp") as (read, write, _):
             print("Got streams")
             async with ClientSession(read, write) as session:
                 print("Initializing...")

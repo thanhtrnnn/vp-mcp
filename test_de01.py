@@ -2,13 +2,13 @@
 """Create DE01 diagrams via MCP tools to verify the pipeline."""
 import asyncio
 from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 
 async def main():
-    print("Connecting to MCP server via SSE...")
+    print("Connecting to MCP server via streamable HTTP...")
 
-    async with sse_client("http://localhost:2026/sse") as (read, write):
+    async with streamablehttp_client("http://localhost:2026/mcp") as (read, write, _):
         async with ClientSession(read, write) as session:
             result = await session.initialize()
             print(f"Connected! Server: {result.serverInfo.name}")

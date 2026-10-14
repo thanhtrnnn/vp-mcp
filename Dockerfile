@@ -41,7 +41,7 @@ ENV MCP_PORT=2026
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
-    CMD curl -f --max-time 2 http://localhost:2026/sse || exit 1
+    CMD curl -fs -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' http://localhost:2026/mcp || exit 1
 
 # Run the proxy MCP server
 ENTRYPOINT ["java", "-cp", "/app/lib/*:/app/visual-paradigm-mcp-plugin.jar", "com.brunnen.vp.mcp.StandaloneServer"]

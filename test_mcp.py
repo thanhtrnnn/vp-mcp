@@ -2,12 +2,12 @@
 """Test MCP server tools using official MCP client."""
 import asyncio
 from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 async def main():
-    print("Connecting to MCP server via SSE...")
+    print("Connecting to MCP server via streamable HTTP...")
 
-    async with sse_client("http://localhost:8080/sse") as (read, write):
+    async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _):
         async with ClientSession(read, write) as session:
             # Initialize
             result = await session.initialize()
