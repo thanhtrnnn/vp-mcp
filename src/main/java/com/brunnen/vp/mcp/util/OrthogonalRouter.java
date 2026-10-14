@@ -1079,6 +1079,9 @@ public final class OrthogonalRouter {
     if (shape.outline == ShapeOutline.Kind.ROUNDED) {
       return ShapeOutline.ROUND_CORNER;
     }
+    if (shape.outline == ShapeOutline.Kind.FIGURE) {
+      return ShapeOutline.FIGURE_CORNER; // five ends fit the 60 px side of a figure
+    }
     return Math.max(CORNER, Math.min(20, sideLength / 8));
   }
 

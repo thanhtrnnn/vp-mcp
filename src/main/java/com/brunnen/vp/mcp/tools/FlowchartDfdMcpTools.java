@@ -108,7 +108,9 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
           "Add a symbol to a flowchart. kind is one of terminator (start/end oval), process, "
               + "decision (diamond), inputOutput (parallelogram), document, predefinedProcess, "
               + "database, manualInput, connector (on-page circle). shapeName is the text shown "
-              + "AND the handle used by addFlowchartFlow, so it must be unique on the diagram. "
+              + "AND the handle used by addFlowchartFlow, so it must be unique on the diagram (a "
+              + "trailing number, \"End #2\", is only part of the handle: two terminators can both show "
+              + "\"End\"). "
               + "The shape is fitted to its text; x/y (>0) set its top-left corner, otherwise it "
               + "is placed by the layout: top to bottom, the branches of a decision side by side")
   public String addFlowchartShape(String diagramName, String shapeName, String kind, int x, int y) {
@@ -448,11 +450,13 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
    */
   private IDiagramElement placeNewShape(
       IDiagramUIModel diagram, IModelElement model, String name, int x, int y) {
-    model.setName(name);
+    String label = labelOfHandle(name); // "End #2" shows "End"
+    model.setName(label);
     IDiagramElement de = getDiagramManager().createDiagramElement(diagram, model);
     if (de == null) {
       throw new IllegalStateException("Visual Paradigm did not create a shape for '" + name + "'");
     }
+    registerHandle(de, name, label);
     // Fresh shapes render blank until the caption is reset; fit afterwards so the size is
     // computed from the rendered text.
     de.resetCaption();
@@ -739,6 +743,11 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     return ids;
   }
 
+  @Override
+  protected IShapeUIModel shapeByHandle(IDiagramUIModel diagram, String handle) {
+    return findDfdShapeById(diagram, handle);
+  }
+
   /**
    * A DFD element by name first, then by its ID: "D1" is a data store, a bare "1" a process (or,
    * when no process has that ID, a store or entity that does).
@@ -811,7 +820,7 @@ public class FlowchartDfdMcpTools extends AbstractDiagramMcpTools {
     }
     for (IShapeUIModel shape : shapesOf(diagram)) {
       IModelElement model = shape.getModelElement();
-      if (model != null && model.getName() != null && name.equals(model.getName().trim())) {
+      if (model != null && answersTo(shape, model.getName(), name)) {
         return shape;
       }
     }

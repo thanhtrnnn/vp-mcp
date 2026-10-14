@@ -14,6 +14,8 @@ public final class ShapeOutline {
     RECT,
     /** The bounding box with rounded corners: ends keep clear of the curve of the corners. */
     ROUNDED,
+    /** A stick figure (an actor): the whole side of its box takes ends, nearly to the corners. */
+    FIGURE,
     /** The ellipse inscribed in the box (use cases, circles). */
     ELLIPSE,
     /** The diamond through the middle of the four sides (decisions, gateways). */
@@ -24,6 +26,9 @@ public final class ShapeOutline {
      */
     FOLDER
   }
+
+  /** Distance from a corner of a stick figure's box that a connector end keeps. */
+  public static final int FIGURE_CORNER = 4;
 
   /** Distance from a corner of a rounded shape that a connector end keeps. */
   public static final int ROUND_CORNER = 14;
@@ -47,7 +52,7 @@ public final class ShapeOutline {
    * @param next the point before it (gives the direction of the last segment)
    */
   public static void snap(Kind kind, int[] rect, int[] end, int[] next) {
-    if (kind == Kind.RECT || kind == Kind.ROUNDED) {
+    if (kind == Kind.RECT || kind == Kind.ROUNDED || kind == Kind.FIGURE) {
       return;
     }
     if (kind == Kind.FOLDER) {

@@ -68,7 +68,8 @@ public final class DfdLayoutProfile extends LayoutProfile {
   public ElkLayout.Options options(IDiagramUIModel diagram) {
     return new ElkLayout.Options()
         .direction(ElkLayout.Dir.RIGHT)
-        .gaps(70, 90, 18)
+        .gaps(70, 90, 32)
+        .portGap(32) // a flow name fits above the upper and below the lower of two parallel flows
         .padding(30, 30)
         .flowOrder();
   }

@@ -263,6 +263,7 @@ public final class ElkLayout {
     boolean flowOrder;
     boolean favorStraightEdges = true;
     boolean flexibleDirection;
+    int portGap = 14;
 
     /**
      * Flow direction.
@@ -289,6 +290,27 @@ public final class ElkLayout {
       this.baseLayerGap = layer;
       this.edgeGap = Math.max(edge, 15);
       return this;
+    }
+
+    /**
+     * Distance between the ends of two connectors on one side of a shape (and so between parallel
+     * connectors that run from one shape to another): room for a label between two lines.
+     *
+     * @param gap the distance in pixels (more than 14 changes the default)
+     * @return this
+     */
+    public Options portGap(int gap) {
+      this.portGap = gap;
+      return this;
+    }
+
+    /**
+     * The distance between connector ends the layout asks for.
+     *
+     * @return the distance in pixels
+     */
+    public int portGap() {
+      return portGap;
     }
 
     /**
@@ -607,7 +629,7 @@ public final class ElkLayout {
     node.setProperty(
         LayeredOptions.EDGE_ROUTING_SELF_LOOP_DISTRIBUTION,
         org.eclipse.elk.alg.layered.options.SelfLoopDistributionStrategy.EQUALLY);
-    node.setProperty(CoreOptions.SPACING_PORT_PORT, 14.0);
+    node.setProperty(CoreOptions.SPACING_PORT_PORT, (double) options.portGap);
     node.setProperty(LayeredOptions.SPACING_NODE_NODE_BETWEEN_LAYERS, (double) options.layerGap);
     node.setProperty(LayeredOptions.SPACING_EDGE_EDGE_BETWEEN_LAYERS, (double) options.edgeGap);
     node.setProperty(LayeredOptions.SPACING_EDGE_NODE_BETWEEN_LAYERS, (double) options.edgeNodeGap);

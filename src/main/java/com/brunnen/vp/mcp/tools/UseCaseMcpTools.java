@@ -313,7 +313,8 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
       case "Include":
       case "Extend":
         if (!sourceUseCase || !targetUseCase) {
-          return kind
+          return "Error adding relationship: "
+              + kind
               + " joins two use cases; '"
               + (sourceUseCase ? targetName : sourceName)
               + "' is an actor";
@@ -321,7 +322,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
         return null;
       case "Generalization":
         if (sourceUseCase != targetUseCase) {
-          return "A generalization joins two actors or two use cases, not '"
+          return "Error adding relationship: a generalization joins two actors or two use cases, not '"
               + sourceName
               + "' and '"
               + targetName
@@ -330,7 +331,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
         return null;
       default:
         if (sourceUseCase == targetUseCase) {
-          return "An association joins an actor and a use case, not two "
+          return "Error adding relationship: an association joins an actor and a use case, not two "
               + (sourceUseCase ? "use cases" : "actors")
               + " ('"
               + sourceName
@@ -343,7 +344,7 @@ public class UseCaseMcpTools extends AbstractDiagramMcpTools {
   }
 
   private static String nameTaken(String name, String kind, String diagramName) {
-    return "Diagram '"
+    return "Error: diagram '"
         + diagramName
         + "' already shows a "
         + kind

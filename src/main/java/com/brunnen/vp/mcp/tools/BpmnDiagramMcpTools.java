@@ -706,17 +706,20 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
             List<Rectangle> dataObjects =
                 rects(contentOf(diagram, container, Content.DATA_OBJECTS));
 
+            // "End #2" is the handle of a second element that shows "End"
+            String label = labelOfHandle(name);
             IModelElement model = maker.make(ownerOf(diagram, container, role));
-            model.setName(name);
+            model.setName(label);
             IShapeUIModel shape = createShape(diagram, model, name);
+            registerHandle(shape, name, label);
             boolean nested = container == null || container.addChild(shape);
             if (shape instanceof IBPSubProcessUIModel) {
               ((IBPSubProcessUIModel) shape).setExpanded(false); // one box with the + marker
             }
 
-            int[] size = sizeOf(shape, role, name);
+            int[] size = sizeOf(shape, role, label);
             // the node stands in the middle of a slot as wide as its name
-            int slotWidth = Math.max(size[0], nameWidth(role, name));
+            int slotWidth = Math.max(size[0], nameWidth(role, label));
             Point auto =
                 role == NodeRole.DATA_OBJECT
                     ? BpmnUtils.dataObjectPosition(flowNodes, dataObjects, body, size[1])
@@ -1534,6 +1537,30 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     candidates = com.brunnen.vp.mcp.util.ActivityDiagramUtils.onCanvas(candidates);
     int[] spot =
         com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(candidates, w, h, obstacles);
+    if (!com.brunnen.vp.mcp.util.ActivityDiagramUtils.isClear(spot, w, h, obstacles)
+        && caption.getWidth() > 40
+        && connector.getModelElement() != null
+        && connector.getModelElement().getName() != null
+        && connector.getModelElement().getName().trim().contains(" ")) {
+      // the text wraps into two lines: a narrower box fits the short leg between the shapes
+      int narrow = Math.max(w / 2 + 8, 40);
+      int tall = 2 * h;
+      List<int[]> wrapped =
+          new ArrayList<>(
+              com.brunnen.vp.mcp.util.ActivityDiagramUtils.guardCandidates(
+                  points[0].x, points[0].y, points[1].x, points[1].y, narrow, tall));
+      wrapped.add(new int[] {(points[0].x + points[1].x) / 2 - narrow / 2, top - tall - 4});
+      wrapped.add(new int[] {(points[0].x + points[1].x) / 2 - narrow / 2, bottom + 4});
+      wrapped = com.brunnen.vp.mcp.util.ActivityDiagramUtils.onCanvas(wrapped);
+      int[] spot2 =
+          com.brunnen.vp.mcp.util.ActivityDiagramUtils.firstClearSpot(
+              wrapped, narrow, tall, obstacles);
+      if (com.brunnen.vp.mcp.util.ActivityDiagramUtils.isClear(spot2, narrow, tall, obstacles)) {
+        spot = spot2;
+        w = narrow;
+        h = tall;
+      }
+    }
     caption.setBounds(spot[0], spot[1], w, h);
   }
 
@@ -1961,6 +1988,72 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     routeNoteAnchors(diagram);
   }
 
+  /** The lane (else the pool) whose area holds the middle of the shape. */
+  @Override
+  protected IShapeUIModel noteContainerOwn(IDiagramUIModel diagram, IShapeUIModel target) {
+    if (!(diagram instanceof IBusinessProcessDiagramUIModel) || roleOf(target) == null) {
+      return null;
+    }
+    IBusinessProcessDiagramUIModel bpd = (IBusinessProcessDiagramUIModel) diagram;
+    java.awt.Point middle = center(target);
+    for (NodeRole role : new NodeRole[] {NodeRole.LANE, NodeRole.POOL}) {
+      for (IShapeUIModel container : shapesWithRole(bpd, role)) {
+        if (rect(container).contains(middle)) {
+          return container;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * A note inside a pool or lane belongs to it: it is nested there, and the pool grows around it.
+   */
+  @Override
+  protected void afterNoteAdded(IDiagramUIModel diagram) {
+    if (!(diagram instanceof IBusinessProcessDiagramUIModel)) {
+      return;
+    }
+    IBusinessProcessDiagramUIModel bpd = (IBusinessProcessDiagramUIModel) diagram;
+    List<IShapeUIModel> containers = new ArrayList<>(shapesWithRole(bpd, NodeRole.LANE));
+    containers.addAll(shapesWithRole(bpd, NodeRole.POOL));
+    for (IShapeUIModel note : allShapes(bpd)) {
+      if (!(note.getModelElement() instanceof com.vp.plugin.model.INOTE)
+          || note.getParent() != null) {
+        continue;
+      }
+      Rectangle box = rect(note);
+      // a note that reaches past the right edge of the pools: the pools grow to hold it
+      for (IShapeUIModel pool : shapesWithRole(bpd, NodeRole.POOL)) {
+        Rectangle p = rect(pool);
+        if (box.y >= p.y
+            && box.y + box.height <= p.y + p.height
+            && box.x < p.x + p.width
+            && box.x + box.width > p.x + p.width) {
+          int right = box.x + box.width + BpmnUtils.PAD;
+          for (IShapeUIModel other : shapesWithRole(bpd, NodeRole.POOL)) {
+            setBoundsIfChanged(
+                other,
+                new Rectangle(other.getX(), other.getY(), right - other.getX(), other.getHeight()));
+            for (IShapeUIModel lane : lanesOf(bpd, other)) {
+              setBoundsIfChanged(
+                  lane,
+                  new Rectangle(lane.getX(), lane.getY(), right - lane.getX(), lane.getHeight()));
+            }
+          }
+          break;
+        }
+      }
+      for (IShapeUIModel container : containers) {
+        if (rect(container).contains(box)) {
+          container.addChild(note);
+          note.setBounds(box.x, box.y, box.width, box.height); // addChild may re-base the child
+          break;
+        }
+      }
+    }
+  }
+
   /** An event is a circle and a gateway a diamond: the anchor of a note ends on that outline. */
   @Override
   protected com.brunnen.vp.mcp.util.ShapeOutline.Kind outlineOf(IShapeUIModel shape) {
@@ -2302,7 +2395,7 @@ public class BpmnDiagramMcpTools extends AbstractDiagramMcpTools {
     }
     for (IShapeUIModel shape : allShapes(diagram)) {
       IModelElement model = shape.getModelElement();
-      if (roleOf(shape) != null && model.getName() != null && name.equals(model.getName().trim())) {
+      if (roleOf(shape) != null && answersTo(shape, model.getName(), name)) {
         return shape;
       }
     }

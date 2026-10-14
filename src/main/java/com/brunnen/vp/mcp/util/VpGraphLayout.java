@@ -181,6 +181,7 @@ public final class VpGraphLayout {
           graph.nodeSpecs.get(c.getToShape().getId()).outline,
           graph.rect(c.getToShape()));
     }
+    graph.untangle(profile, routes); // (the routes it makes are snapped onto the outlines itself)
     graph.draw(profile, routes, summary, false);
     profile.afterLayout(diagram);
     return summary;
@@ -214,6 +215,15 @@ public final class VpGraphLayout {
                 ? spec.size.clone()
                 : new int[] {Math.max(s.getWidth(), 10), Math.max(s.getHeight(), 10)});
       }
+      // the order the layout sees the shapes in (it keeps the order of the first layer)
+      List<IShapeUIModel> sorted = new ArrayList<>(g.shapes.values());
+      profile.sortNodes(sorted);
+      Map<String, IShapeUIModel> ordered = new LinkedHashMap<>();
+      for (IShapeUIModel s : sorted) {
+        ordered.put(s.getId(), s);
+      }
+      g.shapes.clear();
+      g.shapes.putAll(ordered);
       for (IShapeUIModel s : new ArrayList<>(g.shapes.values())) {
         IShapeUIModel owner = profile.attachedTo(s);
         if (owner != null && g.shapes.containsKey(owner.getId())) {
@@ -291,6 +301,11 @@ public final class VpGraphLayout {
       if ((!parents.isEmpty() || !owners.isEmpty()) && diagram.isAutoFitShapesSize()) {
         diagram.setAutoFitShapesSize(false);
       }
+    }
+
+    /** Least distance between two connector ends on one side of a shape. */
+    private int endGap() {
+      return options != null && options.portGap() > 14 ? options.portGap() : PORT_GAP;
     }
 
     /** Widest label of the connectors inside each container (by container id). */
@@ -418,7 +433,7 @@ public final class VpGraphLayout {
         }
         int[] sz = size.get(e.getKey());
         for (Map.Entry<Character, List<Integer>> side : e.getValue().entrySet()) {
-          int need = side.getValue().size() * PORT_GAP + 2 * CORNER;
+          int need = side.getValue().size() * endGap() + 2 * CORNER;
           boolean horizontalSide = side.getKey() == 'N' || side.getKey() == 'S';
           int have = horizontalSide ? sz[0] : sz[1];
           if (side.getValue().size() > 1 && have < need) {
@@ -459,7 +474,7 @@ public final class VpGraphLayout {
         String tgt = (reverse ? c.getFromShape() : c.getToShape()).getId();
         items.add(new RouteTidy.Item(src, tgt, route));
       }
-      RouteTidy.straighten(items, result.nodes(), PORT_GAP, 28);
+      RouteTidy.straighten(items, result.nodes(), endGap(), 28);
       for (String id : edgeOrder) {
         List<int[]> route = result.routes().get(id);
         if (route == null || route.size() < 2) {
@@ -1253,10 +1268,13 @@ public final class VpGraphLayout {
       for (IShapeUIModel s : shapes.values()) {
         int[] r = rect(s);
         // an end keeps clear of the curve of a rounded corner, and of the corner of a large box
+        ShapeOutline.Kind kind = nodeSpecs.get(s.getId()).outline;
         int margin =
-            nodeSpecs.get(s.getId()).outline == ShapeOutline.Kind.ROUNDED
+            kind == ShapeOutline.Kind.ROUNDED
                 ? ShapeOutline.ROUND_CORNER
-                : Math.max(8, Math.min(20, Math.min(r[2], r[3]) / 8));
+                : kind == ShapeOutline.Kind.FIGURE
+                    ? ShapeOutline.FIGURE_CORNER
+                    : Math.max(8, Math.min(20, Math.min(r[2], r[3]) / 8));
         rects.put(s.getId(), new int[] {r[0], r[1], r[2], r[3], margin});
       }
       Map<String, List<int[]>> before = new LinkedHashMap<>();

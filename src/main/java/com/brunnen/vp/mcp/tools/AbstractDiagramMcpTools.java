@@ -305,7 +305,55 @@ public abstract class AbstractDiagramMcpTools {
    * @return its handle, or null when the shape is known by the name it shows
    */
   protected String handleOf(IDiagramElement de) {
-    return null;
+    return HANDLES.get(de.getId());
+  }
+
+  /**
+   * Handles of shapes that show another text than the name they were added with: "End #2" is the
+   * handle of a second shape that shows "End" (shape id to handle). Shared by the families whose
+   * shapes are found by their text.
+   */
+  private static final java.util.Map<String, String> HANDLES =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  /**
+   * The text a handle shows: the handle without a trailing " #2" style number.
+   *
+   * @param handle the name the caller gave
+   * @return the text the shape shows
+   */
+  protected static String labelOfHandle(String handle) {
+    String label = handle.replaceAll("\\s*#\\d+$", "").trim();
+    return label.isEmpty() ? handle : label;
+  }
+
+  /**
+   * Remember that a shape is known by a handle that differs from its text.
+   *
+   * @param shape the shape
+   * @param handle the name the caller gave
+   * @param label the text the shape shows
+   */
+  protected static void registerHandle(IDiagramElement shape, String handle, String label) {
+    if (!handle.equals(label)) {
+      HANDLES.put(shape.getId(), handle);
+    }
+  }
+
+  /**
+   * Whether a shape answers to a name: by its handle when it has one, else by the name of its
+   * model.
+   *
+   * @param shape the shape
+   * @param modelName the name of its model element
+   * @param name the name looked for
+   * @return true when the name is the shape's
+   */
+  protected static boolean answersTo(IDiagramElement shape, String modelName, String name) {
+    String handle = HANDLES.get(shape.getId());
+    return handle != null
+        ? name.equals(handle)
+        : modelName != null && name.equals(modelName.trim());
   }
 
   /**
@@ -1194,6 +1242,11 @@ public abstract class AbstractDiagramMcpTools {
       int top = current.getY();
       int right = left + current.getWidth();
       int bottom = top + current.getHeight();
+      int[] least = minimumSizeOf(current); // a size asked for is a minimum
+      if (least != null) {
+        right = Math.max(right, left + least[0]);
+        bottom = Math.max(bottom, top + least[1]);
+      }
       IShapeUIModel[] children = current.toChildArray();
       for (IShapeUIModel child : children == null ? new IShapeUIModel[0] : children) {
         if (child.getModelElement() instanceof com.vp.plugin.model.IPort || child.getWidth() <= 0) {
@@ -1215,6 +1268,33 @@ public abstract class AbstractDiagramMcpTools {
       IDiagramElement up = current.getParent();
       current = up instanceof IShapeUIModel ? (IShapeUIModel) up : null;
     }
+  }
+
+  /**
+   * Hook: the least size {width, height} a container may be given by what it holds (the size that
+   * was asked for when it was added), null for none.
+   *
+   * @param container a container shape
+   * @return the least size, or null
+   */
+  protected int[] minimumSizeOf(IShapeUIModel container) {
+    for (AbstractDiagramMcpTools family : families()) {
+      int[] least = family.minimumSize(container);
+      if (least != null) {
+        return least;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Hook of {@link #minimumSizeOf}: a family that remembers the size it was asked for.
+   *
+   * @param container a container shape
+   * @return the size it must keep, or null
+   */
+  protected int[] minimumSize(IShapeUIModel container) {
+    return null;
   }
 
   /**
@@ -1776,7 +1856,9 @@ public abstract class AbstractDiagramMcpTools {
   @Tool(
       name = "getDiagramGeometry",
       description =
-          "Dump the geometry of any diagram: every shape with its bounds (nested shapes indented"
+          "Dump the geometry of any diagram (the positions the add* tools answer with are the ones"
+              + " of that moment: the diagram is laid out again after every addition, this is the"
+              + " final picture): every shape with its bounds (nested shapes indented"
               + " under their container, with the owner of a port) and every connector with its"
               + " end shapes, its points and the bounds of its caption. For checking a layout"
               + " without a picture: connector ends, label positions, shapes inside their frame")
@@ -2025,17 +2107,41 @@ public abstract class AbstractDiagramMcpTools {
                 px = own[0];
                 py = own[1];
               } else if (target != null) {
-                int[] spot = noteSpot(diagram, shape, target, width, height, true);
+                int[] spot =
+                    noteSpot(
+                        diagram,
+                        shape,
+                        target,
+                        noteContainer(diagram, target),
+                        width,
+                        height,
+                        true);
                 if (spot == null) {
                   // no room in the lane of the target: narrower lines (a taller, slimmer box)
                   lines = wrapNote(text, NOTE_NARROW_COLUMNS);
                   width = noteWidth(lines);
                   height = noteHeight(lines);
                   note.setDescription(String.join("\n", lines));
-                  spot = noteSpot(diagram, shape, target, width, height, true);
+                  spot =
+                      noteSpot(
+                          diagram,
+                          shape,
+                          target,
+                          noteContainer(diagram, target),
+                          width,
+                          height,
+                          true);
                 }
                 if (spot == null) {
-                  spot = noteSpot(diagram, shape, target, width, height, false);
+                  spot =
+                      noteSpot(
+                          diagram,
+                          shape,
+                          target,
+                          noteContainer(diagram, target),
+                          width,
+                          height,
+                          false);
                 }
                 px = spot[0];
                 py = spot[1];
@@ -2052,7 +2158,6 @@ public abstract class AbstractDiagramMcpTools {
             }
             shape.setBounds(Math.max(px, 0), Math.max(py, 0), width, height);
             shape.resetCaption();
-            fitShape(shape); // the box Visual Paradigm itself needs for the text: no orphan words
             String anchored = "";
             if (target != null) {
               com.vp.plugin.model.IAnchor anchor = getModelElementFactory().createAnchor();
@@ -2114,6 +2219,36 @@ public abstract class AbstractDiagramMcpTools {
         return spot;
       }
     }
+    return null;
+  }
+
+  /**
+   * The lane (or pool) a note for {@code target} must stay inside: the shape that holds the target.
+   * A family whose shapes are only drawn inside their lane (BPMN) finds it by geometry.
+   *
+   * @param diagram the diagram
+   * @param target the shape the note explains
+   * @return the lane shape, or null
+   */
+  protected IShapeUIModel noteContainer(IDiagramUIModel diagram, IShapeUIModel target) {
+    for (AbstractDiagramMcpTools family : families()) {
+      IShapeUIModel own = family.noteContainerOwn(diagram, target);
+      if (own != null) {
+        return own;
+      }
+    }
+    IDiagramElement parent = target.getParent();
+    return parent instanceof IShapeUIModel ? (IShapeUIModel) parent : null;
+  }
+
+  /**
+   * Hook of {@link #noteContainer}: a family that knows the lane of a shape by its geometry.
+   *
+   * @param diagram the diagram
+   * @param target the shape the note explains
+   * @return the lane shape, or null
+   */
+  protected IShapeUIModel noteContainerOwn(IDiagramUIModel diagram, IShapeUIModel target) {
     return null;
   }
 
@@ -2274,6 +2409,7 @@ public abstract class AbstractDiagramMcpTools {
       IDiagramUIModel diagram,
       IShapeUIModel note,
       IShapeUIModel target,
+      IShapeUIModel laneShape,
       int w,
       int h,
       boolean inLane) {
@@ -2311,10 +2447,9 @@ public abstract class AbstractDiagramMcpTools {
         boxes.add(new int[] {cap.getX(), cap.getY(), cap.getWidth(), cap.getHeight()});
       }
     }
-    IDiagramElement parent = target.getParent();
     int[] lane =
-        parent instanceof IShapeUIModel && !isSolidContainer(parent.getModelElement())
-            ? rect(parent)
+        laneShape != null && !isSolidContainer(laneShape.getModelElement())
+            ? rect(laneShape)
             : null;
     int tx = target.getX();
     int ty = target.getY();
@@ -2461,9 +2596,11 @@ public abstract class AbstractDiagramMcpTools {
               + " client above supplier, ports on the side their lines lead away to. Package:"
               + " frames around what they hold, a package above the ones it depends on. Object:"
               + " layers by the links. Deployment: nodes from left to right by their communication"
-              + " paths, nested nodes, artifacts and components inside their node. Sequence and"
-              + " BPMN diagrams are laid out as you add elements: nothing is moved (use"
-              + " setElementBounds and rerouteConnectors)")
+              + " paths (stacked when that gives a rounder drawing), nested nodes, artifacts and"
+              + " components inside their node. BPMN: the auto-placed elements move left next to"
+              + " their sources and the pools narrow to their content (rows stay). Sequence"
+              + " diagrams are laid out as you add elements: nothing is moved (use setElementBounds"
+              + " and rerouteConnectors)")
   public String autoLayoutDiagram(String diagramName) {
     try {
       return runOnEdt(
@@ -2648,6 +2785,12 @@ public abstract class AbstractDiagramMcpTools {
     return hits;
   }
 
+  /** Index of the ": " in front of "A -> B" in a connector's line (a name may hold one too). */
+  private static int endsStart(String line) {
+    int arrow = line.indexOf(" -> ");
+    return arrow < 0 ? line.indexOf(": ") : line.lastIndexOf(": ", arrow);
+  }
+
   /** Every text that names a connector. */
   private static List<String> connectorForms(IDiagramElement de) {
     IModelElement model = de.getModelElement();
@@ -2655,7 +2798,7 @@ public abstract class AbstractDiagramMcpTools {
     String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
     String line = describeConnector(de, model, type);
     forms.add(line);
-    int colon = line.indexOf(": ");
+    int colon = endsStart(line);
     if (colon >= 0) {
       forms.add(line.substring(colon + 2)); // "A -> B [guard]"
       int guard = line.lastIndexOf(" [");
@@ -2681,7 +2824,7 @@ public abstract class AbstractDiagramMcpTools {
     IModelElement model = de.getModelElement();
     String type = model != null ? getSemanticTypeName(model) : de.getShapeType();
     String line = describeConnector(de, model, type);
-    int colon = line.indexOf(": ");
+    int colon = endsStart(line);
     String ends = colon >= 0 ? line.substring(colon + 2) : line;
     if (model instanceof IMessage) {
       String seq = ((IMessage) model).getSequenceNumber();
@@ -2705,12 +2848,11 @@ public abstract class AbstractDiagramMcpTools {
    */
   protected String removeConnectorsBetween(
       IDiagramUIModel diagram, String fromName, String toName, String kind) {
-    IDiagramElement a =
-        findDiagramElementByName(diagram, fromName == null ? null : fromName.trim());
+    IDiagramElement a = resolveShape(diagram, fromName == null ? null : fromName.trim());
     if (!(a instanceof IShapeUIModel)) {
       return "Element not on diagram: " + fromName;
     }
-    IDiagramElement b = findDiagramElementByName(diagram, toName == null ? null : toName.trim());
+    IDiagramElement b = resolveShape(diagram, toName == null ? null : toName.trim());
     if (!(b instanceof IShapeUIModel)) {
       return "Element not on diagram: " + toName;
     }
@@ -2761,6 +2903,33 @@ public abstract class AbstractDiagramMcpTools {
         + "' on diagram '"
         + diagram.getName()
         + "'";
+  }
+
+  /**
+   * Hook: a shape by a handle other than its name (a DFD element by its ID: "1" or "D1"). The
+   * default knows none.
+   *
+   * @param diagram the diagram
+   * @param handle what the caller wrote
+   * @return the shape, or null
+   */
+  protected IShapeUIModel shapeByHandle(IDiagramUIModel diagram, String handle) {
+    return null;
+  }
+
+  /** The shape a caller means by a name or by the handle a family gives its shapes. */
+  private IDiagramElement resolveShape(IDiagramUIModel diagram, String name) {
+    IDiagramElement byName = findDiagramElementByName(diagram, name);
+    if (byName instanceof IShapeUIModel || name == null) {
+      return byName;
+    }
+    for (AbstractDiagramMcpTools family : families()) {
+      IShapeUIModel shape = family.shapeByHandle(diagram, name);
+      if (shape != null) {
+        return shape;
+      }
+    }
+    return byName;
   }
 
   private static boolean connectorMatches(IModelElement model, String wanted) {

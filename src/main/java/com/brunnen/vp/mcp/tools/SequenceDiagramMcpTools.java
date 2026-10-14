@@ -1100,7 +1100,32 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         row.connector.addPoint(p);
       }
       row.connector.resetCaption();
+      if (row.self) {
+        moveSelfCaption(row.connector);
+      }
     }
+  }
+
+  /**
+   * Put the label of a message to itself right of its loop: Visual Paradigm puts it on the loop's
+   * right edge, where its (opaque) box hides the vertical line that closes the loop.
+   */
+  private static void moveSelfCaption(com.vp.plugin.diagram.IConnectorUIModel connector) {
+    com.vp.plugin.diagram.ICaptionUIModel cap = connector.getCaptionUIModel();
+    Point[] points = connector.getPoints();
+    if (cap == null || cap.getWidth() <= 0 || points == null || points.length < 2) {
+      return;
+    }
+    int right = Integer.MIN_VALUE;
+    int top = Integer.MAX_VALUE;
+    int bottom = Integer.MIN_VALUE;
+    for (Point p : points) {
+      right = Math.max(right, p.x);
+      top = Math.min(top, p.y);
+      bottom = Math.max(bottom, p.y);
+    }
+    cap.setBounds(
+        right + 6, (top + bottom) / 2 - cap.getHeight() / 2, cap.getWidth(), cap.getHeight());
   }
 
   /**
@@ -1206,7 +1231,7 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
   private static final int MSG_TOP_Y = 100;
   private static final int MSG_STEP_Y = 36;
   private static final int SELF_LOOP_W = 36;
-  private static final int SELF_LOOP_H = 10;
+  private static final int SELF_LOOP_H = 16;
   // Combined fragment frame: VP's operator tab row, the space below the last covered message, and
   // the side margin around the covered lifelines.
   private static final int FRAGMENT_HEADER = 17;
@@ -1383,6 +1408,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
     if (msgShape instanceof com.vp.plugin.diagram.IBaseDiagramElement) {
       // resetCaption() (as in the VP Open API sample) makes the message label render on the arrow.
       ((com.vp.plugin.diagram.IBaseDiagramElement) msgShape).resetCaption();
+      if (self && msgShape instanceof com.vp.plugin.diagram.IConnectorUIModel) {
+        moveSelfCaption((com.vp.plugin.diagram.IConnectorUIModel) msgShape);
+      }
     }
 
     // VP just created a small activation per message end. Rather than add a new bar, grow the
@@ -1710,6 +1738,9 @@ public class SequenceDiagramMcpTools extends AbstractDiagramMcpTools {
         row.connector.addPoint(new Point(p.x, p.y + dy));
       }
       row.connector.resetCaption();
+      if (row.self) {
+        moveSelfCaption(row.connector);
+      }
       lowest = Math.max(lowest, row.bottom() + dy);
     }
     for (IDiagramElement de : getDiagramElementsList(diagram)) {

@@ -12,6 +12,10 @@ import com.vp.plugin.model.IInclude;
 import com.vp.plugin.model.IModelElement;
 import com.vp.plugin.model.ISystem;
 import com.vp.plugin.model.IUseCase;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Use case diagrams: the flow goes from the actors on the left (first layer) through the use cases
@@ -25,7 +29,108 @@ public final class UseCaseLayoutProfile extends LayoutProfile {
 
   @Override
   public ElkLayout.Options options(IDiagramUIModel diagram) {
-    return new ElkLayout.Options().direction(ElkLayout.Dir.RIGHT).gaps(36, 110, 18).padding(48, 36);
+    return new ElkLayout.Options()
+        .direction(ElkLayout.Dir.RIGHT)
+        .gaps(36, 110, 18)
+        .padding(48, 36)
+        .flowOrder();
+  }
+
+  @Override
+  public void sortNodes(List<IShapeUIModel> shapes) {
+    // actors in the order of their generalizations (a general actor, then its specializations, a
+    // block per general actor: the brackets between them nest instead of crossing), the use cases
+    // after the actor they are joined to
+    List<IShapeUIModel> actors = new ArrayList<>();
+    for (IShapeUIModel s : shapes) {
+      if (s.getModelElement() instanceof IActor) {
+        actors.add(s);
+      }
+    }
+    List<IShapeUIModel> actorOrder = new ArrayList<>();
+    Set<String> seen = new HashSet<>();
+    for (IShapeUIModel actor : actors) {
+      if (parentOf(actor) == null) {
+        visit(actor, actorOrder, seen);
+      }
+    }
+    for (IShapeUIModel actor : actors) {
+      visit(actor, actorOrder, seen); // a cycle of generalizations
+    }
+    List<IShapeUIModel> useCases = new ArrayList<>();
+    List<IShapeUIModel> rest = new ArrayList<>();
+    for (IShapeUIModel s : shapes) {
+      if (s.getModelElement() instanceof IUseCase) {
+        useCases.add(s);
+      } else if (!(s.getModelElement() instanceof IActor)) {
+        rest.add(s);
+      }
+    }
+    List<IShapeUIModel> useCaseOrder = new ArrayList<>();
+    Set<String> placed = new HashSet<>();
+    for (IShapeUIModel actor : actorOrder) {
+      for (IShapeUIModel uc : useCases) {
+        if (!placed.contains(uc.getId()) && associated(actor, uc)) {
+          placed.add(uc.getId());
+          useCaseOrder.add(uc);
+        }
+      }
+    }
+    for (IShapeUIModel uc : useCases) {
+      if (placed.add(uc.getId())) {
+        useCaseOrder.add(uc);
+      }
+    }
+    shapes.clear();
+    shapes.addAll(rest);
+    shapes.addAll(actorOrder);
+    shapes.addAll(useCaseOrder);
+  }
+
+  private static void visit(IShapeUIModel actor, List<IShapeUIModel> order, Set<String> seen) {
+    if (!seen.add(actor.getId())) {
+      return;
+    }
+    order.add(actor);
+    IConnectorUIModel[] out = actor.toFromConnectorArray();
+    for (IConnectorUIModel c : out == null ? new IConnectorUIModel[0] : out) {
+      // a generalization is stored from the general actor to the specialization
+      if (c.getModelElement() instanceof IGeneralization
+          && c.getToShape() != null
+          && c.getToShape().getModelElement() instanceof IActor) {
+        visit(c.getToShape(), order, seen);
+      }
+    }
+  }
+
+  private static IShapeUIModel parentOf(IShapeUIModel actor) {
+    IConnectorUIModel[] in = actor.toToConnectorArray();
+    for (IConnectorUIModel c : in == null ? new IConnectorUIModel[0] : in) {
+      if (c.getModelElement() instanceof IGeneralization
+          && c.getFromShape() != null
+          && c.getFromShape().getModelElement() instanceof IActor) {
+        return c.getFromShape();
+      }
+    }
+    return null;
+  }
+
+  /** Whether a plain association joins the actor and the use case (either way round). */
+  private static boolean associated(IShapeUIModel actor, IShapeUIModel useCase) {
+    for (IConnectorUIModel[] list :
+        new IConnectorUIModel[][] {actor.toFromConnectorArray(), actor.toToConnectorArray()}) {
+      for (IConnectorUIModel c : list == null ? new IConnectorUIModel[0] : list) {
+        IModelElement m = c.getModelElement();
+        if (m != null
+            && !(m instanceof IGeneralization)
+            && ((c.getToShape() != null && c.getToShape().getId().equals(useCase.getId()))
+                || (c.getFromShape() != null
+                    && c.getFromShape().getId().equals(useCase.getId())))) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   @Override
@@ -47,6 +152,7 @@ public final class UseCaseLayoutProfile extends LayoutProfile {
       spec.layer = ElkLayout.FIRST_LAYER;
       spec.outsideLabel = nameBox(shape);
       spec.growable = false;
+      spec.outline = ShapeOutline.Kind.FIGURE;
     } else if (model instanceof IUseCase) {
       spec.outline = ShapeOutline.Kind.ELLIPSE;
     } else if (model instanceof ISystem) {

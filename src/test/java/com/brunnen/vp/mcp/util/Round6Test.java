@@ -303,4 +303,51 @@ public class Round6Test {
     assertEquals(1, RouteChecks.crossingsBetween(route(0, 50, 100, 50), route(50, 0, 50, 100)));
     assertEquals(0, RouteChecks.crossingsBetween(route(0, 50, 100, 50), route(150, 0, 150, 100)));
   }
+
+  @Test
+  public void aSmallStepInTheMiddleOfARouteIsTakenOut() {
+    List<int[]> r = route(100, 0, 100, 50, 103, 50, 103, 100, 160, 100);
+    RouteTidy.removeMiddleJogs(r, 6);
+    assertOrthogonal(r);
+    for (int i = 0; i + 1 < r.size(); i++) {
+      int[] a = r.get(i);
+      int[] b = r.get(i + 1);
+      assertTrue(
+          "no step of 3 px is left", Math.abs(a[0] - b[0]) != 3 && Math.abs(a[1] - b[1]) != 3);
+    }
+    assertEquals("the start stays", 100, r.get(0)[0]);
+    assertEquals("the end stays", 160, r.get(r.size() - 1)[0]);
+    assertEquals(100, r.get(r.size() - 1)[1]);
+  }
+
+  @Test
+  public void fiveGeneralizationsFitTheWestSideOfAFigure() {
+    List<OrthogonalRouter.Shape> shapes = new ArrayList<>();
+    shapes.add(
+        new OrthogonalRouter.Shape(
+            "p", new int[] {101, 500, 30, 60}, null, ShapeOutline.Kind.FIGURE));
+    List<OrthogonalRouter.Conn> conns = new ArrayList<>();
+    for (int i = 0; i < 5; i++) {
+      shapes.add(
+          new OrthogonalRouter.Shape(
+              "c" + i, new int[] {101, 700 + i * 120, 30, 60}, null, ShapeOutline.Kind.FIGURE));
+      conns.add(new OrthogonalRouter.Conn("g" + i, "p", "c" + i).sides(3, 3));
+    }
+    Map<String, List<int[]>> routes = OrthogonalRouter.route(shapes, conns);
+    List<Integer> ends = new ArrayList<>();
+    for (OrthogonalRouter.Conn c : conns) {
+      List<int[]> r = routes.get(c.id);
+      assertNotNull(r);
+      assertOrthogonal(r);
+      assertEquals(101, r.get(0)[0]);
+      ends.add(r.get(0)[1]);
+    }
+    for (int i = 0; i < ends.size(); i++) {
+      for (int j = i + 1; j < ends.size(); j++) {
+        assertTrue(
+            "ends of two generalizations are 12 px apart: " + ends,
+            Math.abs(ends.get(i) - ends.get(j)) >= 12);
+      }
+    }
+  }
 }

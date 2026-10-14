@@ -317,6 +317,19 @@ public final class ActivityDiagramUtils {
     return best;
   }
 
+  /**
+   * Whether a w x h label at a corner touches none of the obstacles.
+   *
+   * @param c top-left corner
+   * @param w label width
+   * @param h label height
+   * @param obstacles rectangles {x, y, w, h}
+   * @return true when the spot is clear
+   */
+  public static boolean isClear(int[] c, int w, int h, java.util.List<int[]> obstacles) {
+    return hits(c, w, h, obstacles) == 0;
+  }
+
   private static int hits(int[] c, int w, int h, java.util.List<int[]> obstacles) {
     int hits = 0;
     for (int[] o : obstacles) {

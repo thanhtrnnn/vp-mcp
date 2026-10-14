@@ -49,6 +49,7 @@ public final class RouteTidy {
       List<Item> items, Map<String, int[]> rects, int portGap, int maxJog) {
     for (Item item : items) {
       removeCollinear(item.points);
+      removeMiddleJogs(item.points, MIDDLE_JOG);
     }
     boolean changed = true;
     int rounds = 0;
@@ -61,6 +62,65 @@ public final class RouteTidy {
         changed |= straightenStart(item, items, rects, portGap, maxJog);
         changed |= straightenEnd(item, items, rects, portGap, maxJog);
         removeCollinear(item.points);
+      }
+    }
+  }
+
+  /** Largest sideways step in the middle of a route that is taken out. */
+  private static final int MIDDLE_JOG = 6;
+
+  /**
+   * Take out a small step in the middle of a route: a line that runs on, jumps a few pixels
+   * sideways and runs on again becomes one straight line (the later part of the route moves by the
+   * step; the ends of the route stay on their shapes).
+   *
+   * @param pts the route, modified in place
+   * @param max largest step that is removed
+   */
+  public static void removeMiddleJogs(List<int[]> pts, int max) {
+    boolean changed = true;
+    while (changed) {
+      changed = false;
+      for (int i = 0; i + 3 < pts.size(); i++) {
+        int[] a = pts.get(i);
+        int[] b = pts.get(i + 1);
+        int[] c = pts.get(i + 2);
+        int[] d = pts.get(i + 3);
+        boolean vertical = a[0] == b[0] && c[0] == d[0] && b[1] == c[1];
+        boolean horizontal = a[1] == b[1] && c[1] == d[1] && b[0] == c[0];
+        if (vertical && b[0] != c[0] && Math.abs(c[0] - b[0]) <= max && i + 3 < pts.size() - 1) {
+          // d is not the end of the route: its leg moves with the step
+          int step = b[0] - c[0];
+          c[0] += step;
+          d[0] += step;
+          changed = true;
+          break;
+        }
+        if (horizontal && b[1] != c[1] && Math.abs(c[1] - b[1]) <= max && i + 3 < pts.size() - 1) {
+          int step = b[1] - c[1];
+          c[1] += step;
+          d[1] += step;
+          changed = true;
+          break;
+        }
+        if (vertical && b[0] != c[0] && Math.abs(c[0] - b[0]) <= max && i > 0) {
+          // a is not the start: the first part moves
+          int step = c[0] - b[0];
+          a[0] += step;
+          b[0] += step;
+          changed = true;
+          break;
+        }
+        if (horizontal && b[1] != c[1] && Math.abs(c[1] - b[1]) <= max && i > 0) {
+          int step = c[1] - b[1];
+          a[1] += step;
+          b[1] += step;
+          changed = true;
+          break;
+        }
+      }
+      if (changed) {
+        removeCollinear(pts);
       }
     }
   }

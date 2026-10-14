@@ -31,10 +31,13 @@ The main tools per diagram family are listed below. Project, layout and export h
 (for example `listDiagrams`, `exportDiagramImage`, `saveProject`) are also available, and so are
 tools that work on any diagram: `setElementBounds` (x or y <= 0 keeps the current coordinate; a
 container takes its nested shapes along, a sequence lifeline its messages),
-`rerouteConnectors`, `removeDiagramElement`, `removeRelationship(diagramName, fromElement, toElement,
+`rerouteConnectors`, `removeDiagramElement` (a connector is found by the text the listings print:
+`A -> B`, `A -> B [guard]`, `5: label` for a message; a text that fits several connectors removes none and
+lists them), `removeRelationship(diagramName, fromElement, toElement,
 relationshipType)` (also deletes an unnamed connector of a use case, activity, state, flowchart, DFD
 or BPMN diagram), `renameElement(diagramName, elementName, newName)`, `addNote(diagramName,
-text, attachedTo, x, y)` (a comment box at the first free spot beside the shape it is anchored to) and
+text, attachedTo, x, y)` (a comment box at the first free spot beside the shape it is anchored to; its
+dashed anchor is a horizontal or vertical line, under a lifeline in a sequence diagram) and
 `getDiagramGeometry(diagramName)` (bounds of every shape, points of every connector, caption
 bounds). `listDiagrams(type)` takes friendly names (Sequence, State, ER, Communication, BPMN, DFD...)
 and matches the exact diagram type.
@@ -44,7 +47,11 @@ Layout Kernel that Visual Paradigm bundles in `lib02.jar` decides where the shap
 router draws the lines): after every `add*` call the shapes, lines and labels are placed again, so every
 line is horizontal or vertical (right-angle elbows, rectangular loops), shapes never overlap, no line runs
 through a shape or on top of another line, and labels sit beside their lines. A shape placed with x/y (or
-moved with `setElementBounds`) is pinned: lines are routed around it. `autoLayoutDiagram` lays the whole
+moved with `setElementBounds`) is pinned: lines are routed around it, and in activity, state and flowchart
+diagrams the other shapes are still laid out around it. In activity, flowchart, DFD and BPMN diagrams a
+name is the handle of the tools and must be unique, but a trailing ` #2` is only part of the handle (two
+terminators or end events can both show "End"). A tool that fails answers with a text that starts with
+`Error`. `autoLayoutDiagram` lays the whole
 diagram out again; `rerouteConnectors` routes the lines around the shapes where they stand. Deployment
 nodes, devices and execution environments are flat rectangles with their keyword and name. A diagram that
 holds containers (packages, nodes, nested components) or component ports no longer lets Visual Paradigm
@@ -82,7 +89,7 @@ entities in rows; every message is an arrow beside its link, turned along the le
 
 ##### Class Diagram (12 tools)
 - **createClassDiagram(diagramName)**: Create new class diagrams
-- **addClass(diagramName, className)**: Add classes to diagrams
+- **addClass(diagramName, className)**: Add classes to diagrams (with `packageName` the class is drawn inside that package frame and, when new, owned by the package)
 - **addAttribute(className, attributeName, attributeType, visibility)**: Add attributes to classes
 - **addOperation(className, operationName, returnType, params)**: Add operations/methods to classes
 - **removeAttribute(diagramName, className, attributeName)**, **removeOperation(diagramName, className, operationName)**: Correct a class without rebuilding it
@@ -117,8 +124,8 @@ entities in rows; every message is an arrow beside its link, turned along the le
 ##### Activity Diagram (7 tools)
 - **createActivityDiagram(diagramName)**: Create new activity diagrams
 - **addActivityPartition(diagramName, partitionName, x, y, width, height)**: Add a vertical swimlane lane
-- **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text
-- **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes (a trailing ` #2` is only part of the handle: a second "End #2" shows "End")
+- **addActivityAction(diagramName, actionName, partitionName, x, y)**: Add an action, fitted to its text (a trailing ` #2` is only part of the handle: "Show #2" shows "Show", so the same text can stand in several page frames)
+- **addActivityControlNode(diagramName, kind, nodeName, partitionName, x, y)**: Add initial/final/flowFinal/decision/merge/fork/join nodes (a trailing ` #2` is only part of the handle: a second "End #2" shows "End"; a name that is only a number, `#1`, makes a diamond with no text)
 - **addActivityObjectNode(diagramName, objectName, state, partitionName, x, y)**: Add an object node with optional [state], optionally in a lane
 - **addActivityFlow(diagramName, fromNode, toNode, guard, twoWay)**: Add a control or object flow with optional [guard]; twoWay also draws the flow back as a second arrow beside the first (action <-> "XxxDAO: method()")
 - **addActivityFrame(diagramName, title, nodeNames, x, y, width, height)**: Add a rounded titled frame around nodes ("Xử lí tại gdXxx.jsp")
@@ -126,7 +133,7 @@ entities in rows; every message is an arrow beside its link, turned along the le
 ##### Component Diagram (8 tools)
 - **createComponentDiagram(diagramName)**: Create new component diagrams
 - **addComponent(diagramName, componentName, stereotype, parentComponent, x, y, packageName)**: Add (nested) components, optionally inside a package (layer) frame
-- **addComponentPackage(diagramName, packageName, parentPackage, x, y, width, height)**: Add a package (layer) frame
+- **addComponentPackage(diagramName, packageName, parentPackage, x, y, width, height, backgroundColor)**: Add a package (layer) frame (`backgroundColor` `#RRGGBB` gives it a tint of its own)
 - **addComponentInterface(diagramName, interfaceName, x, y)**: Add an interface (an `<<interface>>` box)
 - **addProvidedInterface(diagramName, componentName, interfaceName)**: Component provides an interface
 - **addRequiredInterface(diagramName, componentName, interfaceName)**: Component requires an interface
@@ -144,7 +151,7 @@ entities in rows; every message is an arrow beside its link, turned along the le
 
 ##### Package and Object Diagrams (7 tools)
 - **createPackageDiagram(diagramName)**: Create new package diagrams
-- **addPackageElement(diagramName, packageName, parentPackage, x, y, width, height)**: Add (nested) packages
+- **addPackageElement(diagramName, packageName, parentPackage, x, y, width, height, backgroundColor)**: Add (nested) packages (`backgroundColor` `#RRGGBB` gives a frame a tint of its own)
 - **addPackageDependency(diagramName, fromPackage, toPackage, kind)**: Add use/import/access/merge dependencies, or a plain `line`
 - **addClassInPackage(diagramName, packageName, className)**: Show a class inside a package
 - **createObjectDiagram(diagramName)**: Create new object diagrams

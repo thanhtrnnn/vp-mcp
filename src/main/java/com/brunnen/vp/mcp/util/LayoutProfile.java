@@ -319,6 +319,18 @@ public class LayoutProfile {
   }
 
   /**
+   * Put the shapes into the order the layered layout should see them in: a layout keeps the order
+   * of the nodes of a layer when it has no reason to change it (the actors of a use case diagram
+   * stand in the order of their generalizations, the use cases below the actor they belong to). The
+   * default keeps the order of the diagram.
+   *
+   * @param shapes the shapes, reordered in place
+   */
+  public void sortNodes(List<IShapeUIModel> shapes) {
+    // the order of the diagram
+  }
+
+  /**
    * The role of a shape in the layout.
    *
    * @param shape a shape of the diagram

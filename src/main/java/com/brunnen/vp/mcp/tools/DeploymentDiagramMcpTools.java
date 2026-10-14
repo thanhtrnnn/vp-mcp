@@ -52,6 +52,11 @@ public class DeploymentDiagramMcpTools extends AbstractDiagramMcpTools {
         : null;
   }
 
+  @Override
+  protected int[] minimumSize(IShapeUIModel container) {
+    return minimumSize.get(container.getId());
+  }
+
   /** Width and height asked for with addDeploymentNode, by shape id: nodes never get smaller. */
   private final java.util.Map<String, int[]> minimumSize = new java.util.HashMap<>();
 

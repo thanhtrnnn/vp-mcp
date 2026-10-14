@@ -111,7 +111,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
               + "layout decides: packages in layers by their dependencies (a package above the "
               + "ones it depends on), children inside their frame. width/height (>0) set the size "
               + "of an explicitly placed frame; a frame is always at least 100x50, wide enough "
-              + "for its name and big enough for what it holds. A package of that "
+              + "for its name and big enough for what it holds. backgroundColor is '#RRGGBB' for a "
+              + "tint of its own (\"\" = the house blue). A package of that "
               + "name already in the project (root, or inside parentPackage) is reused: a new "
               + "view of it is drawn")
   public String addPackageElement(
@@ -121,7 +122,8 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
       int x,
       int y,
       int width,
-      int height) {
+      int height,
+      String backgroundColor) {
     try {
       return runOnEdt(
           () -> {
@@ -136,6 +138,15 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             String name = packageName.trim();
             if (findShape(diagram, name, IPackage.class) != null) {
               return "Package already on diagram: " + name;
+            }
+            if (backgroundColor != null && !backgroundColor.trim().isEmpty()) {
+              try {
+                java.awt.Color.decode(backgroundColor.trim());
+              } catch (NumberFormatException e) {
+                return "Error adding package: backgroundColor must be #RRGGBB, got '"
+                    + backgroundColor
+                    + "'";
+              }
             }
             IShapeUIModel parentShape = null;
             if (PackageObjectDiagramUtils.isValidName(parentPackage)) {
@@ -166,6 +177,9 @@ public class PackageObjectDiagramMcpTools extends AbstractDiagramMcpTools {
             }
             IShapeUIModel shape = (IShapeUIModel) de;
             resetCaption(shape);
+            if (backgroundColor != null && !backgroundColor.trim().isEmpty()) {
+              shape.getFillColor().setColor1(java.awt.Color.decode(backgroundColor.trim()), true);
+            }
             if (parentShape != null && shape instanceof IPackageUIModel) {
               // The frame already sits inside its owner, so "(from Parent)" would be noise.
               ((IPackageUIModel) shape).setShowOwnerOption(IPackageUIModel.SHOW_OWNER_NONE);

@@ -826,6 +826,12 @@ public class ActivityDiagramMcpTools extends AbstractDiagramMcpTools {
       pin(shape);
     }
     relayout(diagram);
+    if (shape.getModelElement() instanceof com.vp.plugin.model.IActivity
+        && (shape.getX() != left || shape.getY() != top)) {
+      note +=
+          " (a page frame stands around the nodes it was made for: the layout put it back, move"
+              + " its nodes instead)";
+    }
     return boundsResult(name, shape) + note;
   }
 

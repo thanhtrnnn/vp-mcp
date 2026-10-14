@@ -544,8 +544,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
               + " frame. x/y (>0) place it explicitly and keep it there, otherwise the layout"
               + " stacks the frames by the dependencies between their components (a layer above"
               + " the layers it depends on); width/height (>0) size an explicitly placed frame"
-              + " (it still grows around its components). A package of that name already in the"
-              + " project (same owner) is reused")
+              + " (it still grows around its components). backgroundColor is '#RRGGBB' for a tint of"
+              + " its own (\"\" = the house blue, as the components in it). A package of that name"
+              + " already in the project (same owner) is reused")
   public String addComponentPackage(
       String diagramName,
       String packageName,
@@ -553,7 +554,8 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
       int x,
       int y,
       int width,
-      int height) {
+      int height,
+      String backgroundColor) {
     try {
       return runOnEdt(
           () -> {
@@ -567,6 +569,15 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             String name = packageName.trim();
             if (findShape(diagram, name, Kind.PACKAGE) != null) {
               return "Package already on diagram: " + name;
+            }
+            if (backgroundColor != null && !backgroundColor.trim().isEmpty()) {
+              try {
+                java.awt.Color.decode(backgroundColor.trim());
+              } catch (NumberFormatException e) {
+                return "Error adding package: backgroundColor must be #RRGGBB, got '"
+                    + backgroundColor
+                    + "'";
+              }
             }
             IShapeUIModel parent = null;
             if (ComponentDiagramUtils.isValidName(parentPackage)) {
@@ -590,6 +601,9 @@ public class ComponentDiagramMcpTools extends AbstractDiagramMcpTools {
             IShapeUIModel shape = (IShapeUIModel) de;
             if (parent != null) {
               parent.addChild(shape);
+            }
+            if (backgroundColor != null && !backgroundColor.trim().isEmpty()) {
+              shape.getFillColor().setColor1(java.awt.Color.decode(backgroundColor.trim()), true);
             }
             showCaption(shape);
             int w = width > 0 ? width : Math.max(PACKAGE_MIN_WIDTH, shape.getWidth());
